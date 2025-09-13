@@ -33,7 +33,7 @@ tqdm = "^4.66.4"
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.16.0"
 pytest = "^8.4.0"
-pytest-cov = "^6.0.0"
+pytest-cov = ">=6,<8"
 pytest-ruff = "^0.4.1"
 ruff = "^0.11.0"
 
