@@ -13,7 +13,7 @@ keywords = [
     "market-data",
     "time-series",
 ]
-repository = "https://github.com/ff137/ohlc-toolkit"
+repository = "https://github.com/visikai/ohlc-toolkit"
 
 [tool.poetry.dependencies]
 python = "^3.10"
