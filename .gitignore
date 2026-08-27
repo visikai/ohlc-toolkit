@@ -159,3 +159,10 @@ cython_debug/
 
 # Ignore local uploaded files and dev ones
 upload/
+
+# Local agent files
+.claude/
+.cursor/
+.cursorrules
+AGENTS.md
+CLAUDE.md
