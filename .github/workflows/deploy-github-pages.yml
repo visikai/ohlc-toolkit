@@ -54,7 +54,7 @@ jobs:
           find ./_site -type f -name "*.html" -exec sudo sed -i 's|<h1><a href="https://visikai.github.io/ohlc-toolkit/"|<h1><a href="https://github.com/visikai/ohlc-toolkit/"|g' {} +
 
       - name: Upload Artifact for Deployment
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
 
   # Deployment job
   deploy:
