@@ -30,7 +30,7 @@ jobs:
 
       - name: Stop if running in a fork
         run: |
-          if [[ "${{ github.repository }}" != "ff137/ohlc-toolkit" ]]; then
+          if [[ "${{ github.repository }}" != "visikai/ohlc-toolkit" ]]; then
             echo "This workflow is disabled for forks."
             exit 0
           fi
@@ -51,7 +51,7 @@ jobs:
 
       - name: Modify Header Link in Built HTML
         run: |
-          find ./_site -type f -name "*.html" -exec sudo sed -i 's|<h1><a href="https://ff137.github.io/ohlc-toolkit/"|<h1><a href="https://github.com/ff137/ohlc-toolkit/"|g' {} +
+          find ./_site -type f -name "*.html" -exec sudo sed -i 's|<h1><a href="https://visikai.github.io/ohlc-toolkit/"|<h1><a href="https://github.com/visikai/ohlc-toolkit/"|g' {} +
 
       - name: Upload Artifact for Deployment
         uses: actions/upload-pages-artifact@v3

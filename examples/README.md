@@ -8,7 +8,7 @@ how to use the toolkit for processing OHLC data.
 First, clone the `ohlc-toolkit` repository:
 
 ```bash
-git clone https://github.com/ff137/ohlc-toolkit.git
+git clone https://github.com/visikai/ohlc-toolkit.git
 ```
 
 Set up a virtual environment and install the dependencies:
