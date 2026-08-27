@@ -81,16 +81,11 @@ Run the example script to see how the toolkit works:
 git clone https://github.com/visikai/ohlc-toolkit.git
 cd ohlc-toolkit
 
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install poetry
-poetry install
+# Install dependencies (creates .venv)
+uv sync --all-groups
 
 # Run the example script
-python examples/basic_usage.py
+uv run python examples/basic_usage.py
 ```
 
 ## Support

@@ -55,7 +55,7 @@ def get_logger(name: str) -> _Logger:
 
 
 def _extract_main_module_name(name: str) -> str:
-    return name.split(".")[0]
+    return name.split(".", maxsplit=1)[0]
 
 
 def _create_logger_instance() -> _Logger:

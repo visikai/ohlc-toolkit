@@ -1,10 +1,11 @@
-[tool.poetry]
+[project]
 name = "ohlc-toolkit"
 version = "0.4.0"
 description = "A flexible toolkit for working with OHLC data and generating custom timeframes from minute data."
-authors = ["Mourits de Beer <ff137@proton.me>"]
-license = "MIT"
+authors = [{ name = "Mourits de Beer", email = "ff137@proton.me" }]
+license = "Apache-2.0"
 readme = "README.md"
+requires-python = ">=3.10"
 keywords = [
     "ohlc",
     "price",
@@ -13,34 +14,30 @@ keywords = [
     "market-data",
     "time-series",
 ]
-repository = "https://github.com/visikai/ohlc-toolkit"
+dependencies = [
+    "loguru>=0.7.3,<0.8.0",
+    "orjson>=3.10.15,<4.0.0",
+    "pandas>=2.3.0,<3.0.0",
+    "requests>=2.32.3,<3.0.0",
+    "tqdm>=4.66.4,<5.0.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-loguru = ">=0.7.3"
-orjson = "^3.10.15"
-pandas = "^2.3.0"
-requests = "^2.32.3"
-tqdm = "^4.66.4"
-# pyarrow = "^19.0.0"
-# pyspark = { version = ">=3.2.0", optional = true }
-# ipyparallel = { version = "^9.0.0", optional = true }
+[project.urls]
+Repository = "https://github.com/visikai/ohlc-toolkit"
 
-[tool.poetry.extras]
-# spark = ["pyspark"]
-# ipyparallel = ["ipyparallel"]
-
-[tool.poetry.group.dev.dependencies]
-mypy = "^1.16.0"
-pytest = "^8.4.0"
-pytest-cov = "^6.0.0"
-pytest-ruff = "^0.4.1"
-ruff = "^0.11.0"
+[dependency-groups]
+dev = [
+    "mypy>=2.2.0,<3.0.0",
+    "pytest>=9.0.3,<10.0.0",
+    "pytest-cov>=7.1.0,<8.0.0",
+    "pytest-ruff>=0.5.0,<0.6.0",
+    "ruff>=0.16.0,<0.17.0",
+]
 
 [tool.ruff]
 line-length = 88
 lint.pycodestyle.max-line-length = 120
-target-version = "py312"
+target-version = "py314"
 lint.select = [
     "E",   # pycodestyle errors (style errors)
     "W",   # pycodestyle warnings (style warnings)
@@ -70,6 +67,13 @@ omit = ["tests/*", "examples/*"]
 skip_covered = false
 show_missing = true
 
+[tool.uv]
+exclude-newer = "7 days"
+required-version = ">=0.12.4,<0.13"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ohlc_toolkit"]
+
 [build-system]
-requires = ["poetry-core>=2.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling>=1.29.0"]
+build-backend = "hatchling.build"

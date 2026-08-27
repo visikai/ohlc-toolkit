@@ -133,18 +133,18 @@ defaults, or on-disk CSV behaviour belong in a documented major version.
 
 ## Tooling
 
-- **Dependency management:** Poetry (`pyproject.toml` + `poetry.lock`).
+- **Dependency management:** uv (`pyproject.toml` + `uv.lock`).
 - **Lint / format:** Ruff. Line length 88 for format, 120 for pycodestyle.
   Rule selection is in `pyproject.toml`.
 - **Type check:** mypy.
 - **Tests:** pytest.
 
 ```bash
-poetry install --with dev
-poetry run pytest
-poetry run ruff check .
-poetry run ruff format .
-poetry run mypy .
+mise exec -- uv sync --all-groups
+mise exec -- uv run pytest
+mise exec -- uv run ruff check .
+mise exec -- uv run ruff format .
+mise exec -- uv run mypy .
 ```
 
 ## Testing

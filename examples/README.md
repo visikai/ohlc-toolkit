@@ -11,14 +11,10 @@ First, clone the `ohlc-toolkit` repository:
 git clone https://github.com/visikai/ohlc-toolkit.git
 ```
 
-Set up a virtual environment and install the dependencies:
+Install the dependencies (uv creates `.venv`):
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-
-pip install poetry
-poetry install
+uv sync --all-groups
 ```
 
 ### Getting a Sample Dataset
@@ -75,7 +71,7 @@ to see how the `ohlc-toolkit` processes the data.
 Run the following command in your terminal:
 
 ```bash
-python examples/basic_usage.py
+uv run python examples/basic_usage.py
 ```
 
 ### What the Script Does
