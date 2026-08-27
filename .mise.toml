@@ -1,0 +1,61 @@
+# https://mise.jdx.dev
+[tools]
+python = "3.14.7"
+uv = "0.12"
+
+[settings]
+install_before = "7d"  # only install versions released more than 7 days ago
+experimental = true
+jobs = 1 # Prevent Mise from running multiple jobs at the same time
+
+[env]
+# Shims before ~/.local/bin so mise-resolved tools win over duplicate names there (e.g. uv).
+# Portable across MISE_DATA_DIR; see https://mise.jdx.dev/dev-tools/shims.html
+_.path = ["{{ get_env(name='MISE_DATA_DIR', default=env.HOME ~ '/.local/share/mise') }}/shims", "~/.local/bin"]
+# Setup Python Virtual Environment
+_.python.venv = { path = ".venv", create = true }
+LOG_LEVEL = "DEBUG"
+
+[tasks."uv:install"]
+description = "uv Install all dependencies"
+run = "uv sync --all-groups"
+
+[tasks."uv:update"]
+description = "uv Update lock file"
+run = "uv lock --upgrade"
+
+[tasks."uv:upgrade"]
+depends = ["uv:update", "uv:install"]
+
+[tasks."tests:unit"]
+description = "Run unit tests"
+depends = ["uv:install"]
+run = "uv run pytest"
+
+[tasks.fmt]
+description = "Format files"
+run = """
+#!/bin/bash
+uv run ruff check --fix
+uv run ruff format
+"""
+
+[tasks."fmt:check"]
+description = "Check all files for formatting"
+run = """
+#!/bin/bash
+uv run ruff check
+uv run ruff format --check
+"""
+
+[tasks."lint:mypy"]
+description = "Run mypy"
+run = "uv run mypy . --ignore-missing-imports --check-untyped-defs --install-types --non-interactive"
+
+[tasks.lint]
+description = "Run linting"
+depends = ["fmt", "lint:mypy"]
+
+[tasks.all]
+description = "Run all checks"
+depends = ["fmt", "lint:mypy", "tests:unit"]
