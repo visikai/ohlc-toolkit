@@ -26,6 +26,8 @@ jobs:
         run: |
           uv run ruff format --check
           uv run ruff check .
+      - name: MyPy check
+        run: uv run mypy . --ignore-missing-imports --check-untyped-defs
       - name: Run tests with pytest
         run: uv run pytest
 

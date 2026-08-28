@@ -50,7 +50,7 @@ reason.
 
 ## Python
 
-The package currently supports Python 3.10+. Write code that stays inside
+The package currently supports Python 3.11+. Write code that stays inside
 that range:
 
 - No `from __future__ import annotations` unless it actually fixes something.
