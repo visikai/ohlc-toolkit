@@ -55,8 +55,16 @@ jobs:
           # This will handover control about PR rejection to the GitHub side
           max-allowed-issues: 2147483647
 
+      # CodeQL requires a unique category when one SARIF file contains
+      # results from multiple Codacy tools.
+      - name: Assign unique SARIF run IDs
+        run: |
+          jq 'reduce range(0; (.runs | length)) as $index (.;
+            .runs[$index].automationDetails.id = "codacy/\($index)"
+          )' results.sarif > results.normalized.sarif
+
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
         uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3.37.9
         with:
-          sarif_file: results.sarif
+          sarif_file: results.normalized.sarif
