@@ -23,6 +23,8 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/visikai/ohlc-toolkit"
+Documentation = "https://visikai.github.io/ohlc-toolkit/"
 Repository = "https://github.com/visikai/ohlc-toolkit"
 
 [dependency-groups]
