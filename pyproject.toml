@@ -5,7 +5,7 @@ description = "A flexible toolkit for working with OHLC data and generating cust
 authors = [{ name = "Mourits de Beer", email = "ff137@proton.me" }]
 license = "Apache-2.0"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = [
     "ohlc",
     "price",
