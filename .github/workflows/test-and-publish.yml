@@ -20,6 +20,10 @@ env:
 jobs:
   test-matrix:
     runs-on: ubuntu-latest
+    env:
+      # Job-level so the coverage step can branch on it. secrets is not
+      # allowed in steps.if, and Dependabot PRs receive an empty token.
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,11 +62,9 @@ jobs:
         run: uv run pytest --cov-report=xml
 
       - name: Upload coverage to Codacy
-        if: matrix.python-version == '3.14'
+        if: matrix.python-version == '3.14' && env.CODACY_PROJECT_TOKEN != ''
         run: |
           bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r coverage.xml
-        env:
-          CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
 
   test:
     name: test
