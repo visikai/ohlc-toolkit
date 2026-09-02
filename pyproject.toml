@@ -29,6 +29,7 @@ Repository = "https://github.com/visikai/ohlc-toolkit"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.165.10",
     "mypy>=2.2.0,<3.0.0",
     "pytest>=9.0.3,<10.0.0",
     "pytest-cov>=7.1.0,<8.0.0",
