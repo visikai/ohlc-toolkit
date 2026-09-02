@@ -25,8 +25,11 @@ _UNIT_RANK: dict[str, int] = {unit: rank for rank, unit in enumerate(_UNIT_SECON
 # separators, signs, or whitespace anywhere. Units are matched
 # case-sensitively so that, e.g., "3M" (a calendar month, not supported)
 # is rejected rather than silently read as "3m" (three minutes).
-_GRAMMAR_PATTERN = re.compile(r"^(?:\d+[wdhms])+$")
-_COMPONENT_PATTERN = re.compile(r"(\d+)([wdhms])")
+# Digits are [0-9], NOT \d: \d matches every Unicode decimal digit (and
+# int() converts them), which would admit inputs the ASCII canonical
+# formatter can never emit — and that therefore can never round-trip.
+_GRAMMAR_PATTERN = re.compile(r"^(?:[0-9]+[wdhms])+$")
+_COMPONENT_PATTERN = re.compile(r"([0-9]+)([wdhms])")
 
 
 @dataclass(frozen=True, order=True)
@@ -118,26 +121,41 @@ class Duration:
             raise ConfigError(f"Duration text must be a str, got {type(text).__name__}")
 
         if not _GRAMMAR_PATTERN.fullmatch(text):
-            logger.warning("Rejecting malformed duration string: {!r}", text)
-            raise ConfigError(f"Invalid duration string: {text!r}")
+            quoted = _quote_bounded(text)
+            logger.warning("Rejecting malformed duration string: {}", quoted)
+            raise ConfigError(f"Invalid duration string: {quoted}")
 
         total_seconds = 0
         previous_rank = -1
         for amount, unit in _COMPONENT_PATTERN.findall(text):
             rank = _UNIT_RANK[unit]
             if rank <= previous_rank:
+                quoted = _quote_bounded(text)
                 logger.warning(
-                    "Rejecting out-of-order or duplicate duration unit in: {!r}",
-                    text,
+                    "Rejecting out-of-order or duplicate duration unit in: {}",
+                    quoted,
                 )
                 raise ConfigError(
                     "Duration units must be strictly descending "
-                    f"(w>d>h>m>s), got: {text!r}"
+                    f"(w>d>h>m>s), got: {quoted}"
                 )
             previous_rank = rank
             total_seconds += int(amount) * _UNIT_SECONDS[unit]
 
         return cls(total_seconds)
+
+
+# Rejected input is echoed back in logs and error messages; cap how much,
+# so a malformed megabyte-sized string cannot produce a megabyte-sized
+# log line or exception message.
+_MAX_QUOTED_INPUT_CHARS = 80
+
+
+def _quote_bounded(text: str) -> str:
+    """Return ``repr(text)``, truncated with a length note when oversized."""
+    if len(text) <= _MAX_QUOTED_INPUT_CHARS:
+        return repr(text)
+    return f"{text[:_MAX_QUOTED_INPUT_CHARS]!r}... ({len(text)} chars total)"
 
 
 def _format_seconds(total_seconds: int) -> str:
