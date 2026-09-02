@@ -11,7 +11,9 @@ from ohlc_toolkit.temporal.duration import (
 )
 from ohlc_toolkit.temporal.errors import ConfigError
 
-INDEX_COUNT_PATTERN = re.compile(r"\d+i")
+# [0-9] rather than \d: the helper's output contract is ASCII digits only,
+# and \d would let a non-ASCII Unicode digit slip through the assertion.
+INDEX_COUNT_PATTERN = re.compile(r"[0-9]+i")
 
 
 class TestDurationConstruction(unittest.TestCase):
@@ -267,6 +269,47 @@ class TestPolarsIndexCountHelper(unittest.TestCase):
             with self.subTest(seconds=seconds):
                 text = Duration(seconds).to_polars_index_count()
                 self.assertTrue(INDEX_COUNT_PATTERN.fullmatch(text))
+
+
+class TestNonAsciiDigitRejection(unittest.TestCase):
+    r"""Test cases rejecting non-ASCII Unicode digits in duration strings.
+
+    Python's ``\d`` matches every Unicode decimal digit and ``int()``
+    happily converts them, so a grammar built on ``\d`` would accept
+    inputs like Arabic-Indic or fullwidth digits that the canonical
+    formatter can never emit — and therefore can never round-trip.
+    """
+
+    def test_arabic_indic_digit_is_rejected(self):
+        """An Arabic-Indic digit (U+0661) is not part of the grammar."""
+        with self.assertRaises(ConfigError):
+            Duration.parse("\u0661h")
+
+    def test_thai_digit_is_rejected(self):
+        """A Thai digit (U+0E55) is not part of the grammar."""
+        with self.assertRaises(ConfigError):
+            Duration.parse("\u0e55m")
+
+    def test_fullwidth_digit_is_rejected(self):
+        """A fullwidth digit (U+FF11) is not part of the grammar."""
+        with self.assertRaises(ConfigError):
+            Duration.parse("\uff11h")
+
+    def test_mixed_ascii_and_extended_arabic_digit_is_rejected(self):
+        """A non-ASCII digit is rejected even mixed in with ASCII ones."""
+        with self.assertRaises(ConfigError):
+            Duration.parse("1\u06f0m")
+
+
+class TestRejectedInputQuotingIsBounded(unittest.TestCase):
+    """Test cases bounding how much rejected input is echoed back."""
+
+    def test_error_message_for_huge_garbage_input_is_bounded(self):
+        """A rejected megabyte string must not produce a megabyte message."""
+        garbage = "x" * 10_000
+        with self.assertRaises(ConfigError) as ctx:
+            Duration.parse(garbage)
+        self.assertLess(len(str(ctx.exception)), 200)
 
 
 if __name__ == "__main__":

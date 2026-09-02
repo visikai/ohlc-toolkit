@@ -1,9 +1,13 @@
 """Property-based tests for the Duration value type and duration grammar."""
 
-from hypothesis import given
+from itertools import pairwise
+
+import pytest
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from ohlc_toolkit.temporal.duration import Duration
+from ohlc_toolkit.temporal.errors import ConfigError
 
 _UNITS_DESCENDING = ("w", "d", "h", "m", "s")
 _UNIT_SECONDS = {"w": 604800, "d": 86400, "h": 3600, "m": 60, "s": 1}
@@ -74,6 +78,55 @@ def test_grammar_valid_strings_normalize_to_arithmetic_sum(
     """Any grammar-valid string parses to the sum of its unit components."""
     text, expected_total_seconds = case
     assert Duration.parse(text).total_seconds == expected_total_seconds
+
+
+# Zero digits of non-ASCII decimal-digit scripts (all Unicode category Nd,
+# so all matched by \d and converted by int()): Arabic-Indic, Extended
+# Arabic-Indic, Devanagari, Thai, and fullwidth forms. Escapes, not glyphs,
+# so the intent is visible and no confusable literals live in the source.
+_NON_ASCII_DIGIT_ZEROS = ("\u0660", "\u06f0", "\u0966", "\u0e50", "\uff10")
+
+
+def _is_strictly_descending_unique(units: list[str]) -> bool:
+    """Report whether a unit sequence is valid grammar ordering."""
+    ranks = [_UNITS_DESCENDING.index(unit) for unit in units]
+    return all(a < b for a, b in pairwise(ranks))
+
+
+@st.composite
+def _misordered_or_duplicated_unit_strings(draw: st.DrawFn) -> str:
+    """Build a grammar-shaped string whose unit sequence violates ordering."""
+    units = draw(st.lists(st.sampled_from(_UNITS_DESCENDING), min_size=2, max_size=6))
+    assume(not _is_strictly_descending_unique(units))
+    magnitudes = [draw(st.integers(min_value=0, max_value=999)) for _ in units]
+    return "".join(
+        f"{magnitude}{unit}" for magnitude, unit in zip(magnitudes, units, strict=True)
+    )
+
+
+@st.composite
+def _non_ascii_digit_duration_strings(draw: st.DrawFn) -> str:
+    """Build a canonical string with at least one digit swapped to another script."""
+    canonical = draw(_canonical_duration_strings())
+    digit_positions = [i for i, char in enumerate(canonical) if char.isdigit()]
+    position = draw(st.sampled_from(digit_positions))
+    zero = draw(st.sampled_from(_NON_ASCII_DIGIT_ZEROS))
+    replacement = chr(ord(zero) + int(canonical[position]))
+    return canonical[:position] + replacement + canonical[position + 1 :]
+
+
+@given(_misordered_or_duplicated_unit_strings())
+def test_misordered_or_duplicate_units_are_rejected(text: str) -> None:
+    """Any unit sequence that repeats or misorders units fails to parse."""
+    with pytest.raises(ConfigError):
+        Duration.parse(text)
+
+
+@given(_non_ascii_digit_duration_strings())
+def test_non_ascii_digits_are_rejected(text: str) -> None:
+    """A duration string containing any non-ASCII digit fails to parse."""
+    with pytest.raises(ConfigError):
+        Duration.parse(text)
 
 
 @given(
