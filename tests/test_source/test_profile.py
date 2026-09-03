@@ -26,7 +26,7 @@ def _make_profile(**overrides: object) -> SourceProfile:
         },
     }
     fields.update(overrides)
-    return SourceProfile(**fields)  # type: ignore[arg-type]
+    return SourceProfile.create(**fields)  # type: ignore[arg-type]
 
 
 class TestSourceProfileConstruction(unittest.TestCase):
@@ -80,6 +80,95 @@ class TestSourceProfileConstruction(unittest.TestCase):
         profile = _make_profile()
         with self.assertRaises(Exception):  # noqa: B017 - dataclasses.FrozenInstanceError
             profile.name = "changed"  # type: ignore[misc]
+
+
+class TestSourceProfileTimestampColumnMustBeInteger(unittest.TestCase):
+    """Test cases for the requirement that the timestamp column be integer."""
+
+    def test_rejects_a_floating_timestamp_column(self):
+        """A FLOATING timestamp column can silently truncate sub-second data."""
+        with self.assertRaises(ConfigError) as ctx:
+            _make_profile(
+                raw_schema={
+                    "timestamp": ColumnKind.FLOATING,
+                    "open": ColumnKind.FLOATING,
+                }
+            )
+        self.assertIn("timestamp", str(ctx.exception))
+
+    def test_accepts_an_integer_timestamp_column(self):
+        """An INTEGER timestamp column is accepted without complaint."""
+        profile = _make_profile()
+        self.assertEqual(
+            profile.raw_schema[profile.timestamp_column], ColumnKind.INTEGER
+        )
+
+
+class TestSourceProfileRawSchemaIsCopied(unittest.TestCase):
+    """Test cases proving raw_schema is defensively copied at construction."""
+
+    def test_mutating_the_callers_dict_after_construction_does_not_leak(self):
+        """Mutating the caller's original dict after construction is inert."""
+        original = {
+            "timestamp": ColumnKind.INTEGER,
+            "open": ColumnKind.FLOATING,
+        }
+        profile = _make_profile(raw_schema=original)
+        original["volume"] = ColumnKind.FLOATING
+        self.assertNotIn("volume", profile.raw_schema)
+
+    def test_raw_schema_rejects_direct_item_assignment(self):
+        """The stored raw_schema is a read-only mapping, not a plain dict."""
+        profile = _make_profile()
+        with self.assertRaises(TypeError):
+            profile.raw_schema["volume"] = ColumnKind.FLOATING  # type: ignore[index]
+
+
+class TestSourceProfileCreate(unittest.TestCase):
+    """Test cases for the ``.create`` boundary constructor."""
+
+    def test_create_with_strings_equals_direct_construction_with_durations(self):
+        """The string-accepting boundary constructor matches direct Duration use."""
+        raw_schema = {"timestamp": ColumnKind.INTEGER, "open": ColumnKind.FLOATING}
+        via_strings = SourceProfile.create(
+            name="equivalence-1m",
+            timestamp_column="timestamp",
+            availability=Availability.CLOSE_TIME,
+            raw_schema=raw_schema,
+            cadence="1m",
+            phase="30s",
+        )
+        via_durations = SourceProfile(
+            name="equivalence-1m",
+            timestamp_column="timestamp",
+            availability=Availability.CLOSE_TIME,
+            raw_schema=raw_schema,
+            cadence=Duration.parse("1m"),
+            phase=Duration(30),
+        )
+        self.assertEqual(via_strings, via_durations)
+
+    def test_create_default_phase_is_zero(self):
+        """Omitting phase in ``.create`` defaults to the zero duration."""
+        profile = SourceProfile.create(
+            name="default-phase-1m",
+            timestamp_column="timestamp",
+            availability=Availability.CLOSE_TIME,
+            raw_schema={"timestamp": ColumnKind.INTEGER, "open": ColumnKind.FLOATING},
+            cadence="1m",
+        )
+        self.assertEqual(profile.phase, Duration(0))
+
+    def test_direct_construction_default_phase_is_also_zero(self):
+        """Omitting phase on direct construction uses the same zero default."""
+        profile = SourceProfile(
+            name="direct-default-phase-1m",
+            timestamp_column="timestamp",
+            availability=Availability.CLOSE_TIME,
+            raw_schema={"timestamp": ColumnKind.INTEGER, "open": ColumnKind.FLOATING},
+            cadence=Duration.parse("1m"),
+        )
+        self.assertEqual(profile.phase, Duration(0))
 
 
 class TestSourceProfileDerivation(unittest.TestCase):

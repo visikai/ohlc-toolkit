@@ -2,7 +2,7 @@
 
 import polars as pl
 import pytest
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from ohlc_toolkit.source.profile import Availability, ColumnKind, SourceProfile
@@ -49,22 +49,65 @@ def _duplicate_row(frame: pl.DataFrame, index: int) -> pl.DataFrame:
 
 @given(
     cadence_seconds=st.sampled_from(_CADENCE_CHOICES),
-    start=st.integers(min_value=0, max_value=10_000),
     length=st.integers(min_value=1, max_value=100),
+    data=st.data(),
 )
 def test_random_complete_grids_always_validate_clean(
-    cadence_seconds: int, start: int, length: int
+    cadence_seconds: int, length: int, data: st.DataObject
 ) -> None:
-    """Any complete grid validates clean against its declared phase."""
+    """Any complete grid validates clean against its declared phase.
+
+    The declared phase is drawn FIRST, and the grid's start is built FROM
+    it (``start = phase + cadence * k``), rather than deriving a declared
+    phase from an already-chosen start: the latter would mirror the
+    from-data phase inference this profile deliberately avoids.
+    """
+    phase_seconds = data.draw(st.integers(min_value=0, max_value=cadence_seconds - 1))
+    grid_index = data.draw(st.integers(min_value=0, max_value=200))
+    start = phase_seconds + cadence_seconds * grid_index
+
     frame = build_clean_frame(
         start=start, cadence_seconds=cadence_seconds, length=length
     )
     report = validate_source_frame(
         frame,
-        _profile_for(cadence_seconds, phase_seconds=start % cadence_seconds),
+        _profile_for(cadence_seconds, phase_seconds=phase_seconds),
         mode=ValidationMode.REPORT,
     )
     assert report.passed
+
+
+@given(
+    cadence_seconds=st.sampled_from(_CADENCE_CHOICES),
+    length=st.integers(min_value=1, max_value=100),
+    data=st.data(),
+)
+def test_grid_at_a_different_phase_than_declared_always_reports_off_phase(
+    cadence_seconds: int, length: int, data: st.DataObject
+) -> None:
+    """A grid consistently at phase p always fails a profile declaring q != p."""
+    assume(cadence_seconds > 1)  # a phase-1 cadence has only one legal phase: 0
+    declared_phase = data.draw(st.integers(min_value=0, max_value=cadence_seconds - 1))
+    actual_phase = data.draw(
+        st.integers(min_value=0, max_value=cadence_seconds - 1).filter(
+            lambda candidate: candidate != declared_phase
+        )
+    )
+    grid_index = data.draw(st.integers(min_value=0, max_value=200))
+    start = actual_phase + cadence_seconds * grid_index
+
+    frame = build_clean_frame(
+        start=start, cadence_seconds=cadence_seconds, length=length
+    )
+    report = validate_source_frame(
+        frame,
+        _profile_for(cadence_seconds, phase_seconds=declared_phase),
+        mode=ValidationMode.REPORT,
+    )
+
+    off_phase = [f for f in report.findings if f.kind is FindingKind.OFF_PHASE]
+    assert len(off_phase) == 1
+    assert off_phase[0].count == length
 
 
 @given(

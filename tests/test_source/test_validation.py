@@ -9,6 +9,7 @@ from ohlc_toolkit.source.profile import Availability, ColumnKind, SourceProfile
 from ohlc_toolkit.source.validation import (
     Finding,
     FindingKind,
+    SourceValidationError,
     ValidationMode,
     ValidationReport,
     validate_source_frame,
@@ -16,7 +17,7 @@ from ohlc_toolkit.source.validation import (
 from ohlc_toolkit.temporal import DataValidationError
 from tests.test_source.factories import build_clean_frame
 
-_PROFILE = SourceProfile(
+_PROFILE = SourceProfile.create(
     name="synthetic-1m",
     cadence="1m",
     timestamp_column="timestamp",
@@ -34,7 +35,7 @@ _PROFILE = SourceProfile(
 _CADENCE_SECONDS = 60
 
 
-def _set_timestamps(frame: pl.DataFrame, timestamps: list[int]) -> pl.DataFrame:
+def _set_timestamps(frame: pl.DataFrame, timestamps: list[int | None]) -> pl.DataFrame:
     """Return a copy of ``frame`` with its timestamp column replaced."""
     return frame.with_columns(pl.Series("timestamp", timestamps, dtype=pl.Int64))
 
@@ -161,6 +162,28 @@ class TestSchemaValidationBothModes(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("timestamp", findings[0].message)
 
+    def test_overly_long_column_name_is_truncated_in_the_message(self):
+        """An overly long declared column name is echoed truncated, not in full."""
+        long_name = "x" * 80
+        profile = SourceProfile.create(
+            name="long-column-name-1m",
+            timestamp_column="timestamp",
+            availability=Availability.CLOSE_TIME,
+            raw_schema={
+                "timestamp": ColumnKind.INTEGER,
+                long_name: ColumnKind.FLOATING,
+            },
+            cadence="1m",
+        )
+        frame = pl.DataFrame({"timestamp": pl.Series([0, 60, 120], dtype=pl.Int64)})
+
+        report = validate_source_frame(frame, profile, mode=ValidationMode.REPORT)
+
+        findings = _find(report, FindingKind.SCHEMA)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("...", findings[0].message)
+        self.assertNotIn(long_name, findings[0].message)
+
 
 class TestMonotonicityBothModes(unittest.TestCase):
     """Test cases for the strictly-increasing timestamp check."""
@@ -248,7 +271,7 @@ class TestOffPhaseBothModes(unittest.TestCase):
 
     def test_declared_nonzero_phase_accepts_a_matching_grid(self):
         """A grid on a shifted schedule passes when the profile declares it."""
-        profile = SourceProfile(
+        profile = SourceProfile.create(
             name=_PROFILE.name,
             timestamp_column=_PROFILE.timestamp_column,
             availability=_PROFILE.availability,
@@ -259,6 +282,124 @@ class TestOffPhaseBothModes(unittest.TestCase):
         frame = build_clean_frame(start=30, cadence_seconds=_CADENCE_SECONDS, length=5)
         report = validate_source_frame(frame, profile, mode=ValidationMode.REPORT)
         self.assertTrue(report.passed)
+
+
+class TestNullValuesBothModes(unittest.TestCase):
+    """Test cases for the null-value check on every declared column."""
+
+    def setUp(self):
+        """Build a clean five-row grid shared by every test in this class."""
+        self.frame = build_clean_frame(
+            start=0, cadence_seconds=_CADENCE_SECONDS, length=5
+        )
+
+    def test_null_timestamp_reports_a_null_values_finding(self):
+        """A null in the timestamp column is reported, not silently skipped."""
+        corrupted = _set_timestamps(self.frame, [0, 60, None, 180, 240])
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.NULL_VALUES)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("timestamp", findings[0].message)
+
+    def test_null_timestamp_raises_in_strict_mode(self):
+        """A null timestamp raises in strict mode instead of validating clean."""
+        corrupted = _set_timestamps(self.frame, [0, 60, None, 180, 240])
+        with self.assertRaises(DataValidationError):
+            validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.STRICT)
+
+    def test_null_timestamp_does_not_also_report_a_false_gap(self):
+        """A null hides a real gap; row-level checks must not run over it."""
+        corrupted = _set_timestamps(self.frame, [0, 60, None, 180, 240])
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(_find(report, FindingKind.GAP), [])
+        self.assertEqual(_find(report, FindingKind.OFF_PHASE), [])
+        self.assertEqual(_find(report, FindingKind.NON_INCREASING_TIMESTAMPS), [])
+
+    def test_null_in_a_non_timestamp_column_is_also_reported(self):
+        """A null in a non-timestamp declared column (volume) is caught too."""
+        corrupted = self.frame.with_columns(
+            pl.Series("volume", [1.0, None, 1.0, 1.0, 1.0], dtype=pl.Float64)
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.NULL_VALUES)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("volume", findings[0].message)
+
+    def test_null_in_a_non_timestamp_column_raises_in_strict_mode(self):
+        """A null volume value raises in strict mode."""
+        corrupted = self.frame.with_columns(
+            pl.Series("volume", [1.0, None, 1.0, 1.0, 1.0], dtype=pl.Float64)
+        )
+        with self.assertRaises(DataValidationError):
+            validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.STRICT)
+
+    def test_null_in_a_non_timestamp_column_does_not_gate_row_level_checks(self):
+        """A null confined to a non-timestamp column leaves diff checks running."""
+        corrupted = self.frame.with_columns(
+            pl.Series("volume", [1.0, None, 1.0, 1.0, 1.0], dtype=pl.Float64)
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        # The timestamp column itself is untouched and clean, so no
+        # spurious row-level finding fires alongside the null-values one.
+        self.assertEqual(len(_find(report, FindingKind.NULL_VALUES)), 1)
+        self.assertEqual(_find(report, FindingKind.GAP), [])
+        self.assertEqual(_find(report, FindingKind.OFF_PHASE), [])
+
+
+class TestOverlapAndIrregularFindingsBehaviorally(unittest.TestCase):
+    """Test cases pinning kind, count, sample, and message for two finding kinds.
+
+    Both frames below also disturb the declared grid phase, so an
+    OFF_PHASE finding is expected alongside the finding under test; only
+    the specific finding under test is asserted, not the full report.
+    """
+
+    def test_overlap_detects_opens_closer_than_a_full_cadence_step(self):
+        """Consecutive opens 30s apart under a 60s cadence overlap each other."""
+        frame = _set_timestamps(
+            build_clean_frame(start=0, cadence_seconds=_CADENCE_SECONDS, length=3),
+            [0, 30, 60],
+        )
+        report = validate_source_frame(frame, _PROFILE, mode=ValidationMode.REPORT)
+
+        findings = _find(report, FindingKind.OVERLAPPING_INTERVALS)
+        self.assertEqual(len(findings), 1)
+        # Both diffs (0->30 and 30->60) are 30s, under the 60s cadence, so
+        # both successive opens count as overlapping.
+        self.assertEqual(findings[0].count, 2)
+        self.assertIn(30, findings[0].sample_timestamps)
+        self.assertIn("60s", findings[0].message)
+
+    def test_irregular_interval_detects_a_gap_that_is_not_an_exact_multiple(self):
+        """A 90s gap under a 60s cadence is irregular, not a clean two-step gap."""
+        frame = _set_timestamps(
+            build_clean_frame(start=0, cadence_seconds=_CADENCE_SECONDS, length=3),
+            [0, 90, 150],
+        )
+        report = validate_source_frame(frame, _PROFILE, mode=ValidationMode.REPORT)
+
+        findings = _find(report, FindingKind.IRREGULAR_INTERVAL)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].count, 1)
+        self.assertIn(90, findings[0].sample_timestamps)
+        self.assertIn("60s", findings[0].message)
+
+
+class TestMonotonicityGatesDownstreamChecks(unittest.TestCase):
+    """Test cases proving unsorted input skips checks that assume a rising timeline."""
+
+    def test_unsorted_complete_grid_reports_only_non_increasing(self):
+        """A complete grid that is merely unsorted must not also report a false gap."""
+        frame = _set_timestamps(
+            build_clean_frame(start=0, cadence_seconds=_CADENCE_SECONDS, length=5),
+            [60, 0, 120, 180, 240],
+        )
+        report = validate_source_frame(frame, _PROFILE, mode=ValidationMode.REPORT)
+
+        self.assertEqual(len(_find(report, FindingKind.NON_INCREASING_TIMESTAMPS)), 1)
+        self.assertEqual(_find(report, FindingKind.GAP), [])
+        self.assertEqual(_find(report, FindingKind.OVERLAPPING_INTERVALS), [])
+        self.assertEqual(_find(report, FindingKind.IRREGULAR_INTERVAL), [])
 
 
 class TestGapDetectionBothModes(unittest.TestCase):
@@ -301,7 +442,9 @@ class TestGapDetectionBothModes(unittest.TestCase):
         # gap run per surviving diff, so 1002 rows yield 1001 gap runs.
         cap = 1000
         row_count = cap + 2
-        timestamps = [i * 2 * _CADENCE_SECONDS for i in range(row_count)]
+        timestamps: list[int | None] = [
+            i * 2 * _CADENCE_SECONDS for i in range(row_count)
+        ]
         frame = _set_timestamps(
             build_clean_frame(
                 start=0, cadence_seconds=_CADENCE_SECONDS, length=row_count
@@ -343,17 +486,25 @@ class TestStrictModeErrorCarriesTheReport(unittest.TestCase):
     """Test cases proving the strict-mode exception exposes its report."""
 
     def test_exception_exposes_the_validation_report(self):
-        """The raised DataValidationError carries the full report."""
+        """The raised SourceValidationError carries the full report."""
         clean = build_clean_frame(start=0, cadence_seconds=_CADENCE_SECONDS, length=5)
         corrupted = _drop_rows(clean, {2})
 
-        with self.assertRaises(DataValidationError) as ctx:
+        with self.assertRaises(SourceValidationError) as ctx:
             validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.STRICT)
 
-        report = ctx.exception.report  # type: ignore[attr-defined]
+        report = ctx.exception.report
         self.assertIsInstance(report, ValidationReport)
         self.assertFalse(report.passed)
         self.assertEqual(len(_find(report, FindingKind.GAP)), 1)
+
+    def test_exception_is_a_data_validation_error(self):
+        """The typed exception is still catchable via the broader base class."""
+        clean = build_clean_frame(start=0, cadence_seconds=_CADENCE_SECONDS, length=5)
+        corrupted = _drop_rows(clean, {2})
+
+        with self.assertRaises(DataValidationError):
+            validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.STRICT)
 
 
 if __name__ == "__main__":

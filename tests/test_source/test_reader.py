@@ -12,7 +12,7 @@ from ohlc_toolkit.source.reader import SourceReadResult, read_source_csv
 from ohlc_toolkit.source.validation import FindingKind, ValidationMode
 from ohlc_toolkit.temporal import DataValidationError
 
-_PROFILE = SourceProfile(
+_PROFILE = SourceProfile.create(
     name="reader-test-1m",
     cadence="1m",
     timestamp_column="timestamp",
@@ -101,6 +101,13 @@ class TestReadingCleanFrames(unittest.TestCase):
         self.assertEqual(result.schema["timestamp"], pl.Int64)
         self.assertEqual(result.schema["open"], pl.Float64)
 
+    def test_accepts_a_pathlike_object_directly(self):
+        """The reader accepts a PathLike, not just a str, for ``path``."""
+        path = _write_csv(self.directory, "clean.csv", self.rows, gzipped=False)
+        result = read_source_csv(path, _PROFILE, mode=ValidationMode.STRICT)
+        assert isinstance(result, pl.DataFrame)
+        self.assertEqual(result.height, 5)
+
 
 class TestReadingCorruptedFrames(unittest.TestCase):
     """Test cases for reading a frame that fails validation."""
@@ -151,6 +158,38 @@ class TestReadingCorruptedFrames(unittest.TestCase):
             if f.kind is FindingKind.NON_INCREASING_TIMESTAMPS
         ]
         self.assertEqual(len(non_increasing), 1)
+        # The underlying grid is complete: unsorted rows must not also be
+        # misread as a gap around a timestamp that is actually present.
+        gap_findings = [f for f in result.report.findings if f.kind is FindingKind.GAP]
+        self.assertEqual(gap_findings, [])
+
+    def test_empty_timestamp_field_raises_in_strict_mode(self):
+        """A blank timestamp field parses as null and must not validate clean."""
+        rows = _clean_rows(start=0, length=5)
+        columns = rows[2].split(",")
+        columns[0] = ""  # blank out the third row's timestamp field
+        rows[2] = ",".join(columns)
+        path = _write_csv(self.directory, "null-timestamp.csv", rows, gzipped=False)
+
+        with self.assertRaises(DataValidationError):
+            read_source_csv(str(path), _PROFILE, mode=ValidationMode.STRICT)
+
+    def test_empty_timestamp_field_is_reported_not_silently_clean(self):
+        """Report mode surfaces the null instead of returning a passing report."""
+        rows = _clean_rows(start=0, length=5)
+        columns = rows[2].split(",")
+        columns[0] = ""  # blank out the third row's timestamp field
+        rows[2] = ",".join(columns)
+        path = _write_csv(self.directory, "null-timestamp.csv", rows, gzipped=False)
+
+        result = read_source_csv(str(path), _PROFILE, mode=ValidationMode.REPORT)
+
+        assert isinstance(result, SourceReadResult)
+        self.assertFalse(result.report.passed)
+        null_findings = [
+            f for f in result.report.findings if f.kind is FindingKind.NULL_VALUES
+        ]
+        self.assertEqual(len(null_findings), 1)
 
 
 class TestReaderPropagatesMissingFile(unittest.TestCase):
