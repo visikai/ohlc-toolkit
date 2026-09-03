@@ -1,0 +1,369 @@
+"""The engine's ``volume`` column, pinned at scale against exact arithmetic.
+
+Why this suite exists
+---------------------
+
+Every other equivalence suite in this package measures the engine against
+the brute-force oracle, and the oracle is quadratic, so those comparisons
+can only ever run over a few thousand candles. Summation error does not
+show up there. It shows up over millions of rows, where a sliding
+add/subtract sum -- the shape most rolling implementations reach for --
+accumulates a rounding residue that is a function of everything the series
+has already added and subtracted, not of the window's own candles.
+
+That residue has three visible consequences, and all three are things this
+library must never ship:
+
+- A window whose candles all have exactly zero volume reports a small
+  non-zero total.
+- A sum of non-negative volumes comes back NEGATIVE.
+- The same window over the same candles changes value when more history is
+  prepended in front of it, which quietly breaks both containment-only
+  semantics and any "recompute only the tail" append story.
+
+So this suite runs the real engine over a multi-million-row minute grid
+built to be maximally unkind to a sliding sum, and asserts the invariants
+directly. The reference is not the oracle: it is
+:func:`math.fsum`, which is correctly rounded, and a rolling maximum, which
+involves no arithmetic at all. Both are linear, so the check is affordable
+at a scale the oracle could never reach.
+
+The synthetic grid
+------------------
+
+A complete, gap-free minute grid whose volumes repeat with a fixed period.
+Each cycle holds:
+
+- a long stretch of candles with exactly ``0.0`` volume, longer than the
+  longest window under test, so that windows containing nothing but zeros
+  exist for every window length;
+- short zero runs inside the active stretch, so the shortest window has
+  zero-only windows too;
+- isolated tiny volumes (``5e-07``) surrounded by zeros, which a residue of
+  the same order would swamp;
+- an active stretch whose magnitudes ramp across nine decades, so the
+  running total a sliding sum carries is large exactly where the window
+  contents are small.
+
+Nothing here is random: the grid is a pure function of the row index, so it
+is identical on every machine and every run. Only the sample of windows
+checked against :func:`math.fsum` is drawn, and it is drawn from a fixed
+seed.
+"""
+
+import math
+import random
+from dataclasses import dataclass
+
+import polars as pl
+import pytest
+
+from ohlc_toolkit.windows import MaterializationRule, compute_windows
+from tests.test_windows.factories import profile_for
+
+_MINUTE = 60
+
+# Multi-million rows: about five and a half years of minutes. Large enough
+# that a sliding sum's residue is unmistakable, small enough that the whole
+# suite stays in the tens of seconds.
+_ROW_COUNT = 3_000_000
+
+# 1600000020 == 60 * 26666667, so slot 0 opens on a round minute and the
+# grid sits at phase 0.
+_FIRST_OPEN = 1_600_000_020
+
+# Window lengths in whole source candles, drawn from the canonical window
+# set: one very short, one mid-scale, one long. The short one is where a
+# residue is largest relative to the window's own total; the long one is
+# where the most addends accumulate.
+_WINDOW_MINUTES = (8, 993, 17_632)
+
+# One repeat of the volume pattern, in rows.
+_CYCLE_ROWS = 65_536
+# Rows of the cycle that carry volume at all. The remainder is one
+# unbroken stretch of exactly zero, longer than the longest window above,
+# so every window length has windows holding nothing but zeros.
+_ACTIVE_ROWS = 39_000
+_QUIET_ROWS = _CYCLE_ROWS - _ACTIVE_ROWS
+
+# Inside the active stretch, a shorter repeat: volume, then one isolated
+# tiny volume, then a run of zeros longer than the shortest window.
+_SUBCYCLE_ROWS = 1_024
+_SUBCYCLE_ACTIVE_ROWS = 999
+_TINY_VOLUME = 5e-07
+
+# The active volumes span nine decades, 1e-5 up to about 1e5.
+_DECADE_COUNT = 9
+_LOWEST_DECADE = -4
+_RAMP_PERIOD = 97
+_RAMP_STEP = 0.1
+# A floor the ramp's top decade clears comfortably, asserted so that a
+# future edit cannot quietly flatten the magnitude spread this suite needs.
+_LARGEST_VOLUME_FLOOR = 1e4
+
+# Prices are irrelevant to this suite -- only volume is under test -- but
+# they still have to be coherent, so they walk a fixed sawtooth.
+_PRICE_PERIOD = 1_000
+_PRICE_BASE = 20_000.0
+
+# How many windows are checked against math.fsum, and how they are chosen:
+# a seeded random draw plus four deliberate strata. The strata matter more
+# than the draw -- the extremes of the reported distribution are where a
+# summation defect shows first.
+_SAMPLE_SEED = 20_260_903
+_RANDOM_SAMPLE_SIZE = 400
+_STRATUM_SIZE = 60
+
+# How far the engine's per-window sum may sit from the correctly rounded
+# one. polars reduces a Float64 slice in blocks rather than one addend at a
+# time, so its error is bounded by about ``log2(m) * 2**-53`` relative for
+# a window of m non-negative addends: 1.6e-15 at m = 17632. The bound below
+# leaves an order of magnitude of headroom over that and is still far tighter
+# than any residue a sliding sum produces at this scale.
+_VOLUME_RELATIVE_TOLERANCE = 1e-14
+
+# A window whose contained volumes are all zero must report exactly 0.0,
+# and windows like that must actually exist or these assertions are
+# vacuous. One per cycle, at a minimum, for every window length above.
+_MINIMUM_ZERO_VOLUME_WINDOWS = _ROW_COUNT // _CYCLE_ROWS
+
+
+@dataclass(frozen=True)
+class _ScaleCase:
+    """One window length, run over the shared adversarial grid.
+
+    Attributes:
+        window_minutes: The window length in whole source candles.
+        volumes: The grid's volume column, ascending by open time.
+        result: The engine's output for this window at a one-minute emit
+            cadence.
+
+    """
+
+    window_minutes: int
+    volumes: pl.Series
+    result: pl.DataFrame
+
+    def last_row_indices(self) -> pl.Series:
+        """Return the last source row each emitted window contains.
+
+        The grid is complete and every emitted window is fully covered, so
+        the candle closing exactly at emit time ``t`` is at row
+        ``(t - first_open) / d - 1``, and the window's candles are the
+        ``window_minutes`` rows ending there. Deriving that from the emit
+        times rather than from the engine's own bounds keeps the reference
+        independent of the thing it is checking.
+        """
+        close_times = self.result.get_column("close_time")
+        return (close_times - _FIRST_OPEN) // _MINUTE - 1
+
+    def exact_volume(self, position: int) -> float:
+        """Return the correctly rounded sum of one window's own volumes.
+
+        Args:
+            position: A row position in :attr:`result`.
+
+        Returns:
+            ``math.fsum`` over the ``window_minutes`` source volumes that
+            window contains, which is the exactly-summed-then-rounded-once
+            value every other summation is approximating.
+
+        """
+        last_row = int(self.last_row_indices()[position])
+        first_row = last_row - self.window_minutes + 1
+        return math.fsum(self.volumes.slice(first_row, self.window_minutes).to_list())
+
+
+def _volume_expression() -> pl.Expr:
+    """Build the volume column as a pure function of the row index.
+
+    See the module docstring for what the pattern is for. Written as one
+    polars expression rather than a Python loop so that three million rows
+    cost milliseconds.
+    """
+    row = pl.int_range(0, _ROW_COUNT, dtype=pl.Int64)
+    position_in_cycle = row % _CYCLE_ROWS
+    position_in_subcycle = row % _SUBCYCLE_ROWS
+    decade = (row // _CYCLE_ROWS) % _DECADE_COUNT + _LOWEST_DECADE
+    ramp = (
+        pl.lit(10.0).pow(decade)
+        * ((row % _RAMP_PERIOD) + 1).cast(pl.Float64)
+        * _RAMP_STEP
+    )
+    return (
+        pl.when(position_in_cycle >= _ACTIVE_ROWS)
+        .then(pl.lit(0.0))
+        .when(position_in_subcycle > _SUBCYCLE_ACTIVE_ROWS)
+        .then(pl.lit(0.0))
+        .when(position_in_subcycle == _SUBCYCLE_ACTIVE_ROWS)
+        .then(pl.lit(_TINY_VOLUME))
+        .otherwise(ramp)
+        .cast(pl.Float64)
+        .alias("volume")
+    )
+
+
+def _build_adversarial_grid() -> pl.DataFrame:
+    """Build the complete minute grid this module runs the engine over."""
+    row = pl.int_range(0, _ROW_COUNT, dtype=pl.Int64)
+    price = _PRICE_BASE + (row % _PRICE_PERIOD).cast(pl.Float64)
+    return pl.select(
+        (_FIRST_OPEN + row * _MINUTE).alias("timestamp"),
+        price.alias("open"),
+        (price + 5.0).alias("high"),
+        (price - 5.0).alias("low"),
+        (price + 1.0).alias("close"),
+        _volume_expression(),
+    )
+
+
+@pytest.fixture(scope="module")
+def adversarial_grid() -> pl.DataFrame:
+    """Build the shared grid once for the whole module."""
+    return _build_adversarial_grid()
+
+
+@pytest.fixture(
+    scope="module",
+    params=_WINDOW_MINUTES,
+    ids=lambda minutes: f"{minutes}m",
+)
+def scale_case(
+    request: pytest.FixtureRequest, adversarial_grid: pl.DataFrame
+) -> _ScaleCase:
+    """Run the engine over the grid for one window length."""
+    window_minutes = int(request.param)
+    result = compute_windows(
+        adversarial_grid,
+        profile_for(_MINUTE),
+        window=f"{window_minutes}m",
+        emit_every="1m",
+        materialization=MaterializationRule.SKIP_WARMUP,
+    )
+    return _ScaleCase(
+        window_minutes=window_minutes,
+        volumes=adversarial_grid.get_column("volume"),
+        result=result,
+    )
+
+
+def _zero_volume_mask(case: _ScaleCase) -> pl.Series:
+    """Mark the emitted windows whose contained volumes are all zero.
+
+    A rolling maximum is a comparison, never an addition, so it carries no
+    rounding at all: where it reports zero over a window of non-negative
+    volumes, every one of those volumes is exactly zero and the only
+    correct total is exactly ``0.0``.
+    """
+    contained_maximum = case.volumes.rolling_max(window_size=case.window_minutes)
+    return contained_maximum.gather(case.last_row_indices()) == 0.0
+
+
+def _sampled_positions(case: _ScaleCase) -> list[int]:
+    """Choose the window positions to check against :func:`math.fsum`.
+
+    A seeded random draw plus four strata: the leading and trailing
+    windows, the largest reported volumes, and the smallest strictly
+    positive ones. That last stratum is the one that catches a residue --
+    a sliding sum's leftovers are exactly the smallest non-zero values in
+    the column.
+    """
+    height = case.result.height
+    indexed = case.result.with_row_index("position").select("position", "volume")
+
+    largest = indexed.sort("volume", descending=True).head(_STRATUM_SIZE)
+    smallest_positive = (
+        indexed.filter(pl.col("volume") > 0.0).sort("volume").head(_STRATUM_SIZE)
+    )
+
+    rng = random.Random(_SAMPLE_SEED)
+    positions = {
+        *range(min(_STRATUM_SIZE, height)),
+        *range(max(0, height - _STRATUM_SIZE), height),
+        *(int(value) for value in largest.get_column("position")),
+        *(int(value) for value in smallest_positive.get_column("position")),
+        *(rng.randrange(height) for _ in range(_RANDOM_SAMPLE_SIZE)),
+    }
+    return sorted(positions)
+
+
+def test_the_adversarial_grid_is_the_shape_this_module_claims(
+    adversarial_grid: pl.DataFrame,
+) -> None:
+    """The fixture is what the docstring says, or every assertion below drifts."""
+    volumes = adversarial_grid.get_column("volume")
+    timestamps = adversarial_grid.get_column("timestamp")
+
+    assert adversarial_grid.height == _ROW_COUNT
+    assert timestamps[0] == _FIRST_OPEN
+    # A complete grid: consecutive rows are exactly one cadence apart.
+    assert timestamps.diff().drop_nulls().unique().to_list() == [_MINUTE]
+    # The quiet stretch alone is longer than the longest window under test.
+    assert _QUIET_ROWS > max(_WINDOW_MINUTES)
+    assert volumes.min() == 0.0
+    assert (volumes == 0.0).sum() > 0
+    assert (volumes == _TINY_VOLUME).sum() > 0
+    # Nine decades of magnitude, so a sliding sum's running total is large
+    # where the window contents are small.
+    assert volumes.max() > _LARGEST_VOLUME_FLOOR  # type: ignore[operator]
+    assert volumes.filter(volumes > 0.0).min() == _TINY_VOLUME
+
+
+def test_the_engine_never_reports_a_negative_volume(scale_case: _ScaleCase) -> None:
+    """Summing non-negative volumes cannot produce a negative total.
+
+    This is an invariant of the arithmetic, not a range check the engine
+    applies afterwards: nothing in the output path clamps, because a clamp
+    would hide exactly the defect this asserts against.
+    """
+    volumes = scale_case.result.get_column("volume")
+
+    assert volumes.null_count() == 0
+    assert volumes.min() >= 0.0  # type: ignore[operator]
+
+
+def test_a_window_of_only_zero_volume_candles_reports_exactly_zero(
+    scale_case: _ScaleCase,
+) -> None:
+    """Zero in, exactly zero out -- not a residue that rounds to zero."""
+    zero_windows = _zero_volume_mask(scale_case)
+    reported = scale_case.result.get_column("volume").filter(zero_windows)
+
+    assert zero_windows.sum() >= _MINIMUM_ZERO_VOLUME_WINDOWS
+    assert (reported == 0.0).all()
+
+
+def test_the_engine_agrees_with_an_exact_sum_over_sampled_windows(
+    scale_case: _ScaleCase,
+) -> None:
+    """Sampled windows match :func:`math.fsum` over their own candles.
+
+    ``math.fsum`` sums exactly and rounds once, so it is the value every
+    other summation of the same addends is approximating. Agreement here is
+    the positive statement behind the two invariants above: the engine is
+    not merely non-negative and zero-preserving, it is summing the right
+    candles.
+    """
+    # Every emitted window is fully covered, which is what lets the
+    # reference locate a window's candles from its emit time alone.
+    assert scale_case.result.get_column("src_count").unique().to_list() == [
+        scale_case.window_minutes
+    ]
+
+    reported = scale_case.result.get_column("volume")
+    positions = _sampled_positions(scale_case)
+    assert len(positions) >= _RANDOM_SAMPLE_SIZE
+
+    for position in positions:
+        exact = scale_case.exact_volume(position)
+        actual = reported[position]
+        if exact == 0.0:
+            assert actual == 0.0, f"window {position} should be exactly zero"
+        else:
+            assert abs(actual - exact) <= _VOLUME_RELATIVE_TOLERANCE * exact, (
+                f"window {position}: {actual!r} vs exact {exact!r}"
+            )
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
