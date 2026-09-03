@@ -692,6 +692,97 @@ class TestNamedResult:
         assert "QualityPolicyResult" in windows_namespace.__all__
 
 
+def _frame_with_a_null_coverage() -> pl.DataFrame:
+    """Build a fully covered frame whose middle row states no coverage at all.
+
+    The engine cannot produce this today -- it computes coverage from a
+    count it always has -- but the gate is a fail-closed check, and a
+    check that reads a column has to say what it does with a blank in
+    it. The surrounding rows are fully covered, so any finding here is
+    about the null and nothing else.
+    """
+    return pl.DataFrame(
+        {
+            "close_time": [_TIME_BASE, _TIME_BASE + 10, _TIME_BASE + 20],
+            "src_count": [10, 0, 10],
+            "coverage_seconds": [100, None, 100],
+        },
+        schema_overrides={"coverage_seconds": pl.Int64},
+    )
+
+
+class TestNullCoverage:
+    """A coverage the frame declines to state is a finding, never a pass."""
+
+    def test_report_mode_records_the_null_as_an_offence(self) -> None:
+        """An unverifiable row is counted, and counted as its own kind."""
+        frame = _frame_with_a_null_coverage()
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.REPORT),
+            window=_WINDOW,
+        )
+
+        report = result.report
+        assert report.passed is False
+        assert report.offending_count == 1
+        assert report.null_coverage_count == 1
+        assert report.first_offending_close_time == _TIME_BASE + 10
+
+    def test_strict_mode_raises_on_the_null(self) -> None:
+        """The gate fails closed: what it cannot verify, it refuses."""
+        frame = _frame_with_a_null_coverage()
+        with pytest.raises(WindowCoverageError) as caught:
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
+                window=_WINDOW,
+            )
+        assert caught.value.report.null_coverage_count == 1
+
+    def test_a_null_offends_even_a_zero_threshold(self) -> None:
+        """A null is unverifiable, and stays so however low the bar drops."""
+        frame = _frame_with_a_null_coverage()
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(
+                mode=QualityMode.GATE, min_coverage=0.0, gate_mode=GateMode.REPORT
+            ),
+            window=_WINDOW,
+        )
+        assert result.report.null_coverage_count == 1
+        assert result.report.passed is False
+
+    def test_filter_drops_the_null_row(self) -> None:
+        """FILTER keeps only rows it can show meet the threshold."""
+        frame = _frame_with_a_null_coverage()
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+            window=_WINDOW,
+        )
+
+        assert result.frame.get_column("close_time").to_list() == [
+            _TIME_BASE,
+            _TIME_BASE + 20,
+        ]
+        assert result.frame.get_column("coverage_seconds").null_count() == 0
+        assert result.frame.height == (
+            result.report.rows_checked - result.report.offending_count
+        )
+
+    def test_a_frame_without_nulls_reports_none(self) -> None:
+        """The count is a measurement, not a flag that is always set."""
+        frame = _ramping_coverage_frame()
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.REPORT),
+            window=_WINDOW,
+        )
+        assert result.report.null_coverage_count == 0
+        assert result.report.offending_count > 0
+
+
 class TestBoundaryConditions:
     """Cross-mode boundary cases not tied to one specific mode's suite."""
 
