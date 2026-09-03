@@ -452,6 +452,7 @@ class TestMetallicRefusals:
             maximum="2w",
         )
         assert [str(window) for window in schedule.windows] == ["1m"]
+        assert isinstance(schedule.spec, MetallicRecurrenceSpec)
         assert math.isfinite(schedule.spec.limiting_ratio)
         assert (
             schedule.schedule_id
