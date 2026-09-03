@@ -31,6 +31,31 @@ shortcut a reference implementation must not take, because a fast engine
 tested against it would then inherit the assumption instead of being
 checked for it.
 
+The skip_warmup materialization rule
+------------------------------------
+
+``MaterializationRule.SKIP_WARMUP`` derives the materialization range from
+the source data instead of the caller stating it outright. Its behaviour
+is DEFINED, not merely whatever the implementation happens to compute:
+
+(a) The range starts at the first emit tick whose window is fully covered
+    by source data (``coverage_seconds == window_seconds``). No earlier
+    tick is emitted, because its window would be honestly incomplete, and
+    skipping that incomplete lead-in is the whole point of the rule.
+(b) The range ends one past the last emit grid tick at or before the
+    source's greatest ``close_time``. A tick later than that would reach
+    for data that does not exist, so it is never emitted -- even when the
+    final close time itself is not on the emit grid.
+(c) If no candidate tick is ever fully covered, resolving the range is a
+    configuration error, raised rather than silently returning an empty
+    result: this rule fails closed on purpose. Contrast an explicit
+    :class:`ExplicitRange` with ``start == end``: that is also an empty
+    result, but it is legal, because the caller asked for it directly.
+    ``SKIP_WARMUP`` finding nothing to start from is a different
+    situation -- nobody asked for empty, and returning it anyway would
+    silently hide that this schedule cannot be honestly materialized over
+    this data at all.
+
 Cost
 ----
 
@@ -86,9 +111,16 @@ class MaterializationRule(Enum):
     existing one.
 
     Attributes:
-        SKIP_WARMUP: Start at the first emit tick whose window is fully
-            covered by source data, and stop one past the last emit tick
-            at or before the source's final close time.
+        SKIP_WARMUP: A defined policy, not an inferred convenience: start
+            at the first emit tick whose window is fully covered by
+            source data, and stop one past the last emit tick at or
+            before the source's final close time. If no tick is ever
+            fully covered, resolving this rule raises
+            :class:`~ohlc_toolkit.temporal.ConfigError` -- a deliberate
+            fail-closed choice, unlike an explicit, caller-stated empty
+            range, which is legal. See the module docstring's
+            "skip_warmup materialization rule" section for the full
+            statement.
 
     """
 
@@ -127,7 +159,7 @@ class ExplicitRange:
         """
         for label, value in (("start", self.start), ("end", self.end)):
             if isinstance(value, bool) or not isinstance(value, int):
-                logger.error(
+                logger.warning(
                     "Rejecting non-integer materialization range {}: {!r}",
                     label,
                     value,
@@ -137,7 +169,7 @@ class ExplicitRange:
                     f"seconds, got {type(value).__name__}."
                 )
         if self.end < self.start:
-            logger.error(
+            logger.warning(
                 "Rejecting inverted materialization range [{}, {}).",
                 self.start,
                 self.end,
@@ -157,22 +189,23 @@ Materialization = ExplicitRange | MaterializationRule | str
 class _ResolvedSchedule:
     """A schedule whose every strict resolution rule has already passed.
 
+    The source cadence and phase are not carried here: both are only
+    needed during resolution itself (to check the schedule against the
+    profile), and every later stage reads only ``window``, ``emit_every``,
+    and ``anchor``.
+
     Attributes:
         window: The window duration ``W``.
         emit_every: The emit cadence ``E``.
         anchor: The emit-grid anchor offset, already normalized to
             ``anchor mod E`` so that two spellings of the same grid are
             the same value.
-        cadence: The source cadence ``d``, from the profile.
-        phase: The source grid phase ``p``, from the profile.
 
     """
 
     window: Duration
     emit_every: Duration
     anchor: Duration
-    cadence: Duration
-    phase: Duration
 
 
 @dataclass(frozen=True)
@@ -268,10 +301,16 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
             or :attr:`MaterializationRule.SKIP_WARMUP` (or its name,
             ``"skip_warmup"``). An explicit range emits every grid tick
             ``t`` with ``start <= t < end``, whether or not any data
-            exists there. ``SKIP_WARMUP`` starts at the first grid tick
-            whose window is fully covered (``coverage_seconds == W``) and
-            ends one past the last grid tick at or before the source's
-            greatest ``close_time``.
+            exists there -- including an empty range (``start == end``),
+            which is legal because the caller stated it. ``SKIP_WARMUP``
+            is a defined policy, not an inferred one: it starts at the
+            first grid tick whose window is fully covered
+            (``coverage_seconds == W``) and ends one past the last grid
+            tick at or before the source's greatest ``close_time``. Unlike
+            an explicit empty range, ``SKIP_WARMUP`` finding no fully
+            covered tick is a configuration error -- it fails closed
+            rather than silently returning zero rows. See the module
+            docstring's "skip_warmup materialization rule" section.
 
     Returns:
         The window frame described above, one row per emit tick, ordered
@@ -285,7 +324,8 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
             ``(t - p) mod d == 0``); if the profile or the frame is
             missing a column the aggregation needs; if the
             materialization argument is not a supported value; or if
-            ``SKIP_WARMUP`` finds no fully covered tick.
+            ``SKIP_WARMUP`` finds no fully covered tick -- deliberately
+            fail-closed, unlike an explicit, caller-stated empty range.
 
     """
     schedule = _resolve_schedule(
@@ -330,7 +370,7 @@ def _resolve_schedule(
     phase_seconds = profile.phase.total_seconds
 
     if window_seconds < cadence_seconds:
-        logger.error(
+        logger.warning(
             "Rejecting window of {}s: shorter than the {}s source cadence.",
             window_seconds,
             cadence_seconds,
@@ -340,7 +380,7 @@ def _resolve_schedule(
             f"got {window_seconds}s < {cadence_seconds}s."
         )
     if emit_seconds < cadence_seconds:
-        logger.error(
+        logger.warning(
             "Rejecting emit cadence of {}s: shorter than the {}s source cadence.",
             emit_seconds,
             cadence_seconds,
@@ -350,7 +390,7 @@ def _resolve_schedule(
             f"{emit_seconds}s < {cadence_seconds}s."
         )
     if window_seconds % cadence_seconds != 0:
-        logger.error(
+        logger.warning(
             "Rejecting window of {}s: not a whole multiple of the {}s source cadence.",
             window_seconds,
             cadence_seconds,
@@ -360,7 +400,7 @@ def _resolve_schedule(
             f"got {window_seconds}s over a {cadence_seconds}s cadence."
         )
     if emit_seconds % cadence_seconds != 0:
-        logger.error(
+        logger.warning(
             "Rejecting emit cadence of {}s: not a whole multiple of the {}s "
             "source cadence.",
             emit_seconds,
@@ -381,7 +421,7 @@ def _resolve_schedule(
     # anchor tests the whole grid -- including grids whose materialized
     # range turns out to be empty.
     if (anchor_seconds - phase_seconds) % cadence_seconds != 0:
-        logger.error(
+        logger.warning(
             "Rejecting emit grid anchored at {}s: off the {}s close-time grid "
             "of a source at phase {}s.",
             anchor_seconds,
@@ -399,8 +439,6 @@ def _resolve_schedule(
         window=window_duration,
         emit_every=emit_duration,
         anchor=Duration(anchor_seconds),
-        cadence=profile.cadence,
-        phase=profile.phase,
     )
 
 
@@ -417,7 +455,7 @@ def _require_source_columns(frame: pl.DataFrame, profile: SourceProfile) -> None
 
     undeclared = [name for name in required if name not in profile.raw_schema]
     if undeclared:
-        logger.error(
+        logger.warning(
             "Source profile {!r} does not declare the column(s) {}.",
             profile.name,
             undeclared,
@@ -429,7 +467,7 @@ def _require_source_columns(frame: pl.DataFrame, profile: SourceProfile) -> None
 
     absent = [name for name in required if name not in frame.columns]
     if absent:
-        logger.error(
+        logger.warning(
             "Source frame for profile {!r} is missing the column(s) {}.",
             profile.name,
             absent,
@@ -594,13 +632,13 @@ def _coerce_materialization(
             return MaterializationRule(value)
         except ValueError as error:
             quoted = _quote_bounded(value)
-            logger.error("Rejecting unknown materialization rule name: {}", quoted)
+            logger.warning("Rejecting unknown materialization rule name: {}", quoted)
             raise ConfigError(
                 f"Unknown materialization rule {quoted}. Supported: "
                 f"{[rule.value for rule in MaterializationRule]}."
             ) from error
 
-    logger.error("Rejecting materialization of unsupported type: {!r}", value)
+    logger.warning("Rejecting materialization of unsupported type: {!r}", value)
     raise ConfigError(
         f"Expected an ExplicitRange, a MaterializationRule, or a rule name, "
         f"got {type(value).__name__}."
@@ -650,11 +688,24 @@ def _skip_warmup_ticks(
 ) -> tuple[int, ...]:
     """Derive the materialization range from the data's own coverage.
 
-    The range starts at the first emit tick whose window is fully covered
-    by source data, and ends one past the last emit tick at or before the
-    greatest source ``close_time``. Any end in ``(last_tick, last_tick +
-    E]`` selects the same ticks; one past the last tick is the smallest of
-    them, and the most literal reading of the rule.
+    These are DEFINED semantics of this library, not incidental behaviour
+    that happens to fall out of the implementation below:
+
+    (a) The range starts at the first emit tick whose window is fully
+        covered by source data (``coverage_seconds == window_seconds``).
+    (b) The range ends one past the last emit tick at or before the
+        greatest source ``close_time``. Any end in ``(last_tick,
+        last_tick + E]`` selects the same ticks; one past the last tick
+        is the smallest of them, and the most literal reading of the
+        rule.
+    (c) If no candidate tick is ever fully covered, that is a
+        configuration error: this function raises rather than silently
+        returning an empty range. This is a deliberate fail-closed
+        choice. It is not the same situation as an explicit
+        :class:`ExplicitRange` with ``start == end`` -- that empty range
+        is legal because the caller asked for it directly, whereas here
+        nobody asked for empty, and returning it anyway would hide that
+        this schedule cannot be honestly materialized over this data.
 
     Only ticks in ``[earliest_open + W, latest_close]`` can possibly be
     fully covered, so only those are scanned: a window ending earlier
@@ -665,7 +716,7 @@ def _skip_warmup_ticks(
 
     Raises:
         ConfigError: If ``candles`` is empty, or if no candidate tick is
-            fully covered.
+            fully covered -- see (c) above.
 
     """
     window_seconds = schedule.window.total_seconds
@@ -673,7 +724,7 @@ def _skip_warmup_ticks(
     anchor_seconds = schedule.anchor.total_seconds
 
     if not candles:
-        logger.error("Cannot skip warmup: the source frame holds no candles.")
+        logger.warning("Cannot skip warmup: the source frame holds no candles.")
         raise ConfigError(
             "Cannot resolve a skip_warmup range from an empty source frame: "
             "there is no coverage to measure."
@@ -696,7 +747,7 @@ def _skip_warmup_ticks(
             )
             return _grid_ticks(tick, last_tick + 1, schedule)
 
-    logger.error(
+    logger.warning(
         "Cannot skip warmup: no emit tick in [{}, {}] is fully covered by a "
         "{}s window over {} candle(s).",
         first_candidate,

@@ -180,6 +180,37 @@ def test_skip_warmup_over_a_gap_that_no_window_bridges_raises() -> None:
         )
 
 
+def test_skip_warmup_end_stops_at_the_last_grid_tick_not_the_final_close_time() -> None:
+    """The range ends one past the last grid tick at or before the final close.
+
+    Five one-minute candles span ``[0, 300)``, so the final close time is
+    300. The emit grid is every two minutes, so 300 is not itself a grid
+    tick: the last candidate tick is 240, not 300, and the tick that would
+    follow it on the grid, 360, lies entirely past the data and must not
+    be emitted.
+    """
+    rows: tuple[SourceRow, ...] = (
+        (0, 100.0, 110.0, 90.0, 105.0, 1.0),
+        (60, 101.0, 111.0, 91.0, 106.0, 2.0),
+        (120, 102.0, 112.0, 92.0, 107.0, 4.0),
+        (180, 103.0, 113.0, 93.0, 108.0, 8.0),
+        (240, 104.0, 114.0, 94.0, 109.0, 16.0),
+    )
+    result = compute_reference_windows(
+        frame_from_rows(rows),
+        profile_for(60),
+        window="2m",
+        emit_every="2m",
+        materialization=MaterializationRule.SKIP_WARMUP,
+    )
+
+    # The first fully covered tick is 120 (window [0, 120), two candles);
+    # the last is 240, one grid step short of the final close time of 300.
+    assert result.get_column("close_time").to_list() == [120, 240]
+    assert result.get_column("src_count").to_list() == [2, 2]
+    assert result.get_column("coverage_seconds").to_list() == [120, 120]
+
+
 def test_skip_warmup_on_an_empty_frame_raises() -> None:
     """An empty frame has no coverage to measure, so warmup cannot be skipped."""
     with pytest.raises(ConfigError, match="empty source frame"):
