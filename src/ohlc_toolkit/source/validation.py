@@ -148,8 +148,9 @@ def _run_checks(frame: pl.DataFrame, profile: SourceProfile) -> list[Finding]:
 
     timestamps = frame.get_column(profile.timestamp_column).cast(pl.Int64)
     cadence_seconds = coerce_duration(profile.cadence).total_seconds
+    phase_seconds = coerce_duration(profile.phase).total_seconds
 
-    findings.extend(_check_phase(timestamps, cadence_seconds))
+    findings.extend(_check_phase(timestamps, cadence_seconds, phase_seconds))
     if frame.height < _MIN_ROWS_FOR_DIFFS:
         return findings
 
@@ -213,18 +214,18 @@ def _bounded_sample(values: pl.Series, mask: pl.Series) -> tuple[int, ...]:
     return tuple(values.filter(mask).head(_MAX_SAMPLE_TIMESTAMPS).to_list())
 
 
-def _check_phase(timestamps: pl.Series, cadence_seconds: int) -> list[Finding]:
-    """Check that every timestamp shares the frame's own cadence-grid phase.
+def _check_phase(
+    timestamps: pl.Series, cadence_seconds: int, phase_seconds: int
+) -> list[Finding]:
+    """Check every timestamp against the profile's DECLARED grid phase.
 
-    The grid's phase is established by the first row: every row on a
-    complete, evenly spaced grid necessarily shares the same residue
-    modulo the cadence, whatever that residue happens to be. A lone row
-    trivially defines its own phase and cannot fail this check.
+    The phase is a declaration on the profile, never inferred from the
+    frame itself: inferring it from the first row would let a uniformly
+    shifted grid — corruption relative to the declared schedule — pass as
+    a self-consistent convention, and would let a corrupt first row
+    condemn every healthy one.
     """
-    if timestamps.len() == 0:
-        return []
-    expected_phase = timestamps[0] % cadence_seconds
-    mask = (timestamps % cadence_seconds) != expected_phase
+    mask = (timestamps % cadence_seconds) != phase_seconds
     count = int(mask.sum())
     if count == 0:
         return []
@@ -232,8 +233,8 @@ def _check_phase(timestamps: pl.Series, cadence_seconds: int) -> list[Finding]:
         Finding(
             kind=FindingKind.OFF_PHASE,
             message=(
-                f"{count} timestamp(s) do not share the grid's "
-                f"{cadence_seconds}s-cadence phase"
+                f"{count} timestamp(s) are not on the declared "
+                f"{cadence_seconds}s-cadence grid with phase {phase_seconds}s"
             ),
             count=count,
             sample_timestamps=_bounded_sample(timestamps, mask),

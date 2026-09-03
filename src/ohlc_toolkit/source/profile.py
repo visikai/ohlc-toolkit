@@ -74,6 +74,12 @@ class SourceProfile:
             compact duration string; either way, the stored value is
             always a strictly positive ``Duration`` (see
             :func:`~ohlc_toolkit.temporal.validate_cadence`).
+        phase: The declared offset of the source's timestamp grid from
+            the plain epoch grid: every timestamp must satisfy
+            ``timestamp % cadence == phase``. Declared, never inferred
+            from data — a uniformly shifted frame is corruption, not a
+            new convention. Zero (the default) means round cadence
+            boundaries. Must be strictly smaller than ``cadence``.
 
     """
 
@@ -86,18 +92,42 @@ class SourceProfile:
     # coerce_duration() at use sites so the narrower runtime type is
     # visible to the type checker without re-declaring this field.
     cadence: Duration | str
+    # Same boundary convention as cadence; zero is legal here (an anchor
+    # offset), so normalization uses coerce_duration, not validate_cadence.
+    # The default is the canonical string (not Duration(0)): dataclass
+    # defaults must not be function calls (ruff RUF009), and the string is
+    # normalized in __post_init__ like any other boundary value.
+    phase: Duration | str = "0s"
 
     def __post_init__(self) -> None:
         """Normalize the cadence and validate cross-field invariants.
 
         Raises:
             ConfigError: If ``cadence`` cannot be resolved to a strictly
-                positive Duration, ``name`` or ``timestamp_column`` is
-                empty, ``raw_schema`` is empty, or ``timestamp_column`` is
-                not itself a key of ``raw_schema``.
+                positive Duration, ``phase`` cannot be resolved to a
+                Duration strictly smaller than ``cadence``, ``name`` or
+                ``timestamp_column`` is empty, ``raw_schema`` is empty, or
+                ``timestamp_column`` is not itself a key of
+                ``raw_schema``.
 
         """
         object.__setattr__(self, "cadence", validate_cadence(self.cadence))
+        object.__setattr__(self, "phase", coerce_duration(self.phase))
+
+        cadence_seconds = coerce_duration(self.cadence).total_seconds
+        phase_seconds = coerce_duration(self.phase).total_seconds
+        if phase_seconds >= cadence_seconds:
+            logger.warning(
+                "Rejecting source profile {!r}: phase {}s is not smaller than "
+                "cadence {}s.",
+                self.name,
+                phase_seconds,
+                cadence_seconds,
+            )
+            raise ConfigError(
+                f"Source profile phase must be strictly smaller than the "
+                f"cadence, got {phase_seconds}s >= {cadence_seconds}s."
+            )
 
         if not self.name:
             logger.warning("Rejecting source profile with an empty name.")
@@ -169,4 +199,6 @@ BITSTAMP_BTCUSD_1M = SourceProfile(
         "volume": ColumnKind.FLOATING,
     },
     cadence=Duration.parse("1m"),
+    # Published timestamps land on round minute boundaries.
+    phase=Duration(0),
 )
