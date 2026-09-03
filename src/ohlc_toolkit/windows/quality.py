@@ -60,7 +60,7 @@ derived once in Python. The two are the same predicate for every integer
 ``coverage_seconds`` (that is the only reason the second form is used),
 and the second never has to materialize ``coverage_seconds * q``:
 ``min_coverage`` may legally be a subnormal such as ``5e-324``, whose
-decimal intent carries a 322-digit denominator that no dataframe literal
+decimal intent carries a 324-digit denominator that no dataframe literal
 can hold. Exactness is kept and the frame-side arithmetic stays small.
 :attr:`QualityReport.threshold_seconds` still reports the unrounded
 ``p / q``.
