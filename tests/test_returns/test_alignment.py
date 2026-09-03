@@ -55,9 +55,10 @@ _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
 # A permutation of the six-row gap-free fixture that leaves no row in its
-# original position, so a call that quietly sorted or assumed order would
-# be caught wherever it looked.
-_SHUFFLE = [3, 0, 5, 2, 4, 1]
+# original position (a derangement, and a test below checks that it is),
+# so a call that quietly sorted or assumed order would be caught wherever
+# it looked.
+_SHUFFLE = [3, 0, 5, 2, 1, 4]
 
 
 def _add(
@@ -308,6 +309,61 @@ class TestRowOrderIsNotAssumed:
             == shuffled.get_column("close_time").to_list()
         )
 
+    def test_the_shuffle_really_does_displace_every_row(self) -> None:
+        """Guard the fixture: a fixed point would exempt one row from the claim."""
+        assert sorted(_SHUFFLE) == list(range(len(_SHUFFLE)))
+        assert all(index != target for index, target in enumerate(_SHUFFLE))
+
+    def test_every_row_of_a_large_shuffled_frame_gets_its_own_counterpart(
+        self,
+    ) -> None:
+        """The value on row i belongs to row i, pinned against a dict oracle.
+
+        The counterpart column is attached to the caller's frame
+        POSITIONALLY, so this module is correct only if the join hands
+        rows back in exactly the left frame's order -- a guarantee the
+        join is asked for explicitly, because the default is documented
+        as unspecified. The six-row fixtures cannot catch a reorder that
+        only shows up at scale, so this one is a few thousand shuffled
+        rows with gaps, and every expected value is derived from a plain
+        Python dict keyed by close time -- never from the implementation
+        run in a friendlier order.
+        """
+        spacing = 60
+        gap_stride, gap_phase = 7, 3  # every 7th tick, offset 3, is missing
+        times = [
+            TIME_BASE + spacing * tick
+            for tick in range(4001)
+            if tick % gap_stride != gap_phase
+        ]
+        closes = [float(1000 + 3 * (tick % 997)) for tick in range(len(times))]
+        # A fixed-stride permutation: gcd(1597, len) == 1 makes it a
+        # bijection, and consecutive rows land far apart.
+        order = [(index * 1597) % len(times) for index in range(len(times))]
+        assert sorted(order) == list(range(len(times)))
+        shuffled_times = [times[position] for position in order]
+        shuffled_closes = [closes[position] for position in order]
+
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", shuffled_times, dtype=pl.Int64),
+                pl.Series("close", shuffled_closes, dtype=pl.Float64),
+            ]
+        )
+        close_by_time = dict(zip(shuffled_times, shuffled_closes, strict=True))
+        expected = [
+            (close - close_by_time[time - spacing]) / close_by_time[time - spacing]
+            if (time - spacing) in close_by_time
+            else None
+            for time, close in zip(shuffled_times, shuffled_closes, strict=True)
+        ]
+
+        result = add_backward_returns(
+            frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+        )
+        column = backward_return_column(ReturnMethod.SIMPLE, "1m")
+        assert result.get_column(column).to_list() == expected
+
 
 class TestHorizonsThatLeaveTheInt64Range:
     """A wrapped close time does not fail to match -- it matches the wrong row."""
@@ -336,6 +392,43 @@ class TestHorizonsThatLeaveTheInt64Range:
         with pytest.raises(ConfigError, match="Int64 range"):
             add_backward_returns(
                 frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+            )
+
+    def test_only_the_largest_close_time_overflowing_forward_is_refused(self) -> None:
+        """Both extremes guard the shift, not just one of them.
+
+        Here the SMALLEST close time has all the room in the world going
+        forward and only the LARGEST wraps -- so a guard that consulted
+        the minimum alone would let the shift proceed, the wrapped key
+        would land deep in the negatives, and it could match an
+        unrelated row: over this frame it matches row 0 and emits
+        ``7.0 / 9.0 - 1``, a plausible finite return built from the
+        wrong close. Refusal is the only honest answer.
+        """
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", [_INT64_MIN + 99, _INT64_MAX], dtype=pl.Int64),
+                pl.Series("close", [7.0, 9.0], dtype=pl.Float64),
+            ]
+        )
+        with pytest.raises(ConfigError, match="Int64 range"):
+            add_forward_returns(
+                frame, horizon="100s", cadence="100s", method=ReturnMethod.SIMPLE
+            )
+
+    def test_only_the_smallest_close_time_overflowing_backward_is_refused(
+        self,
+    ) -> None:
+        """The mirror: looking back, it is the smallest close time that wraps."""
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", [_INT64_MIN, _INT64_MAX - 99], dtype=pl.Int64),
+                pl.Series("close", [7.0, 9.0], dtype=pl.Float64),
+            ]
+        )
+        with pytest.raises(ConfigError, match="Int64 range"):
+            add_backward_returns(
+                frame, horizon="100s", cadence="100s", method=ReturnMethod.SIMPLE
             )
 
     def test_the_opposite_direction_over_the_same_frame_is_fine(self) -> None:
