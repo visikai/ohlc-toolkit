@@ -109,7 +109,12 @@ from typing import Self
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.temporal import ConfigError, CoverageError, Duration, coerce_duration
+from ohlc_toolkit.temporal import (
+    ConfigError,
+    CoverageError,
+    Duration,
+    validate_window_duration,
+)
 
 logger = get_logger(__name__)
 
@@ -601,7 +606,11 @@ def apply_quality_policy(
         ConfigError: If ``frame`` is missing a required column, if
             ``coverage_seconds`` is not an integer column, or if
             ``window`` cannot be coerced to a
-            :class:`~ohlc_toolkit.temporal.Duration`.
+            :class:`~ohlc_toolkit.temporal.Duration` or coerces to the
+            zero duration. A zero window is refused for the same reason
+            :func:`~ohlc_toolkit.windows.resolution.resolve_schedule`
+            refuses one: here, every row meets a 0s threshold, so
+            accepting it would quietly disarm the gate.
         WindowCoverageError: For :attr:`QualityMode.GATE` in
             :attr:`GateMode.STRICT`, when any row falls below the
             threshold. A :class:`~ohlc_toolkit.temporal.errors.CoverageError`
@@ -616,7 +625,7 @@ def apply_quality_policy(
 
     """
     _require_quality_columns(frame)
-    window_duration = coerce_duration(window)
+    window_duration = validate_window_duration(window)
 
     threshold_seconds = _threshold_seconds(
         policy.min_coverage, window_duration.total_seconds
