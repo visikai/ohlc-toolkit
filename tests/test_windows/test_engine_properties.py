@@ -67,7 +67,9 @@ class _Scenario:
     materialization: Materialization
 
 
-def _draw_prices(data: st.DataObject, label: str) -> tuple[float, ...]:
+def _draw_prices(
+    data: st.DataObject, label: str
+) -> tuple[float, float, float, float, float]:
     """Draw one coherent OHLCV candle on the quarter-unit grid."""
     open_price = 20_000.0 + data.draw(st.integers(-40, 40), label=f"{label}_open")
     close_price = open_price + _QUARTER * data.draw(
@@ -109,7 +111,7 @@ def _draw_rows(
         label="present_rolls",
     )
 
-    rows = [
+    rows: list[SourceRow] = [
         (first_open + index * cadence, *_draw_prices(data, f"slot{index}"))
         for index, roll in enumerate(present)
         if roll <= present_weight

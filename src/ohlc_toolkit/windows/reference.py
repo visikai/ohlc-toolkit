@@ -56,6 +56,17 @@ is DEFINED, not merely whatever the implementation happens to compute:
     silently hide that this schedule cannot be honestly materialized over
     this data at all.
 
+What is NOT here
+----------------
+
+Deciding whether a schedule is legal, normalizing the anchor, and saying
+which instants the emit grid holds are not part of being an oracle: they
+are the same decisions for every implementation, and this package holds
+more than one. They live in :mod:`ohlc_toolkit.windows.resolution`, which
+this module and the fast engine both import, so a schedule refused by one
+is refused by the other with the same words. What stays here is the part
+that has to be literal: the membership rule and the aggregation.
+
 Cost
 ----
 
@@ -67,30 +78,26 @@ specification line by line.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import Enum, unique
 
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.source.profile import SourceProfile
-from ohlc_toolkit.temporal import (
-    ConfigError,
-    Duration,
-    coerce_duration,
-    validate_cadence,
-    validate_window_duration,
+from ohlc_toolkit.temporal import ConfigError, Duration
+from ohlc_toolkit.windows.resolution import (
+    OHLCV_COLUMNS,
+    ExplicitRange,
+    Materialization,
+    ResolvedSchedule,
+    coerce_materialization,
+    count_ticks,
+    first_tick_at_or_after,
+    last_tick_at_or_before,
+    require_source_columns,
+    resolve_schedule,
 )
 
 logger = get_logger(__name__)
-
-# The five OHLCV roles, read from the source frame by these exact names.
-# A profile declares which raw columns exist and what kind they are; the
-# role each one plays is fixed by this convention.
-_OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
-
-# Rejected input is echoed into logs and error messages; cap how much, so
-# a pathological value cannot produce an unbounded log line.
-_MAX_QUOTED_INPUT_CHARS = 80
 
 # Explicit ceilings on the brute-force work, with a reason: this oracle is
 # quadratic, and a caller who asks for a huge grid deserves to be told
@@ -99,113 +106,6 @@ _MAX_QUOTED_INPUT_CHARS = 80
 # it is most wanted -- but they are logged so the cost is never silent.
 _MAX_UNWARNED_TICKS = 1_000_000
 _MAX_UNWARNED_CANDLE_TICK_PAIRS = 100_000_000
-
-
-@unique
-class MaterializationRule(Enum):
-    """A named rule for deriving the materialization range from the data.
-
-    Only one rule exists today. Modelling it as an enum member rather than
-    a bare string flag means a future rule is a new member, with its own
-    documented derivation, instead of a second meaning bolted onto an
-    existing one.
-
-    Attributes:
-        SKIP_WARMUP: A defined policy, not an inferred convenience: start
-            at the first emit tick whose window is fully covered by
-            source data, and stop one past the last emit tick at or
-            before the source's final close time. If no tick is ever
-            fully covered, resolving this rule raises
-            :class:`~ohlc_toolkit.temporal.ConfigError` -- a deliberate
-            fail-closed choice, unlike an explicit, caller-stated empty
-            range, which is legal. See the module docstring's
-            "skip_warmup materialization rule" section for the full
-            statement.
-
-    """
-
-    SKIP_WARMUP = "skip_warmup"
-
-
-@dataclass(frozen=True)
-class ExplicitRange:
-    """A half-open materialization range given as exact Unix seconds.
-
-    Every emit tick ``t`` with ``start <= t < end`` produces a row,
-    including ticks whose windows lie entirely before or entirely after
-    the source data: the emit grid is total, and a tick with no data is
-    reported as an empty window rather than dropped.
-
-    Attributes:
-        start: The first Unix second that may hold an emit tick,
-            inclusive.
-        end: The first Unix second past the range, exclusive. Equal to
-            ``start`` means an empty range, which is legal and yields zero
-            rows.
-
-    """
-
-    start: int
-    end: int
-
-    def __post_init__(self) -> None:
-        """Reject bounds that are not exact seconds, or that run backwards.
-
-        Raises:
-            ConfigError: If either bound is not an ``int`` (``bool`` is
-                rejected too, even though it is an ``int`` subtype), or if
-                ``end`` precedes ``start``.
-
-        """
-        for label, value in (("start", self.start), ("end", self.end)):
-            if isinstance(value, bool) or not isinstance(value, int):
-                logger.warning(
-                    "Rejecting non-integer materialization range {}: {!r}",
-                    label,
-                    value,
-                )
-                raise ConfigError(
-                    f"Materialization range {label} must be an int of Unix "
-                    f"seconds, got {type(value).__name__}."
-                )
-        if self.end < self.start:
-            logger.warning(
-                "Rejecting inverted materialization range [{}, {}).",
-                self.start,
-                self.end,
-            )
-            raise ConfigError(
-                f"Materialization range end must not precede its start, got "
-                f"[{self.start}, {self.end})."
-            )
-
-
-# What a caller may pass as the materialization argument: an explicit
-# range, a named rule, or that rule's name as a plain string.
-Materialization = ExplicitRange | MaterializationRule | str
-
-
-@dataclass(frozen=True)
-class _ResolvedSchedule:
-    """A schedule whose every strict resolution rule has already passed.
-
-    The source cadence and phase are not carried here: both are only
-    needed during resolution itself (to check the schedule against the
-    profile), and every later stage reads only ``window``, ``emit_every``,
-    and ``anchor``.
-
-    Attributes:
-        window: The window duration ``W``.
-        emit_every: The emit cadence ``E``.
-        anchor: The emit-grid anchor offset, already normalized to
-            ``anchor mod E`` so that two spellings of the same grid are
-            the same value.
-
-    """
-
-    window: Duration
-    emit_every: Duration
-    anchor: Duration
 
 
 @dataclass(frozen=True)
@@ -328,7 +228,7 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
             fail-closed, unlike an explicit, caller-stated empty range.
 
     """
-    schedule = _resolve_schedule(
+    schedule = resolve_schedule(
         profile, window=window, emit_every=emit_every, anchor=anchor
     )
     candles = _extract_candles(frame, profile)
@@ -338,143 +238,6 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
     window_seconds = schedule.window.total_seconds
     rows = [_compute_window_row(candles, tick, window_seconds) for tick in ticks]
     return _build_output_frame(rows)
-
-
-def _resolve_schedule(
-    profile: SourceProfile,
-    *,
-    window: Duration | str,
-    emit_every: Duration | str,
-    anchor: Duration | str,
-) -> _ResolvedSchedule:
-    """Coerce and check a schedule against the source's cadence and phase.
-
-    The checks run shortest-first and only then divisibility, so each rule
-    can fire on its own and report the most specific reason. Checking
-    divisibility first would make the two shortest-than-cadence rules
-    unreachable (a positive whole multiple of ``d`` is never smaller than
-    ``d``) and leave a caller who asked for a 30s window over a 60s
-    source reading about remainders instead of about size.
-
-    Raises:
-        ConfigError: If any strict resolution rule fails.
-
-    """
-    window_duration = validate_window_duration(window)
-    emit_duration = validate_cadence(emit_every)
-    anchor_duration = coerce_duration(anchor)
-
-    window_seconds = window_duration.total_seconds
-    emit_seconds = emit_duration.total_seconds
-    cadence_seconds = profile.cadence.total_seconds
-    phase_seconds = profile.phase.total_seconds
-
-    if window_seconds < cadence_seconds:
-        logger.warning(
-            "Rejecting window of {}s: shorter than the {}s source cadence.",
-            window_seconds,
-            cadence_seconds,
-        )
-        raise ConfigError(
-            f"Window duration must not be shorter than the source cadence, "
-            f"got {window_seconds}s < {cadence_seconds}s."
-        )
-    if emit_seconds < cadence_seconds:
-        logger.warning(
-            "Rejecting emit cadence of {}s: shorter than the {}s source cadence.",
-            emit_seconds,
-            cadence_seconds,
-        )
-        raise ConfigError(
-            f"Emit cadence must not be shorter than the source cadence, got "
-            f"{emit_seconds}s < {cadence_seconds}s."
-        )
-    if window_seconds % cadence_seconds != 0:
-        logger.warning(
-            "Rejecting window of {}s: not a whole multiple of the {}s source cadence.",
-            window_seconds,
-            cadence_seconds,
-        )
-        raise ConfigError(
-            f"Window duration must be a whole multiple of the source cadence, "
-            f"got {window_seconds}s over a {cadence_seconds}s cadence."
-        )
-    if emit_seconds % cadence_seconds != 0:
-        logger.warning(
-            "Rejecting emit cadence of {}s: not a whole multiple of the {}s "
-            "source cadence.",
-            emit_seconds,
-            cadence_seconds,
-        )
-        raise ConfigError(
-            f"Emit cadence must be a whole multiple of the source cadence, got "
-            f"{emit_seconds}s over a {cadence_seconds}s cadence."
-        )
-
-    # Two spellings of the same grid must resolve to the same anchor, so
-    # the offset is reduced into [0, E) once, here.
-    anchor_seconds = anchor_duration.total_seconds % emit_seconds
-
-    # Every emit tick must be a possible source close time. Source opens
-    # sit at `p` modulo `d`, so closes do too. Because `d` divides `E`,
-    # every tick is congruent to the anchor modulo `d`, so testing the
-    # anchor tests the whole grid -- including grids whose materialized
-    # range turns out to be empty.
-    if (anchor_seconds - phase_seconds) % cadence_seconds != 0:
-        logger.warning(
-            "Rejecting emit grid anchored at {}s: off the {}s close-time grid "
-            "of a source at phase {}s.",
-            anchor_seconds,
-            cadence_seconds,
-            phase_seconds,
-        )
-        raise ConfigError(
-            f"The emit grid does not land on the source close-time grid: an "
-            f"anchor of {anchor_seconds}s over a {cadence_seconds}s cadence at "
-            f"phase {phase_seconds}s leaves every tick between two source "
-            "close times."
-        )
-
-    return _ResolvedSchedule(
-        window=window_duration,
-        emit_every=emit_duration,
-        anchor=Duration(anchor_seconds),
-    )
-
-
-def _require_source_columns(frame: pl.DataFrame, profile: SourceProfile) -> None:
-    """Check that every column the aggregation reads exists to be read.
-
-    Raises:
-        ConfigError: If the profile does not declare, or the frame does not
-            contain, the timestamp column or one of the five OHLCV
-            columns.
-
-    """
-    required = (profile.timestamp_column, *_OHLCV_COLUMNS)
-
-    undeclared = [name for name in required if name not in profile.raw_schema]
-    if undeclared:
-        logger.warning(
-            "Source profile {!r} does not declare the column(s) {}.",
-            profile.name,
-            undeclared,
-        )
-        raise ConfigError(
-            f"Source profile {profile.name!r} must declare the column(s) "
-            f"{undeclared} to be aggregated into windows."
-        )
-
-    absent = [name for name in required if name not in frame.columns]
-    if absent:
-        logger.warning(
-            "Source frame for profile {!r} is missing the column(s) {}.",
-            profile.name,
-            absent,
-        )
-        raise ConfigError(
-            f"The source frame does not contain the declared column(s) {absent}."
-        )
 
 
 def _extract_candles(
@@ -487,14 +250,14 @@ def _extract_candles(
     so the oracle and the rest of the package agree on what a row's
     interval is without restating the arithmetic.
     """
-    _require_source_columns(frame, profile)
+    require_source_columns(frame, profile)
 
     bounds = profile.derive_interval_bounds(frame)
     open_times = bounds.get_column("open_time").to_list()
     close_times = bounds.get_column("close_time").to_list()
     prices = {
         name: frame.get_column(name).cast(pl.Float64).to_list()
-        for name in _OHLCV_COLUMNS
+        for name in OHLCV_COLUMNS
     }
 
     return tuple(
@@ -607,70 +370,33 @@ def _compute_window_row(
     )
 
 
-def _quote_bounded(text: str) -> str:
-    """Return ``repr(text)``, truncated with a length note when oversized."""
-    if len(text) <= _MAX_QUOTED_INPUT_CHARS:
-        return repr(text)
-    return f"{text[:_MAX_QUOTED_INPUT_CHARS]!r}... ({len(text)} chars total)"
-
-
-def _coerce_materialization(
-    value: Materialization,
-) -> ExplicitRange | MaterializationRule:
-    """Coerce the boundary materialization argument to one of its two forms.
-
-    Raises:
-        ConfigError: If ``value`` is a string that names no rule, or is
-            neither an :class:`ExplicitRange`, a
-            :class:`MaterializationRule`, nor such a string.
-
-    """
-    if isinstance(value, ExplicitRange | MaterializationRule):
-        return value
-    if isinstance(value, str):
-        try:
-            return MaterializationRule(value)
-        except ValueError as error:
-            quoted = _quote_bounded(value)
-            logger.warning("Rejecting unknown materialization rule name: {}", quoted)
-            raise ConfigError(
-                f"Unknown materialization rule {quoted}. Supported: "
-                f"{[rule.value for rule in MaterializationRule]}."
-            ) from error
-
-    logger.warning("Rejecting materialization of unsupported type: {!r}", value)
-    raise ConfigError(
-        f"Expected an ExplicitRange, a MaterializationRule, or a rule name, "
-        f"got {type(value).__name__}."
-    )
-
-
 def _resolve_ticks(
     candles: Sequence[_Candle],
-    schedule: _ResolvedSchedule,
+    schedule: ResolvedSchedule,
     materialization: Materialization,
 ) -> tuple[int, ...]:
     """Resolve the emit ticks for whichever materialization was requested."""
-    resolved = _coerce_materialization(materialization)
+    resolved = coerce_materialization(materialization)
     if isinstance(resolved, ExplicitRange):
         return _grid_ticks(resolved.start, resolved.end, schedule)
     return _skip_warmup_ticks(candles, schedule)
 
 
-def _grid_ticks(start: int, end: int, schedule: _ResolvedSchedule) -> tuple[int, ...]:
+def _grid_ticks(start: int, end: int, schedule: ResolvedSchedule) -> tuple[int, ...]:
     """List the emit ticks in the half-open range ``[start, end)``.
 
-    The grid is ``{t : (t - anchor) mod E == 0}``. The first tick at or
-    after ``start`` is ``start + ((anchor - start) mod E)``, and the ticks
-    step by ``E`` from there.
+    The grid is ``{t : (t - anchor) mod E == 0}``, and where that grid
+    starts inside ``[start, end)`` is
+    :func:`~ohlc_toolkit.windows.resolution.first_tick_at_or_after`'s
+    business, not this function's: the arithmetic is shared with the fast
+    engine so both materialize the same instants.
     """
     emit_seconds = schedule.emit_every.total_seconds
-    anchor_seconds = schedule.anchor.total_seconds
     if end <= start:
         return ()
 
-    first_tick = start + (anchor_seconds - start) % emit_seconds
-    tick_count = max(0, -((first_tick - end) // emit_seconds))
+    first_tick = first_tick_at_or_after(start, schedule)
+    tick_count = count_ticks(first_tick, end, emit_seconds)
     if tick_count > _MAX_UNWARNED_TICKS:
         logger.warning(
             "Materializing {} emit ticks over [{}, {}) at a {}s cadence; this "
@@ -684,7 +410,7 @@ def _grid_ticks(start: int, end: int, schedule: _ResolvedSchedule) -> tuple[int,
 
 
 def _skip_warmup_ticks(
-    candles: Sequence[_Candle], schedule: _ResolvedSchedule
+    candles: Sequence[_Candle], schedule: ResolvedSchedule
 ) -> tuple[int, ...]:
     """Derive the materialization range from the data's own coverage.
 
@@ -721,7 +447,6 @@ def _skip_warmup_ticks(
     """
     window_seconds = schedule.window.total_seconds
     emit_seconds = schedule.emit_every.total_seconds
-    anchor_seconds = schedule.anchor.total_seconds
 
     if not candles:
         logger.warning("Cannot skip warmup: the source frame holds no candles.")
@@ -733,9 +458,8 @@ def _skip_warmup_ticks(
     earliest_open = min(candle.open_time for candle in candles)
     latest_close = max(candle.close_time for candle in candles)
 
-    last_tick = latest_close - (latest_close - anchor_seconds) % emit_seconds
-    lower_bound = earliest_open + window_seconds
-    first_candidate = lower_bound + (anchor_seconds - lower_bound) % emit_seconds
+    last_tick = last_tick_at_or_before(latest_close, schedule)
+    first_candidate = first_tick_at_or_after(earliest_open + window_seconds, schedule)
 
     for tick in range(first_candidate, last_tick + 1, emit_seconds):
         included = _included_candles(candles, tick, window_seconds)

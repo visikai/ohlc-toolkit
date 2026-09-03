@@ -8,11 +8,11 @@ the window contract, meant to be checked against by eye and property-
 tested against by faster implementations. It is not the fast path.
 """
 
-from ohlc_toolkit.windows.reference import (
+from ohlc_toolkit.windows.reference import compute_reference_windows
+from ohlc_toolkit.windows.resolution import (
     ExplicitRange,
     Materialization,
     MaterializationRule,
-    compute_reference_windows,
 )
 
 __all__ = [

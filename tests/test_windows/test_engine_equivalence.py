@@ -275,6 +275,13 @@ def test_every_tick_over_a_gap_emits_exactly_one_row() -> None:
         assert empty.get_column(column).null_count() == empty.height
 
 
+# How far apart the two summation orders are allowed to land on real
+# volumes. A few parts in 1e15 is what float rounding actually produces
+# over a few thousand addends; 1e-12 leaves three orders of magnitude of
+# headroom and still fails long before any real aggregation mistake could
+# hide inside it.
+_VOLUME_RELATIVE_TOLERANCE = 1e-12
+
 # Two representative schedules over the committed 14-day minute slice: one
 # short window emitted often, one schedule-scale window emitted hourly.
 # The oracle is quadratic, so the emit cadence is kept coarse enough that
@@ -320,8 +327,8 @@ def test_the_engine_agrees_with_the_oracle_on_the_real_slice(
         result.get_column("volume"),
         expected.get_column("volume"),
         check_exact=False,
-        rtol=1e-12,
-        atol=0.0,
+        rel_tol=_VOLUME_RELATIVE_TOLERANCE,
+        abs_tol=0.0,
     )
 
 
