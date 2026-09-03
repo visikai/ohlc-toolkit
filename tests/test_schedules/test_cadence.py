@@ -133,6 +133,30 @@ class TestWOverK:
         assert all(pair.emit_every >= source_cadence for pair in rule.pairs)
         assert rule.pairs[0].emit_every == source_cadence
 
+    def test_a_self_similar_allowed_set_resolves_every_window(self) -> None:
+        """Feeding a schedule in as its own allowed set resolves in full.
+
+        The natural way to use the rule is to hand a resolved schedule
+        in twice: once as the windows, once as the allowed set. With a
+        large divisor the smallest windows put ``W / K`` below the
+        smallest member -- 1m/48 is 1.25s -- and the source-cadence
+        floor must answer for them, exactly as it answers for an allowed
+        member that is too fine. Every expected cadence below is worked
+        out by hand from ``a * 48 <= W``: the largest member at or below
+        the ratio where one exists (146m/48 takes 3m; 56m/48 takes 1m
+        with no clamping involved), and the source cadence where none
+        does (the first four windows).
+        """
+        minutes = [1, 3, 8, 21, 56, 146, 380, 993, 2590, 6758, 17632]
+        windows = [f"{m}m" for m in minutes]
+        expected_emit_minutes = [1, 1, 1, 1, 1, 3, 3, 8, 21, 56, 146]
+
+        rule = w_over_k(windows, divisor=48, allowed=windows, source_cadence="1m")
+
+        assert [pair.emit_every for pair in rule.pairs] == [
+            Duration.parse(f"{m}m") for m in expected_emit_minutes
+        ]
+
     def test_a_window_too_small_for_the_divisor_is_refused(self) -> None:
         """A schedule reaching below K times the finest allowed cadence refuses.
 
