@@ -5,16 +5,18 @@ test time; nothing here is a program's output.
 
 ## `bitstamp_btcusd_1min_14d.csv.gz`
 
-A 14-day slice of the published public Bitstamp BTC/USD one-minute
-history, with that source's own six columns (`timestamp`, `open`, `high`,
-`low`, `close`, `volume`) unchanged. 20160 rows: a complete, gap-free
-minute grid over the half-open Unix-second range `[1734998400,
-1736208000)`, which is 2024-12-24 00:00:00 UTC up to 2025-01-07 00:00:00
-UTC. Each `timestamp` is its candle's interval open.
+A 14-day slice of the recently published public Bitstamp BTC/USD
+one-minute history, with that source's own six columns (`timestamp`,
+`open`, `high`, `low`, `close`, `volume`) unchanged. 20160 rows: a
+complete, gap-free minute grid over the half-open Unix-second range
+`[1786924800, 1788134400)`, which is 2026-08-17 00:00:00 UTC up to
+2026-08-31 00:00:00 UTC. Each `timestamp` is its candle's interval open.
 
 This is the primary real-data fixture for windowed-aggregation tests: long
 enough to carry a window measured in thousands of source candles, and
 complete enough to pass strict source validation.
+
+This file is deliberately included in source distributions.
 
 ## `real_world_data.csv`
 

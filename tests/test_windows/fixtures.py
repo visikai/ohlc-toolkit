@@ -6,9 +6,9 @@ Real-data fixtures, and which one to reach for
 ``tests/test_data/bitstamp_btcusd_1min_14d.csv.gz`` is the PRIMARY
 real-data fixture for window work. It holds 20160 rows: a complete,
 gap-free one-minute grid over the half-open Unix-second range
-``[1734998400, 1736208000)``, which is 2024-12-24 00:00:00 UTC up to
-2025-01-07 00:00:00 UTC. It is a slice of the published public Bitstamp
-BTC/USD minute-data history, with that source's own six columns
+``[1786924800, 1788134400)``, which is 2026-08-17 00:00:00 UTC up to
+2026-08-31 00:00:00 UTC. It is a slice of the recently published public
+Bitstamp BTC/USD minute-data history, with that source's own six columns
 unchanged. Fourteen days of minutes is enough to carry a window measured
 in thousands of source candles, and complete enough to pass strict source
 validation, so it can exercise a schedule-scale run end to end.
@@ -35,8 +35,8 @@ REAL_SLICE_PATH = (
 # The slice's own shape, restated here so a test can assert it rather than
 # discover it.
 REAL_SLICE_ROW_COUNT = 20_160
-REAL_SLICE_START = 1_734_998_400
-REAL_SLICE_END = 1_736_208_000
+REAL_SLICE_START = 1_786_924_800
+REAL_SLICE_END = 1_788_134_400
 REAL_SLICE_CADENCE_SECONDS = 60
 
 

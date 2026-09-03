@@ -31,9 +31,9 @@ _WINDOW_SECONDS = 2_590 * 60
 _WINDOW_CANDLES = 2_590
 
 # The first hour boundary at or after ``REAL_SLICE_START + _WINDOW_SECONDS``
-# (1735153800), which is the first tick whose window the slice fully
+# (1787080200), which is the first tick whose window the slice fully
 # covers.
-_FIRST_COVERED_TICK = 1_735_156_800
+_FIRST_COVERED_TICK = 1_787_083_200
 
 # The slice's final close time is itself an exact hour, so it is the last
 # tick a 1h emit grid anchored at zero can place at or before the data.
@@ -48,13 +48,13 @@ _DOCUMENTED_TICK_COUNT = 293
 # One window, verified by hand against the committed CSV's own rows. See
 # the docstring of test_a_hand_verified_window_of_the_real_slice for the
 # four boundary rows these numbers were read off.
-_SPOT_TICK = 1_735_300_800
-_SPOT_OPEN_TIME = 1_735_145_400
-_SPOT_OPEN = 98_243.0
-_SPOT_HIGH = 99_881.0
-_SPOT_LOW = 94_570.0
-_SPOT_CLOSE = 96_841.0
-_SPOT_VOLUME = 2_827.789_168_62
+_SPOT_TICK = 1_787_227_200
+_SPOT_OPEN_TIME = 1_787_071_800
+_SPOT_OPEN = 64_768.44
+_SPOT_HIGH = 72_408.08
+_SPOT_LOW = 64_112.88
+_SPOT_CLOSE = 71_872.32
+_SPOT_VOLUME = 7_182.822_791_09
 
 # The lead-in ticks of an explicit range starting at the data's first open:
 # no candles, then one hour of them, then two.
@@ -115,24 +115,33 @@ def test_a_schedule_scale_window_emits_a_total_fully_covered_grid() -> None:
 def test_a_hand_verified_window_of_the_real_slice() -> None:
     """One window, checked against the fixture's own rows by hand.
 
-    The window is ``[1735145400, 1735300800)``. Its boundary rows, read
+    The window is ``[1787071800, 1787227200)``. Its boundary rows, read
     straight out of the committed CSV:
 
     ==========  ========  ========  ========  ========
     timestamp   open      high      low       close
     ==========  ========  ========  ========  ========
-    1735145340  98256.0   98265.0   98245.0   98245.0
-    1735145400  98243.0   98267.0   98243.0   98260.0
-    1735300740  96832.0   96841.0   96820.0   96841.0
-    1735300800  96829.0   96913.0   96807.0   96902.0
+    1787071740  64788.62  64788.62  64768.44  64768.44
+    1787071800  64768.44  64768.61  64759.6   64759.61
+    1787227140  71860.52  71872.32  71839.71  71872.32
+    1787227200  71872.71  71913.71  71872.71  71882.13
     ==========  ========  ========  ========  ========
 
-    The candle opening at 1735145340 straddles the window open, so it is
-    excluded whole: were it included, ``open`` would read 98256.0. The
-    candle opening at 1735300740 closes exactly at the emit time, so it IS
-    included, which is where ``close`` of 96841.0 comes from. The candle
-    opening at 1735300800 is still open at the emit time and is excluded:
-    were it included, ``close`` would read 96902.0.
+    The candle opening at 1787071740 closes exactly at the window open, so
+    it lies entirely before the window and is excluded whole: were it
+    wrongly included, ``open`` would read 64788.62 instead of 64768.44.
+    The candle opening at 1787227140 closes exactly at the emit time, so
+    it IS included, which is where ``close`` of 71872.32 comes from. The
+    candle opening at 1787227200 is still open at the emit time and is
+    excluded: were it wrongly included, ``close`` would read 71882.13.
+
+    ``open`` and ``close`` are read straight off those two included
+    boundary rows. ``high``, ``low``, ``src_count``, ``coverage_seconds``,
+    and ``volume`` are independently recomputed over all 2590 candles in
+    the window with a separate polars aggregation (max, min, count, count
+    times the 60s cadence, and sum, respectively) -- not with the oracle
+    under test -- so this test cannot pass merely because the oracle
+    agrees with itself.
     """
     frame = load_real_slice()
 
@@ -157,8 +166,8 @@ def test_a_hand_verified_window_of_the_real_slice() -> None:
     # Volume is the one aggregate compared approximately. Summing 2590
     # real float volumes gives a result that depends on the order they are
     # added in; an independent vectorized sum of the same rows lands
-    # 2.5e-12 away from the oracle's row-order accumulation. The tolerance
-    # is about float addition, not about the window being fuzzy.
+    # about 3.6e-12 away from the oracle's row-order accumulation. The
+    # tolerance is about float addition, not about the window being fuzzy.
     assert row["volume"] == pytest.approx(_SPOT_VOLUME, rel=1e-12)
 
 
