@@ -10,12 +10,12 @@ import math
 from fractions import Fraction
 
 import pytest
+
 from ohlc_toolkit.schedules import (
     GeneratorKind,
     RoundingRule,
     metallic_recurrence,
 )
-
 from ohlc_toolkit.temporal import ConfigError, Duration
 
 _MINUTE_SECONDS = 60
