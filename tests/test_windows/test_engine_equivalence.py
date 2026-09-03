@@ -275,11 +275,34 @@ def test_every_tick_over_a_gap_emits_exactly_one_row() -> None:
         assert empty.get_column(column).null_count() == empty.height
 
 
+def test_an_explicit_range_over_an_empty_frame_still_emits_its_grid() -> None:
+    """No candles at all is data, not an error, when the caller stated the range.
+
+    An empty frame is the degenerate end of the same rule the gap case
+    above exercises: the emit grid is total, so every tick in the stated
+    range comes back, null-priced. Only ``skip_warmup`` refuses an empty
+    frame, and it refuses it because nobody asked for empty.
+    """
+    arguments = {
+        "window": "5m",
+        "emit_every": "1m",
+        "materialization": ExplicitRange(start=0, end=300),
+    }
+    empty_frame = frame_from_rows(())
+
+    expected = compute_reference_windows(empty_frame, profile_for(60), **arguments)  # type: ignore[arg-type]
+    result = compute_windows(empty_frame, profile_for(60), **arguments)  # type: ignore[arg-type]
+
+    assert result.get_column("close_time").to_list() == list(range(0, 300, 60))
+    assert result.get_column("src_count").to_list() == [0] * 5
+    assert_frame_equal(result, expected, check_exact=True, check_dtypes=True)
+
+
 # How far apart the two summation orders are allowed to land on real
-# volumes. A few parts in 1e15 is what float rounding actually produces
-# over a few thousand addends; 1e-12 leaves three orders of magnitude of
-# headroom and still fails long before any real aggregation mistake could
-# hide inside it.
+# volumes. A few parts in 1e13 is what float rounding actually produces
+# between a vectorized rolling sum and a fresh left fold over these
+# volumes; 1e-12 leaves an order of magnitude of headroom and still fails
+# long before any real aggregation mistake could hide inside it.
 _VOLUME_RELATIVE_TOLERANCE = 1e-12
 
 # Two representative schedules over the committed 14-day minute slice: one

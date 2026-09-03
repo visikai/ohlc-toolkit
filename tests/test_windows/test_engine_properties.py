@@ -50,9 +50,12 @@ _CADENCE_CHOICES = (1, 5, 60, 300)
 # the order the addition happens in.
 _QUARTER = 0.25
 
-# The oracle costs rows x ticks per example, so both are bounded and the
-# example count is kept well under hypothesis' default.
-_SETTINGS = settings(max_examples=40, deadline=timedelta(seconds=10))
+# The oracle costs rows x ticks per example. Frames stay under two dozen
+# candles so that an example is milliseconds rather than seconds, which
+# buys a higher example count than hypothesis' default instead of a lower
+# one: these suites are looking for a rare disagreement, and rare needs
+# examples.
+_SETTINGS = settings(max_examples=200, deadline=timedelta(seconds=10))
 
 
 @dataclass(frozen=True)
