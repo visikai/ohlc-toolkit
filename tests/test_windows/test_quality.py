@@ -796,6 +796,27 @@ class TestBoundaryConditions:
                 window=_WINDOW,
             )
 
+    def test_a_frame_carrying_only_the_columns_read_is_accepted(self) -> None:
+        """Nothing beyond close_time and coverage_seconds is required.
+
+        A caller who has projected an engine frame down to what this
+        step actually consults is not doing anything wrong, and must not
+        be refused for dropping a column no check reads.
+        """
+        frame = _ramping_coverage_frame().select("close_time", "coverage_seconds")
+        assert "src_count" not in frame.columns
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+            window=_WINDOW,
+        )
+
+        assert result.frame.columns == ["close_time", "coverage_seconds"]
+        assert result.frame.height == result.report.rows_checked - (
+            result.report.offending_count
+        )
+
     def test_a_fractional_coverage_column_is_refused(self) -> None:
         """Coverage must be whole seconds: a float column has no exact verdict."""
         frame = _full_grid_frame().with_columns(

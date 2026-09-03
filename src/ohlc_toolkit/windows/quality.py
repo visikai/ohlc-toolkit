@@ -4,9 +4,9 @@ This module is not part of the engine or the oracle: it consumes their
 nine-column output (:mod:`ohlc_toolkit.windows.engine`,
 :mod:`ohlc_toolkit.windows.reference`) as an independent, later step, and
 never feeds back into either. It reads exactly two of those nine columns
--- ``src_count`` and ``coverage_seconds`` -- plus ``close_time`` for
-naming an offending row in a message. It never reads or alters ``open``,
-``high``, ``low``, ``close``, or ``volume``.
+-- ``coverage_seconds``, and ``close_time`` for naming an offending row.
+It never reads or alters ``open``, ``high``, ``low``, ``close``,
+``volume``, ``open_time``, or ``src_count``.
 
 A :class:`WindowQualityPolicy` is a frozen, JSON-round-trippable identity
 -- a recipe can record it the same way it records a schedule -- and
@@ -113,11 +113,19 @@ from ohlc_toolkit.temporal import ConfigError, CoverageError, Duration, coerce_d
 
 logger = get_logger(__name__)
 
-# The only columns this step is permitted to read. Requiring them up
-# front, rather than letting a missing column surface later as a bare
-# polars ColumnNotFoundError, keeps the failure at this module's own
-# boundary and in this module's own words.
-_REQUIRED_COLUMNS = ("close_time", "src_count", "coverage_seconds")
+# The only columns this step reads, and therefore the only ones it
+# requires. Requiring them up front, rather than letting a missing
+# column surface later as a bare polars ColumnNotFoundError, keeps the
+# failure at this module's own boundary and in this module's own words.
+#
+# `src_count` is deliberately not among them. It was required and never
+# read: a requirement that refuses a frame for lacking something no
+# check consults buys no safety, and would refuse a projection carrying
+# exactly the two columns this step does consult. It is also redundant
+# with what is here -- an engine window's coverage is its source count
+# times the cadence -- and this step has no cadence with which to read
+# it back the other way, so there is nothing it could add to a report.
+_REQUIRED_COLUMNS = ("close_time", "coverage_seconds")
 
 
 @unique
@@ -420,9 +428,9 @@ def _require_quality_columns(frame: pl.DataFrame) -> None:
     question.
 
     Raises:
-        ConfigError: If ``close_time``, ``src_count``, or
-            ``coverage_seconds`` is absent from ``frame``, or if
-            ``coverage_seconds`` is not an integer column.
+        ConfigError: If ``close_time`` or ``coverage_seconds`` is absent
+            from ``frame``, or if ``coverage_seconds`` is not an integer
+            column.
 
     """
     missing = [name for name in _REQUIRED_COLUMNS if name not in frame.columns]
@@ -560,7 +568,7 @@ def apply_quality_policy(
     Args:
         frame: A window frame such as
             :func:`~ohlc_toolkit.windows.engine.compute_windows` produces,
-            carrying at least ``close_time``, ``src_count``, and
+            carrying at least ``close_time`` and an integer
             ``coverage_seconds``.
         policy: The policy identity to apply.
         window: The window duration ``W`` the frame was aggregated over,
