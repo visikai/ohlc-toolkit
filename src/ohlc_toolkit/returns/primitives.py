@@ -55,20 +55,29 @@ values agree bit for bit.
 The two formulas
 ----------------
 
-:attr:`ReturnMethod.SIMPLE` is ``numerator / denominator - 1`` and
-:attr:`ReturnMethod.LOG` is ``ln(numerator / denominator)``, over the
-pair ``(close(t), close(t - H))`` looking back and ``(close(t + H),
-close(t))`` looking forward. Neither is a default: ``method`` is a
-required argument, because a column of numbers whose formula has to be
-guessed from its magnitude is worse than no column. The name of the
-column records the choice too, so the formula survives being written to
-disk and read back by somebody else.
+:attr:`ReturnMethod.SIMPLE` is ``(numerator - denominator) /
+denominator`` and :attr:`ReturnMethod.LOG` is ``log1p`` of that same
+quotient -- the log return is literally the ``log1p`` of the simple
+return -- over the pair ``(close(t), close(t - H))`` looking back and
+``(close(t + H), close(t))`` looking forward. Neither is a default:
+``method`` is a required argument, because a column of numbers whose
+formula has to be guessed from its magnitude is worse than no column.
+The name of the column records the choice too, so the formula survives
+being written to disk and read back by somebody else.
 
-The log return is taken of the ratio rather than as a difference of two
-logarithms. ``ln(a) - ln(b)`` subtracts two numbers that are nearly equal
-whenever the price barely moved, which is most of the time, and loses
-most of its significant digits doing so; the ratio of two nearby doubles
-is computed to within half an ulp and stays that way through ``ln``.
+The spelling matters most where returns are smallest, which is most of
+the time. Two closes one cadence apart are usually nearly equal, so
+their difference is EXACT (the subtraction of two doubles within a
+factor of two of each other is itself a double), and the quotient then
+carries about half an ulp. Every spelling that rounds the RATIO first --
+``a / b - 1``, ``ln(a / b)``, or ``ln(a) - ln(b)`` -- parks a half-ulp
+of error next to ``1``, and for a return of size ``x`` the subtraction
+or the logarithm amplifies that error by ``1 / x``: about six
+significant digits gone at ``x`` near ``1e-6``, measured at roughly
+``1.7e-11`` relative error against a 60-digit reference where
+``log1p((a - b) / b)`` measures near ``1e-17``. The tests pin the
+emitted value to within ``1e-15`` of such a reference, which only the
+difference-quotient spelling achieves.
 
 Every emitted value is a finite float or null
 ---------------------------------------------
@@ -88,14 +97,16 @@ list of special cases to keep in step:
 
 - a zero denominator: ``x / 0`` is ``+/-inf`` and ``0 / 0`` is ``NaN``;
 - a null close on either side, which polars already propagates as null;
-- a ratio that overflows to infinity, which two closes far enough apart
-  in magnitude will do;
-- a non-positive ratio under ``LOG``: ``ln(0)`` is ``-inf``, and the
-  logarithm of a negative ratio is not real at all, so ``NaN``.
+- a quotient that overflows to infinity, which two closes far enough
+  apart in magnitude will do;
+- a simple return at or below ``-1`` under ``LOG`` -- a non-positive
+  price ratio, stated the other way -- where ``log1p(-1)`` is ``-inf``
+  and anything below it is not real at all, so ``NaN``.
 
 What is NOT nulled is anything the formula produced that happens to be a
 real number. A close that fell to zero has a simple return of exactly
-``-1``. A ratio that underflows to zero has the same. A simple return
+``-1``. A close so dwarfed by its counterpart that the quotient rounds
+to ``-1`` has the same. A simple return
 over a NEGATIVE denominator is finite too, and is reported: this step has
 no opinion about the sign of a price, and forming one belongs upstream in
 :func:`~ohlc_toolkit.source.validation.validate_source_frame`, where a
@@ -143,8 +154,9 @@ class ReturnMethod(Enum):
     reader has to infer.
 
     Attributes:
-        SIMPLE: ``numerator / denominator - 1``.
-        LOG: ``ln(numerator / denominator)``.
+        SIMPLE: ``(numerator - denominator) / denominator``.
+        LOG: ``log1p`` of the simple return -- ``ln`` of the price
+            ratio, computed without rounding the ratio first.
 
     """
 
@@ -311,8 +323,8 @@ def _return_values(
         One ``Float64`` value per row: finite, or null.
 
     """
-    ratio = pl.col(_NUMERATOR) / pl.col(_DENOMINATOR)
-    value = ratio - 1.0 if method is ReturnMethod.SIMPLE else ratio.log()
+    simple = (pl.col(_NUMERATOR) - pl.col(_DENOMINATOR)) / pl.col(_DENOMINATOR)
+    value = simple if method is ReturnMethod.SIMPLE else simple.log1p()
     pair = pl.DataFrame(
         [numerator.rename(_NUMERATOR), denominator.rename(_DENOMINATOR)]
     )
