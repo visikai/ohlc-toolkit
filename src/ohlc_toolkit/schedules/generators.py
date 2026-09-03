@@ -82,6 +82,7 @@ range IS a meaningful statement about a stretch of time.
 """
 
 import math
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
@@ -117,6 +118,12 @@ logger = get_logger(__name__)
 # hangs is worse than one that refuses. One number for every kind, so
 # there is a single answer to "how long can a schedule be".
 MAX_RESOLVED_WINDOWS = 512
+
+# The largest recurrence coefficient whose square is still a float: the
+# recorded identity computes ``(c + sqrt(c**2 + 4)) / 2``, so any larger
+# value would construct an object that later cannot serialize or hash
+# itself. Refused up front, in this module's own words, instead.
+_MAX_COEFFICIENT = math.sqrt(sys.float_info.max)
 
 # The working precision, in significant digits, for the log-spaced
 # ladder. Fifty is far more than any duration needs -- a two-week window
@@ -203,10 +210,14 @@ def _validated_coefficient(value: object) -> float:
     Raises:
         ConfigError: If ``value`` is not an ``int``/``float`` (``bool``
             is refused too, even though it is an ``int`` subtype), is
-            NaN or an infinity, or is not strictly positive. A
-            non-positive coefficient does not name a growing sequence:
-            at zero the recurrence repeats its seeds forever and would
-            never reach any bound.
+            NaN or an infinity, is not strictly positive, or exceeds
+            :data:`_MAX_COEFFICIENT`. A non-positive coefficient does
+            not name a growing sequence: at zero the recurrence repeats
+            its seeds forever and would never reach any bound. Above
+            :data:`_MAX_COEFFICIENT` the limiting ratio's ``c**2``
+            overflows, and a schedule that constructs but cannot state
+            its own identity fails later and in a foreign exception
+            type.
 
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
@@ -220,6 +231,13 @@ def _validated_coefficient(value: object) -> float:
     if value <= 0:
         logger.warning("Rejecting non-positive recurrence coefficient: {}", value)
         raise ConfigError(f"coefficient must be strictly positive, got {value}.")
+    if value > _MAX_COEFFICIENT:
+        logger.warning("Rejecting unsquarable recurrence coefficient: {}", value)
+        raise ConfigError(
+            f"coefficient must be at most {_MAX_COEFFICIENT} (the square root "
+            f"of the largest float), got {value}: the limiting ratio computes "
+            "the coefficient's square, which would overflow."
+        )
     return float(value)
 
 
