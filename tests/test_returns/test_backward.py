@@ -15,6 +15,7 @@ tolerance that covers the last-place freedom two ``ln`` implementations
 have.
 """
 
+import decimal
 import math
 
 import polars as pl
@@ -288,6 +289,54 @@ class TestBackwardLogReturns:
                 1.0 + simple_value, rel=_LOG_TOLERANCE
             )
         assert defined == len(_GAP_FREE_BACKWARD_1M) - 1
+
+
+# Near-one close pairs where a return is smallest and a careless log
+# formula sheds the most digits. The reference for each is
+# ``ln(numerator / denominator)`` computed with 60-significant-digit
+# decimal arithmetic over the EXACT values of the two doubles -- the same
+# numbers the implementation receives -- so the assertion measures the
+# formula, not the fixture.
+_NEAR_ONE_PAIRS = [
+    (100.0, 100.0001),
+    (1.0, 1.0000001),
+    (43210.5, 43210.4999),
+]
+_NEAR_ONE_IDS = ["100_vs_100.0001", "1_vs_1.0000001", "43210.5_vs_43210.4999"]
+
+
+class TestLogReturnPrecision:
+    """The log formula must not lose digits where returns are smallest.
+
+    A log return near zero is the common case -- most closes barely move
+    over one cadence -- and it is exactly where a careless formula loses
+    six or more significant digits: the ratio of two nearby closes lands
+    within half an ulp of 1, and ``ln(1 + x)`` amplifies that half-ulp
+    by ``1 / x``. Holding the emitted value to within ``1e-15`` of a
+    60-digit reference pins the formula itself: ``ln(a) - ln(b)`` and
+    ``ln(a / b)`` both fail this bound by four or more orders of
+    magnitude on the first pair below.
+    """
+
+    @pytest.mark.parametrize(
+        ("numerator", "denominator"), _NEAR_ONE_PAIRS, ids=_NEAR_ONE_IDS
+    )
+    def test_a_tiny_log_return_is_accurate_to_a_60_digit_reference(
+        self, numerator: float, denominator: float
+    ) -> None:
+        """The emitted log return sits within 1e-15 of exact."""
+        frame = return_frame((0, 60), (denominator, numerator))
+        result = add_backward_returns(
+            frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.LOG
+        )
+        got = _values(result, backward_return_column(ReturnMethod.LOG, "1m"))[1]
+        assert got is not None
+
+        with decimal.localcontext() as context:
+            context.prec = 60
+            reference = (decimal.Decimal(numerator) / decimal.Decimal(denominator)).ln()
+            relative_error = abs((decimal.Decimal(got) - reference) / reference)
+        assert relative_error < decimal.Decimal("1e-15")
 
 
 class TestBackwardReturnsAreCausal:
