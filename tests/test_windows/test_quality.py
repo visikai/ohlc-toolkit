@@ -556,6 +556,31 @@ class TestBoundaryConditions:
                 window=_WINDOW,
             )
 
+    def test_a_fractional_coverage_column_is_refused(self) -> None:
+        """Coverage must be whole seconds: a float column has no exact verdict."""
+        frame = _full_grid_frame().with_columns(
+            pl.col("coverage_seconds").cast(pl.Float64)
+        )
+        with pytest.raises(ConfigError, match="coverage_seconds"):
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.5),
+                window=_WINDOW,
+            )
+
+    def test_an_unsigned_coverage_column_is_accepted(self) -> None:
+        """Any integer width will do; the engine's own width is not special."""
+        frame = _full_grid_frame().with_columns(
+            pl.col("coverage_seconds").cast(pl.UInt32)
+        )
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+            window=_WINDOW,
+        )
+        assert isinstance(result, pl.DataFrame)
+        assert result.height == frame.height
+
     def test_window_is_coerced_from_a_string_like_other_public_entry_points(
         self,
     ) -> None:
