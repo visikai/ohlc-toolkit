@@ -19,13 +19,13 @@ import math
 
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
+
 from ohlc_toolkit.returns import (
     ReturnMethod,
     add_backward_returns,
     backward_return_column,
 )
-from polars.testing import assert_frame_equal
-
 from ohlc_toolkit.temporal import ConfigError, Duration
 from tests.test_returns.factories import (
     CADENCE,
@@ -280,6 +280,7 @@ class TestBackwardLogReturns:
                 assert log_value is None
                 continue
             defined += 1
+            assert log_value is not None
             assert log_value == pytest.approx(
                 math.log1p(simple_value), rel=_LOG_TOLERANCE
             )
