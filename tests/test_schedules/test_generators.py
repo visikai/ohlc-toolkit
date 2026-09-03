@@ -14,6 +14,7 @@ import pytest
 from ohlc_toolkit.schedules import (
     GeneratorKind,
     RoundingRule,
+    log_spaced,
     metallic_recurrence,
 )
 from ohlc_toolkit.temporal import ConfigError, Duration
@@ -404,6 +405,177 @@ class TestMetallicRefusals:
             maximum=Duration.parse("2w"),
         )
         assert _minutes(schedule.windows) == list(_PINNED_MINUTES)
+
+
+def _log_points(minimum_seconds: int, maximum_seconds: int, count: int) -> list[float]:
+    """Compute log-spaced points between two bounds, endpoints included.
+
+    Written in ordinary floating point, which is a different route to
+    the same numbers than the generator takes, and enough to check them:
+    the cases below are all far from a rounding boundary, so the two
+    routes cannot disagree after quantization.
+
+    Args:
+        minimum_seconds: The first point, in seconds.
+        maximum_seconds: The last point, in seconds.
+        count: How many points to place, endpoints included.
+
+    Returns:
+        The points, in ascending order, in seconds.
+
+    """
+    span = math.log(maximum_seconds / minimum_seconds)
+    interior = [
+        minimum_seconds * math.exp(span * step / (count - 1))
+        for step in range(1, count - 1)
+    ]
+    return [float(minimum_seconds), *interior, float(maximum_seconds)]
+
+
+def _expected_log_minutes(
+    minimum_minutes: int, maximum_minutes: int, count: int
+) -> list[int]:
+    """Quantize independently computed log-spaced points to whole minutes."""
+    points = _log_points(
+        minimum_minutes * _MINUTE_SECONDS, maximum_minutes * _MINUTE_SECONDS, count
+    )
+    quantized = [
+        _round_nearest_ties_away(Fraction(point), _MINUTE_SECONDS) for point in points
+    ]
+    return [seconds // _MINUTE_SECONDS for seconds in _dedup(quantized)]
+
+
+class TestLogSpaced:
+    """A fixed count of log-spaced durations between two bounds."""
+
+    def test_a_power_of_two_ladder_is_exact(self) -> None:
+        """Eleven points from 1m to 1024m are the powers of two, by hand.
+
+        The ratio between neighbours is 1024 ** (1/10) = 2 exactly, so
+        this case has a closed-form answer that owes nothing to any
+        implementation of logarithms.
+        """
+        schedule = log_spaced(count=11, minimum="1m", maximum="1024m", grain="1m")
+        assert _minutes(schedule.windows) == [2**step for step in range(11)]
+
+    def test_both_endpoints_are_the_bounds_themselves(self) -> None:
+        """The first and last windows are exactly the bounds the caller gave."""
+        schedule = log_spaced(count=7, minimum="5m", maximum="1d", grain="1m")
+        assert schedule.windows[0] == Duration.parse("5m")
+        assert schedule.windows[-1] == Duration.parse("1d")
+
+    def test_matches_independently_computed_points(self) -> None:
+        """A ladder whose points do not land on whole grains still agrees."""
+        schedule = log_spaced(count=5, minimum="1m", maximum="1h", grain="1m")
+        assert _minutes(schedule.windows) == _expected_log_minutes(1, 60, 5)
+
+    def test_the_kind_is_recorded(self) -> None:
+        """A schedule always states which generator produced it."""
+        schedule = log_spaced(count=5, minimum="1m", maximum="1h", grain="1m")
+        assert schedule.spec.kind is GeneratorKind.LOG_SPACED
+
+    def test_the_count_is_recorded(self) -> None:
+        """The count is a parameter of the identity, not just of the call."""
+        count = 5
+        schedule = log_spaced(count=count, minimum="1m", maximum="1h", grain="1m")
+        assert schedule.spec.count == count
+
+    def test_a_two_point_ladder_is_just_the_endpoints(self) -> None:
+        """The smallest legal count places the bounds and nothing between."""
+        schedule = log_spaced(count=2, minimum="1m", maximum="1h", grain="1m")
+        assert _minutes(schedule.windows) == [1, 60]
+
+    def test_points_that_collapse_onto_one_grain_are_deduplicated(self) -> None:
+        """A count too high for the range is not an error, just a shorter list.
+
+        Ten points between 1m and 3m cannot be told apart on a 1m grain:
+        the quantized ladder repeats, and the schedule names each
+        surviving window once.
+        """
+        schedule = log_spaced(count=10, minimum="1m", maximum="3m", grain="1m")
+        assert _minutes(schedule.windows) == _expected_log_minutes(1, 3, 10)
+        assert _minutes(schedule.windows) == [1, 2, 3]
+
+    def test_equal_bounds_resolve_to_a_single_window(self) -> None:
+        """A zero-width range is legal and names one window."""
+        schedule = log_spaced(count=5, minimum="1h", maximum="1h", grain="1m")
+        assert schedule.windows == (Duration.parse("1h"),)
+        assert schedule.spec.limiting_ratio == pytest.approx(1.0, abs=1e-12)
+
+
+class TestLogSpacedRatio:
+    """The spacing a log-spaced ladder implies, recorded with it."""
+
+    def test_the_recorded_ratio_raised_to_the_steps_spans_the_bounds(self) -> None:
+        """The stored ratio is checked by its defining property, not its formula.
+
+        A ladder of ``count`` points has ``count - 1`` steps, so its
+        ratio raised to that power must take the minimum to the maximum.
+        """
+        schedule = log_spaced(count=7, minimum="5m", maximum="1d", grain="1m")
+        spanned = schedule.spec.limiting_ratio**6
+        assert spanned == pytest.approx(86400 / 300, rel=1e-12)
+
+    def test_the_power_of_two_ladder_records_a_ratio_of_two(self) -> None:
+        """The closed-form case has a closed-form ratio."""
+        schedule = log_spaced(count=11, minimum="1m", maximum="1024m", grain="1m")
+        assert schedule.spec.limiting_ratio == pytest.approx(2.0, abs=1e-12)
+
+
+class TestLogSpacedRefusals:
+    """Inputs no log-spaced ladder can be resolved from."""
+
+    @pytest.mark.parametrize("count", [1, 0, -1], ids=["one", "zero", "negative"])
+    def test_a_count_below_two_is_refused(self, count: int) -> None:
+        """With fewer than two points there are no two endpoints to span."""
+        with pytest.raises(ConfigError, match="at least 2"):
+            log_spaced(count=count, minimum="1m", maximum="1h", grain="1m")
+
+    def test_a_boolean_count_is_refused(self) -> None:
+        """``bool`` is an ``int`` subtype in Python, and is refused anyway."""
+        with pytest.raises(ConfigError, match="count"):
+            log_spaced(count=True, minimum="1m", maximum="1h", grain="1m")
+
+    def test_a_non_integer_count_is_refused(self) -> None:
+        """A count of points is a whole number of points."""
+        with pytest.raises(ConfigError, match="count"):
+            log_spaced(
+                count=5.0,  # type: ignore[arg-type]
+                minimum="1m",
+                maximum="1h",
+                grain="1m",
+            )
+
+    def test_a_count_past_the_cap_is_refused(self) -> None:
+        """No schedule may name more windows than the package's one cap."""
+        with pytest.raises(ConfigError, match="512"):
+            log_spaced(count=513, minimum="1m", maximum="2w", grain="1s")
+
+    def test_a_minimum_above_the_maximum_is_refused(self) -> None:
+        """Inverted bounds are refused in the same words as anywhere else."""
+        with pytest.raises(ConfigError, match="minimum"):
+            log_spaced(count=5, minimum="1h", maximum="1m", grain="1m")
+
+    @pytest.mark.parametrize(
+        ("minimum", "maximum", "grain"),
+        [
+            ("0s", "1h", "1m"),
+            ("1m", "0s", "1m"),
+            ("1m", "1h", "0s"),
+        ],
+        ids=["zero_minimum", "zero_maximum", "zero_grain"],
+    )
+    def test_a_zero_duration_is_refused(
+        self, minimum: str, maximum: str, grain: str
+    ) -> None:
+        """Both bounds and the grain are strictly positive durations."""
+        with pytest.raises(ConfigError, match="strictly positive"):
+            log_spaced(count=5, minimum=minimum, maximum=maximum, grain=grain)
+
+    def test_a_point_that_quantizes_to_nothing_is_refused(self) -> None:
+        """A grain coarser than the smallest point would drop it silently."""
+        with pytest.raises(ConfigError, match="0s"):
+            log_spaced(count=5, minimum="20s", maximum="1h", grain="1m")
 
 
 if __name__ == "__main__":
