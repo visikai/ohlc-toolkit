@@ -114,8 +114,10 @@ logger.info(f"Read {len(frame)} rows from {path}")  # Bad
 
 ## DataFrames
 
-Use **pandas**. Do not introduce a second DataFrame library unless a release
-explicitly migrates the public API.
+`main` is the 1.0 development line, and **polars** is the DataFrame
+library for its new API surface. The pandas-only rule applies to the
+frozen 0.4.x line: existing pandas-based public functions stay on
+pandas. Do not introduce a DataFrame library beyond these two.
 
 ## Public API
 
