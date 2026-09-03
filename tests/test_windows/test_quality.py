@@ -9,6 +9,7 @@ the real output shape the policy composes after.
 
 import math
 from collections.abc import Sequence
+from fractions import Fraction
 
 import polars as pl
 import pytest
@@ -34,7 +35,16 @@ from tests.test_windows.factories import SourceRow, frame_from_rows, profile_for
 # cannot express (0.9 * 300 is not a multiple of 60).
 _CADENCE_SECONDS = 10
 _WINDOW = "1m40s"  # 100s = 10 * _CADENCE_SECONDS
+_WINDOW_SECONDS = 100
 _EMIT_EVERY = "10s"
+
+# Every fixture timestamp is offset by this base -- a real-looking Unix
+# second on the 10s grid -- so that a close_time is a ten-digit number
+# that cannot appear as a substring of an offending-row count or of a
+# threshold. A message assertion of the form "the first offender's
+# close_time is named" then means what it says, instead of passing
+# because "0" happens to occur inside "100.0".
+_TIME_BASE = 1_700_000_000
 
 
 def _rows(*open_times: int) -> tuple[SourceRow, ...]:
@@ -45,7 +55,7 @@ def _rows(*open_times: int) -> tuple[SourceRow, ...]:
     row's, which would make an assertion pass for the wrong reason.
     """
     return tuple(
-        (open_time, 100.0 + i, 110.0 + i, 90.0 + i, 105.0 + i, float(i))
+        (_TIME_BASE + open_time, 100.0 + i, 110.0 + i, 90.0 + i, 105.0 + i, float(i))
         for i, open_time in enumerate(open_times)
     )
 
@@ -83,7 +93,7 @@ def _ramping_coverage_frame() -> pl.DataFrame:
         profile,
         window=_WINDOW,
         emit_every=_EMIT_EVERY,
-        materialization=ExplicitRange(start=0, end=310),
+        materialization=ExplicitRange(start=_TIME_BASE, end=_TIME_BASE + 310),
     )
 
 
@@ -99,6 +109,23 @@ def _assert_ohlcv_untouched(before: pl.DataFrame, after: pl.DataFrame) -> None:
             joined.select(pl.col(column)),
             joined.select(pl.col(f"{column}_before").alias(column)),
         )
+
+
+def _quality_frame_from_coverages(coverages: Sequence[int]) -> pl.DataFrame:
+    """Build a minimal frame carrying only the columns this step reads.
+
+    Real engine output always carries the full nine columns, but the
+    filter and gate logic here reads only three of them, so a test that
+    varies coverage alone does not need to fabricate plausible OHLCV
+    values to stay honest about what is under test.
+    """
+    return pl.DataFrame(
+        {
+            "close_time": [_TIME_BASE + i for i in range(len(coverages))],
+            "src_count": [c // 10 for c in coverages],
+            "coverage_seconds": coverages,
+        }
+    ).with_columns(pl.col("coverage_seconds").cast(pl.Int64))
 
 
 class TestWindowQualityPolicyIdentity:
@@ -204,6 +231,30 @@ class TestWindowQualityPolicyIdentity:
         with pytest.raises(ConfigError):
             WindowQualityPolicy.from_dict(
                 {"mode": "filter", "min_coverage": 1.5, "gate_mode": "strict"}
+            )
+
+    @pytest.mark.parametrize(
+        "min_coverage",
+        ["0.5", None, [0.5]],
+        ids=["numeric_string", "none", "list"],
+    )
+    def test_from_dict_rejects_a_non_numeric_threshold(
+        self, min_coverage: object
+    ) -> None:
+        """A non-numeric min_coverage is refused, never coerced.
+
+        A stored ``"0.5"`` is the realistic shape of this mistake -- JSON
+        that went through a stringly-typed layer -- and quietly calling
+        ``float()`` on it would let a policy identity round-trip into
+        something the constructor itself would have rejected.
+        """
+        with pytest.raises(ConfigError, match="min_coverage"):
+            WindowQualityPolicy.from_dict(
+                {
+                    "mode": "filter",
+                    "min_coverage": min_coverage,
+                    "gate_mode": "strict",
+                }
             )
 
 
@@ -528,26 +579,112 @@ class TestBoundaryConditions:
             )
 
 
+# (min_coverage, window_seconds, exact threshold) triples where the
+# IEEE-754 product ``min_coverage * window_seconds`` lands a hair ABOVE
+# the threshold the decimal literal names -- 0.55 * 180 evaluates to
+# 99.00000000000001, not 99 -- so a row sitting exactly on the intended
+# threshold is dropped by a float comparison. Every such pair errs in
+# this one direction: a float product is never too loose, only too
+# strict.
+_FLOAT_PRODUCT_OVERSHOOTS = [
+    (0.55, 180, 99),
+    (0.56, 100, 56),
+    (0.17, 300, 51),
+]
+
+
+class TestExactThreshold:
+    """The threshold is the one the decimal literal names, not a float product."""
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold_seconds"),
+        _FLOAT_PRODUCT_OVERSHOOTS,
+        ids=["0.55_of_180s", "0.56_of_100s", "0.17_of_300s"],
+    )
+    def test_the_chosen_pairs_really_do_overshoot_in_float(
+        self, min_coverage: float, window_seconds: int, threshold_seconds: int
+    ) -> None:
+        """Guard the fixtures themselves: each pair must actually drift.
+
+        If a future Python or platform ever made these products exact,
+        the regression tests below would still pass while no longer
+        testing anything, so the drift is asserted explicitly here.
+        """
+        assert Fraction(str(min_coverage)) * window_seconds == threshold_seconds
+        assert min_coverage * window_seconds > threshold_seconds
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold_seconds"),
+        _FLOAT_PRODUCT_OVERSHOOTS,
+        ids=["0.55_of_180s", "0.56_of_100s", "0.17_of_300s"],
+    )
+    def test_filter_keeps_a_row_sitting_exactly_on_the_threshold(
+        self, min_coverage: float, window_seconds: int, threshold_seconds: int
+    ) -> None:
+        """A row at exactly ``min_coverage`` of the window survives FILTER."""
+        frame = _quality_frame_from_coverages(
+            [threshold_seconds - 1, threshold_seconds, window_seconds]
+        )
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=min_coverage),
+            window=f"{window_seconds}s",
+        )
+
+        assert isinstance(result, pl.DataFrame)
+        assert result.get_column("coverage_seconds").to_list() == [
+            threshold_seconds,
+            window_seconds,
+        ]
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold_seconds"),
+        _FLOAT_PRODUCT_OVERSHOOTS,
+        ids=["0.55_of_180s", "0.56_of_100s", "0.17_of_300s"],
+    )
+    def test_a_row_sitting_exactly_on_the_threshold_passes_the_strict_gate(
+        self, min_coverage: float, window_seconds: int, threshold_seconds: int
+    ) -> None:
+        """A row at exactly ``min_coverage`` of the window is not a violation."""
+        frame = _quality_frame_from_coverages([threshold_seconds, window_seconds])
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(
+                mode=QualityMode.GATE,
+                min_coverage=min_coverage,
+                gate_mode=GateMode.STRICT,
+            ),
+            window=f"{window_seconds}s",
+        )
+
+        assert isinstance(result, pl.DataFrame)
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold_seconds"),
+        _FLOAT_PRODUCT_OVERSHOOTS,
+        ids=["0.55_of_180s", "0.56_of_100s", "0.17_of_300s"],
+    )
+    def test_the_row_one_second_short_is_still_a_violation(
+        self, min_coverage: float, window_seconds: int, threshold_seconds: int
+    ) -> None:
+        """Exactness must not loosen the gate: one second short still fails."""
+        frame = _quality_frame_from_coverages([threshold_seconds - 1])
+
+        with pytest.raises(CoverageError):
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(
+                    mode=QualityMode.GATE,
+                    min_coverage=min_coverage,
+                    gate_mode=GateMode.STRICT,
+                ),
+                window=f"{window_seconds}s",
+            )
+
+
 # --- Property-based: filter keeps exactly the rows meeting the threshold ---
-
-
-def _quality_frame_from_coverages(
-    coverages: Sequence[int], window_seconds: int
-) -> pl.DataFrame:
-    """Build a minimal frame carrying only the columns this step reads.
-
-    Real engine output always carries the full nine columns, but the
-    filter and gate logic here reads only three of them, so a property
-    test that varies coverage alone does not need to fabricate plausible
-    OHLCV values to stay honest about what is under test.
-    """
-    return pl.DataFrame(
-        {
-            "close_time": list(range(len(coverages))),
-            "src_count": [c // 10 for c in coverages],
-            "coverage_seconds": coverages,
-        }
-    ).with_columns(pl.col("coverage_seconds").cast(pl.Int64))
 
 
 @settings(max_examples=200)
@@ -562,10 +699,19 @@ def _quality_frame_from_coverages(
 def test_filter_keeps_exactly_the_rows_meeting_the_threshold(
     coverages: list[int], min_coverage: float
 ) -> None:
-    """For any frame and fraction, FILTER's kept rows are exactly the >= ones."""
+    """For any frame and fraction, FILTER's kept rows are exactly the >= ones.
+
+    The oracle deliberately does NOT reuse the implementation's
+    expression. It reads ``min_coverage`` by its decimal intent -- the
+    number the caller wrote -- and multiplies it by the window as an
+    exact rational, so the expected set is the mathematically correct one
+    rather than whatever a double-precision product happens to land on.
+    An oracle written as ``min_coverage * window_seconds`` would confirm
+    the implementation instead of checking it.
+    """
     window_seconds = 300
-    frame = _quality_frame_from_coverages(coverages, window_seconds)
-    threshold = min_coverage * window_seconds
+    frame = _quality_frame_from_coverages(coverages)
+    threshold = Fraction(str(min_coverage)) * window_seconds
 
     result = apply_quality_policy(
         frame,
