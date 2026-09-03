@@ -13,6 +13,7 @@ from fractions import Fraction
 import pytest
 
 from ohlc_toolkit.schedules import (
+    MAX_RESOLVED_WINDOWS,
     ExplicitSpec,
     GeneratorKind,
     LogSpacedSpec,
@@ -38,6 +39,14 @@ _COEFFICIENT = math.sqrt(math.e + math.sqrt(5))
 # rather than check it. ``_real_terms`` below re-derives the same list
 # from exact rationals, and the first test asserts the two agree.
 _PINNED_MINUTES = (1, 3, 8, 21, 56, 146, 380, 993, 2590, 6758, 17632)
+
+# The seven-decimal drift fixture: c = 1.0000001 from a 1m seed on a 1s
+# grain reaches 2w in exactly this many windows, and the second-to-last
+# window is the first place a coefficient rounded to six decimals (that
+# is, to 1.0) lands on a different whole second (656760 instead of
+# 656761). Both numbers re-derived below from exact rationals before use.
+_SEVEN_DECIMAL_WINDOW_COUNT = 21
+_SEVEN_DECIMAL_PENULTIMATE_SECONDS = 656_761
 
 
 def _real_terms(
@@ -168,6 +177,67 @@ class TestMetallicRecurrence:
         windows = _pinned_schedule_windows()
         assert len(terms) == len(windows) + 1
         assert windows[-1] == Duration.parse("17632m")
+
+    def test_a_term_landing_exactly_on_the_maximum_is_kept(self) -> None:
+        """The bound is inclusive: a term equal to the maximum is within it.
+
+        With a coefficient of one, a 1m seed and a 2m maximum, the third
+        real term is exactly 120s -- exactly the maximum. The recurrence
+        must keep it (the bound reads "at most", not "below") and stop
+        at the term after it.
+        """
+        schedule = metallic_recurrence(
+            coefficient=1, seed="1m", grain="1m", maximum="2m"
+        )
+        assert [str(window) for window in schedule.windows] == ["1m", "2m"]
+
+    def test_the_term_past_the_cap_is_the_one_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cap admits exactly its own number of terms, then refuses.
+
+        At the real cap of 512 an integer-second maximum cannot land
+        between two consecutive terms of any recurrence slow enough to
+        need that many, so the boundary is pinned with the cap lowered
+        to six. A coefficient-one recurrence from a 1m seed needs a
+        seventh term to reach 13m: refused. The same recurrence bounded
+        at 8m needs exactly six terms: accepted.
+        """
+        monkeypatch.setattr("ohlc_toolkit.schedules.generators.MAX_RESOLVED_WINDOWS", 6)
+        with pytest.raises(ConfigError, match="terms"):
+            metallic_recurrence(coefficient=1, seed="1m", grain="1m", maximum="13m")
+
+        schedule = metallic_recurrence(
+            coefficient=1, seed="1m", grain="1m", maximum="8m"
+        )
+        assert [str(window) for window in schedule.windows] == [
+            "1m",
+            "2m",
+            "3m",
+            "5m",
+            "8m",
+        ]
+
+    def test_a_seven_decimal_coefficient_resolves_by_its_full_value(self) -> None:
+        """No hidden rounding of the coefficient survives into the schedule.
+
+        With c = 1.0000001 from a 1m seed on a 1s grain bounded by 2w,
+        the drift a slow recurrence accumulates from the seventh decimal
+        reaches a whole second by the twentieth term: the full value
+        yields 656761s where a coefficient rounded to six decimals
+        yields 656760s. The expected list is re-derived from exact
+        rationals, so the pin is on the arithmetic, not the generator.
+        """
+        coefficient = 1.0000001
+        terms = _real_terms(coefficient, _MINUTE_SECONDS, _TWO_WEEKS_SECONDS)
+        expected = _dedup([_round_nearest_ties_away(term, 1) for term in terms])
+        assert len(expected) == _SEVEN_DECIMAL_WINDOW_COUNT
+        assert expected[-2] == _SEVEN_DECIMAL_PENULTIMATE_SECONDS
+
+        schedule = metallic_recurrence(
+            coefficient=coefficient, seed="1m", grain="1s", maximum="2w"
+        )
+        assert [window.total_seconds for window in schedule.windows] == expected
 
     def test_a_value_that_rounds_past_the_maximum_is_dropped(self) -> None:
         """Rounding must never carry a window over the bound the caller set.
@@ -599,6 +669,16 @@ class TestLogSpacedRefusals:
         with pytest.raises(ConfigError, match="512"):
             log_spaced(count=513, minimum="1m", maximum="2w", grain="1s")
 
+    def test_a_count_of_exactly_the_cap_is_accepted(self) -> None:
+        """The cap is inclusive: exactly 512 points is a valid ladder.
+
+        Together with the refusal above, this pins which side of the
+        boundary the cap sits on; without it, an off-by-one that refused
+        512 as well would go unnoticed.
+        """
+        schedule = log_spaced(count=512, minimum="1s", maximum="2w", grain="1s")
+        assert 0 < len(schedule.windows) <= MAX_RESOLVED_WINDOWS
+
     def test_a_minimum_above_the_maximum_is_refused(self) -> None:
         """Inverted bounds are refused in the same words as anywhere else."""
         with pytest.raises(ConfigError, match="minimum"):
@@ -672,6 +752,15 @@ class TestExplicit:
         """The empty schedule is refused here for the same reason as anywhere."""
         with pytest.raises(ConfigError, match="no windows"):
             explicit([])
+
+    def test_a_list_of_exactly_the_cap_is_accepted(self) -> None:
+        """The cap is inclusive: exactly 512 windows is a valid schedule.
+
+        The refusal tests pin that 513 is too many; this pins that the
+        boundary itself is on the accepted side.
+        """
+        schedule = explicit([f"{i}s" for i in range(1, MAX_RESOLVED_WINDOWS + 1)])
+        assert len(schedule.windows) == MAX_RESOLVED_WINDOWS
 
     def test_a_repeated_window_is_refused(self) -> None:
         """A caller-supplied list is not silently deduplicated.
