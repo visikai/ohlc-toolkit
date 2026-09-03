@@ -231,19 +231,19 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
 
     The output has exactly nine columns, in this order:
 
-    ==================  =======  ==================================
-    Column              Dtype    Value
-    ==================  =======  ==================================
-    ``open_time``       Int64    ``t - W``
-    ``close_time``      Int64    ``t``, the emit time; sorted ascending
-    ``open``            Float64  ``open`` of the earliest included candle
-    ``high``            Float64  Maximum included ``high``
-    ``low``             Float64  Minimum included ``low``
-    ``close``           Float64  ``close`` of the latest included candle
-    ``volume``          Float64  Sum of included ``volume``
-    ``src_count``       UInt32   Number of included candles
-    ``coverage_seconds`` Int64   Sum of included candle durations
-    ==================  =======  ==================================
+    - ``open_time`` (Int64): ``t - W``.
+    - ``close_time`` (Int64): ``t``, the emit time. This is the canonical
+      sort key, and rows come back ascending by it.
+    - ``open`` (Float64): the ``open`` of the earliest included candle,
+      by ``open_time``.
+    - ``high`` (Float64): the greatest included ``high``.
+    - ``low`` (Float64): the smallest included ``low``.
+    - ``close`` (Float64): the ``close`` of the latest included candle,
+      by ``open_time``.
+    - ``volume`` (Float64): the sum of the included ``volume``.
+    - ``src_count`` (UInt32): how many candles were included.
+    - ``coverage_seconds`` (Int64): the sum, over the included candles,
+      of ``close_time - open_time``.
 
     A tick that includes no candle still emits its row: all five
     price/volume columns are null, ``src_count`` is 0, and
