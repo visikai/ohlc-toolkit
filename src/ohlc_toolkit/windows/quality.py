@@ -21,11 +21,11 @@ one against a frame:
   row order is otherwise preserved, and no OHLCV value is touched.
 - ``GATE`` checks the same threshold without dropping anything. In
   ``GateMode.STRICT`` a violation logs and raises
-  :class:`~ohlc_toolkit.temporal.errors.CoverageError`; in
-  ``GateMode.REPORT`` it always returns a :class:`QualityReport` and never
-  raises. This mirrors the strict/report split in
-  :mod:`ohlc_toolkit.source.validation`, applied to windows instead of a
-  raw source frame.
+  :class:`WindowCoverageError`, which carries the whole
+  :class:`QualityReport`; in ``GateMode.REPORT`` it always returns a
+  :class:`QualityReport` and never raises. This mirrors the strict/report
+  split in :mod:`ohlc_toolkit.source.validation`, applied to windows
+  instead of a raw source frame.
 
 Threshold rounding
 -------------------
@@ -137,8 +137,9 @@ class GateMode(Enum):
     frame.
 
     Attributes:
-        STRICT: Raise :class:`~ohlc_toolkit.temporal.errors.CoverageError`
-            when any row falls below the threshold.
+        STRICT: Raise :class:`WindowCoverageError` -- a
+            :class:`~ohlc_toolkit.temporal.errors.CoverageError` carrying
+            the report -- when any row falls below the threshold.
         REPORT: Never raise; always return the findings as a
             :class:`QualityReport`.
 
@@ -308,8 +309,11 @@ class QualityReport:
             It compares directly against ``int`` and ``float``.
         offending_count: How many rows fell below ``threshold_seconds``.
         first_offending_close_time: The ``close_time`` of the first
-            offending row, in frame order. ``None`` when nothing
-            offended, including over an empty frame.
+            offending row, in ROW order -- the frame is never sorted and
+            no sortedness is assumed, so on an out-of-order frame this
+            need not be the offender with the smallest ``close_time``.
+            ``None`` when nothing offended, including over an empty
+            frame.
 
     """
 
@@ -322,6 +326,37 @@ class QualityReport:
     def passed(self) -> bool:
         """Report whether every row met the coverage threshold."""
         return self.offending_count == 0
+
+
+class WindowCoverageError(CoverageError):
+    """A window frame failed a strict :attr:`QualityMode.GATE` policy.
+
+    Carries the full :class:`QualityReport` as a typed attribute rather
+    than as a dynamically-set one, so callers can read the offending
+    count, the exact threshold, and the first offending ``close_time``
+    directly, with no message parsing, no runtime attribute check, and no
+    ``type: ignore`` required. Mirrors
+    :class:`~ohlc_toolkit.source.validation.SourceValidationError`, which
+    does the same for a raw source frame.
+
+    Subclasses :class:`~ohlc_toolkit.temporal.errors.CoverageError`, so
+    code that catches the taxonomy's base class keeps working.
+
+    Attributes:
+        report: The quality report that triggered this error.
+
+    """
+
+    def __init__(self, message: str, report: QualityReport) -> None:
+        """Store the message and the report that produced it.
+
+        Args:
+            message: A short, human-readable summary of the failure.
+            report: The full quality report for the evaluated frame.
+
+        """
+        super().__init__(message)
+        self.report = report
 
 
 def _require_quality_columns(frame: pl.DataFrame) -> None:
@@ -457,14 +492,21 @@ def apply_quality_policy(
         :class:`QualityReport`, always.
 
     Raises:
-        ConfigError: If ``frame`` is missing a required column, or if
+        ConfigError: If ``frame`` is missing a required column, if
+            ``coverage_seconds`` is not an integer column, or if
             ``window`` cannot be coerced to a
             :class:`~ohlc_toolkit.temporal.Duration`.
-        CoverageError: For :attr:`QualityMode.GATE` in
+        WindowCoverageError: For :attr:`QualityMode.GATE` in
             :attr:`GateMode.STRICT`, when any row falls below the
-            threshold. The message names the first offending row's
-            ``close_time`` and a bounded summary: the offending-row count
-            and the threshold.
+            threshold. A :class:`~ohlc_toolkit.temporal.errors.CoverageError`
+            carrying the whole :class:`QualityReport` as ``.report``. Its
+            message repeats a bounded summary of that report: the
+            offending-row count, the whole-second minimum, and the FIRST
+            OFFENDING row's ``close_time``. "First" means first in ROW
+            order. This function states no sortedness precondition and
+            never sorts, so on a frame whose rows are not in time order
+            the row it names need not be the offender with the smallest
+            ``close_time``.
 
     """
     _require_quality_columns(frame)
@@ -510,11 +552,12 @@ def apply_quality_policy(
             minimum_seconds,
             report.first_offending_close_time,
         )
-        raise CoverageError(
+        raise WindowCoverageError(
             f"Window quality gate failed: {report.offending_count}/"
             f"{report.rows_checked} row(s) have coverage_seconds below the "
             f"required minimum of {minimum_seconds}s; first offending "
-            f"close_time={report.first_offending_close_time}."
+            f"close_time={report.first_offending_close_time}.",
+            report,
         )
 
     logger.debug(

@@ -26,6 +26,7 @@ from ohlc_toolkit.windows.quality import (
     GateMode,
     QualityMode,
     QualityReport,
+    WindowCoverageError,
     WindowQualityPolicy,
     apply_quality_policy,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "MaterializationRule",
     "QualityMode",
     "QualityReport",
+    "WindowCoverageError",
     "WindowQualityPolicy",
     "apply_quality_policy",
     "compute_reference_windows",
