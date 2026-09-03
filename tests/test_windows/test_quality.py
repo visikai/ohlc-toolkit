@@ -17,12 +17,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from polars.testing import assert_frame_equal
 
+from ohlc_toolkit import windows as windows_namespace
 from ohlc_toolkit.temporal import ConfigError, CoverageError
 from ohlc_toolkit.windows import ExplicitRange, compute_windows
 from ohlc_toolkit.windows.quality import (
     GateMode,
     QualityMode,
     QualityReport,
+    WindowCoverageError,
     WindowQualityPolicy,
     apply_quality_policy,
 )
@@ -440,14 +442,51 @@ class TestGateStrict:
         assert isinstance(result, pl.DataFrame)
         assert_frame_equal(result, frame, check_exact=True)
 
-    def test_a_violation_raises_coverage_error_naming_the_first_offender(self) -> None:
-        """Strict mode raises, naming the first offending close_time."""
+    def test_a_violation_raises_an_error_carrying_the_whole_report(self) -> None:
+        """Strict mode attaches the findings, so no caller has to parse a message."""
         frame = _ramping_coverage_frame()
-        offenders = frame.filter(pl.col("coverage_seconds") < 100)  # noqa: PLR2004
+        offenders = frame.filter(pl.col("coverage_seconds") < _WINDOW_SECONDS)
         assert offenders.height > 0, "scenario must include a violation"
+
+        with pytest.raises(WindowCoverageError) as caught:
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
+                window=_WINDOW,
+            )
+
+        report = caught.value.report
+        assert report.passed is False
+        assert report.rows_checked == frame.height
+        assert report.offending_count == offenders.height
+        assert report.threshold_seconds == _WINDOW_SECONDS
+        assert (
+            report.first_offending_close_time == offenders.get_column("close_time")[0]
+        )
+
+    def test_the_raised_error_is_still_a_coverage_error(self) -> None:
+        """The taxonomy's promise holds: callers may keep catching the base."""
+        frame = _ramping_coverage_frame()
+        with pytest.raises(CoverageError) as caught:
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
+                window=_WINDOW,
+            )
+        assert isinstance(caught.value, WindowCoverageError)
+
+    def test_the_message_names_the_real_first_offending_close_time(self) -> None:
+        """The summary in the message describes the row the report points at.
+
+        The fixture's close_times are ten-digit Unix seconds, so this
+        substring check cannot pass by colliding with a count or a
+        threshold elsewhere in the message.
+        """
+        frame = _ramping_coverage_frame()
+        offenders = frame.filter(pl.col("coverage_seconds") < _WINDOW_SECONDS)
         first_offending_close_time = offenders.get_column("close_time")[0]
 
-        with pytest.raises(CoverageError) as caught:
+        with pytest.raises(WindowCoverageError) as caught:
             apply_quality_policy(
                 frame,
                 WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
@@ -456,8 +495,37 @@ class TestGateStrict:
 
         message = str(caught.value)
         assert str(first_offending_close_time) in message
-        assert str(offenders.height) in message  # bounded summary: offending count
-        assert "100" in message  # bounded summary: threshold
+        assert str(caught.value.report.first_offending_close_time) in message
+
+    def test_first_offending_means_first_in_row_order(self) -> None:
+        """No sortedness is assumed: "first" is the first offending ROW.
+
+        The frame below is deliberately out of time order, and its first
+        offending row is not the offender with the smallest close_time,
+        so an implementation that sorted or took a minimum would be
+        caught here.
+        """
+        frame = pl.DataFrame(
+            {
+                "close_time": [_TIME_BASE + 300, _TIME_BASE + 100, _TIME_BASE + 200],
+                "src_count": [6, 3, 10],
+                "coverage_seconds": [60, 30, 100],
+            }
+        ).with_columns(pl.col("coverage_seconds").cast(pl.Int64))
+
+        with pytest.raises(WindowCoverageError) as caught:
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
+                window=_WINDOW,
+            )
+
+        assert caught.value.report.first_offending_close_time == _TIME_BASE + 300
+
+    def test_the_error_is_exported_from_the_windows_namespace(self) -> None:
+        """Callers reach the error the same way they reach the policy."""
+        assert windows_namespace.WindowCoverageError is WindowCoverageError
+        assert "WindowCoverageError" in windows_namespace.__all__
 
     def test_does_not_mutate_the_input_even_when_raising(self) -> None:
         """A raised gate never leaves the input frame touched."""
