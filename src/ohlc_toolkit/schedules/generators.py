@@ -14,10 +14,14 @@ quantized ONCE, at the end. Rounding each term before feeding it back
 into the recurrence is a different sequence, not a rounder rendering of
 the same one: the rounding error is multiplied by the coefficient at
 every step and compounds. With ``coefficient = sqrt(e + sqrt(5))``, a
-1m seed and a 1m grain, the two readings part company at the fifth term
-(55.888... minutes rounds to 56m, while the per-step reading has
-already drifted to 55m) and end 2909 minutes apart at the two-week
-bound.
+1m seed and a 1m grain, the two readings part company at the fifth
+window (55.888... minutes rounds to 56m, while the per-step reading has
+already drifted to 55m) and finish 349 minutes apart at the two-week
+bound. Truncating each term instead of rounding it drifts further
+still, ending at 14723m against this module's 17632m -- which is why
+that older sequence is kept as a named registration in
+:mod:`ohlc_toolkit.schedules.registry` rather than reproduced by any
+parameters here.
 
 "Real" here means exact rationals, not floats.
 :class:`~fractions.Fraction` holds a float coefficient's exact value, so
@@ -840,8 +844,10 @@ def _resolve_windows(
 ) -> tuple[Duration, ...]:
     """Quantize, bound, and deduplicate a generator's real-valued output.
 
-    The single place every kind's resolved list is produced, so the
+    The single place a generated list is resolved, so the
     quantize/bound/dedup rules cannot drift apart between generators.
+    The explicit kind does not pass through here: it has no real-valued
+    output to quantize, only a list to check.
 
     Args:
         values: The generated durations in seconds, exact and unrounded.
