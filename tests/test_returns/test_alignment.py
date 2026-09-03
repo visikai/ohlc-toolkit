@@ -458,15 +458,34 @@ class TestHorizonsThatLeaveTheInt64Range:
     def test_a_horizon_too_large_to_be_a_close_time_at_all_is_refused(
         self, entry_point: AddReturns
     ) -> None:
-        """A horizon polars cannot hold turns every key null, and every value with it.
+        """A horizon polars cannot hold is refused in this module's words.
 
-        Passed as a literal larger than Int64, polars produces a null
-        column rather than raising, so an unrefused horizon of this size
-        would report a frame of nulls indistinguishable from a frame with
-        no counterparts anywhere.
+        Unrefused, a shift by more than Int64 raises a bare
+        ``OverflowError`` from inside polars about a C type -- a foreign
+        exception far from the input that caused it. The refusal keeps
+        the failure at this boundary.
         """
         with pytest.raises(ConfigError, match="Int64 range"):
             _add(entry_point, gap_free_frame(), horizon="99999999999999999w")
+
+    @pytest.mark.parametrize("entry_point", _ENTRY_POINTS, ids=_ENTRY_POINT_IDS)
+    def test_an_unrepresentable_horizon_is_refused_even_on_an_empty_frame(
+        self, entry_point: AddReturns
+    ) -> None:
+        """The horizon's own bound does not depend on the frame's contents.
+
+        An empty frame has no extremes to shift, so only the horizon
+        literal's own check stands between this configuration and the
+        arithmetic; it must hold on its own.
+        """
+        empty = pl.DataFrame(
+            [
+                pl.Series("close_time", [], dtype=pl.Int64),
+                pl.Series("close", [], dtype=pl.Float64),
+            ]
+        )
+        with pytest.raises(ConfigError, match="Int64 range"):
+            _add(entry_point, empty, horizon="99999999999999999w")
 
     @pytest.mark.parametrize("entry_point", _ENTRY_POINTS, ids=_ENTRY_POINT_IDS)
     def test_a_large_but_representable_horizon_is_accepted(

@@ -58,9 +58,11 @@ wraps Int64 arithmetic silently rather than raising: adding 100 to a
 close time near the top of the range yields a large NEGATIVE one. A
 wrapped key does not merely fail to match, it can match some other row,
 pairing a close with a counterpart nobody asked for. A horizon too large
-to hold as an Int64 literal at all is worse: polars turns it into a null,
-so every key becomes null and the whole column comes back null,
-indistinguishable from a frame with no counterparts anywhere.
+to hold as an Int64 at all fails differently: on the Series arithmetic
+this module performs, polars raises a bare ``OverflowError`` ("Python
+int too large to convert to C long") -- a foreign exception, at shift
+time, about a C type. The guard below refuses both cases up front, in
+this package's own words, before any arithmetic is attempted.
 
 So the shift is checked against the Int64 range before it is performed,
 using the frame's own smallest and largest close times and exact Python
@@ -108,8 +110,10 @@ _INT64_MAX = 2**63 - 1
 
 # Rejected input is echoed into logs and error messages; cap how much, so
 # one pathological dtype -- a struct with a thousand fields renders as a
-# thousand field names -- cannot produce an unbounded log line.
-_MAX_ECHOED_CHARS = 60
+# thousand field names -- cannot produce an unbounded log line. Eighty
+# characters, matching the cap every other bounded echo in this package
+# uses.
+_MAX_ECHOED_CHARS = 80
 
 # Column names used only inside the counterpart join, never returned.
 _COUNTERPART_KEY = "__counterpart_close_time"
