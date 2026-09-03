@@ -864,6 +864,26 @@ class TestBoundaryConditions:
                 window="not-a-duration",
             )
 
+    def test_a_zero_window_is_refused(self) -> None:
+        """A zero-length window must not quietly disarm the gate.
+
+        Every threshold of a 0s window is 0, which every row meets, so
+        accepting ``window="0s"`` turns a full-coverage strict gate into
+        a pass-all. The sibling engine already refuses a zero window at
+        its boundary; this entry point must refuse it in the same words.
+        """
+        frame = _quality_frame_from_coverages([0, 0])
+        with pytest.raises(ConfigError, match="strictly positive"):
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(
+                    mode=QualityMode.GATE,
+                    min_coverage=1.0,
+                    gate_mode=GateMode.STRICT,
+                ),
+                window="0s",
+            )
+
 
 # (min_coverage, window_seconds, exact threshold) triples where the
 # IEEE-754 product ``min_coverage * window_seconds`` lands a hair ABOVE
