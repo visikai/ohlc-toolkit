@@ -829,11 +829,11 @@ class TestBoundaryConditions:
                 window=_WINDOW,
             )
 
-    def test_an_unsigned_coverage_column_is_accepted(self) -> None:
-        """Any integer width will do; the engine's own width is not special."""
-        frame = _full_grid_frame().with_columns(
-            pl.col("coverage_seconds").cast(pl.UInt32)
-        )
+    def test_the_engines_own_int64_coverage_column_is_accepted(self) -> None:
+        """Int64 is the one width the schema declares, and it is accepted."""
+        frame = _full_grid_frame()
+        assert frame.schema["coverage_seconds"] == pl.Int64
+
         result = apply_quality_policy(
             frame,
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
@@ -841,6 +841,29 @@ class TestBoundaryConditions:
         )
         assert isinstance(result, QualityPolicyResult)
         assert result.frame.height == frame.height
+
+    @pytest.mark.parametrize(
+        "dtype",
+        [pl.Int8, pl.UInt8, pl.Int16, pl.Int32, pl.UInt32, pl.UInt64],
+        ids=["Int8", "UInt8", "Int16", "Int32", "UInt32", "UInt64"],
+    )
+    def test_a_non_int64_coverage_column_is_refused(self, dtype: pl.DataType) -> None:
+        """Only Int64 will do: the width the engine emits and the schema names.
+
+        Accepting other widths is not a kindness. A narrow column
+        overflows inside polars when compared against a large
+        whole-second minimum (Int8 against a one-hour window), and a
+        UInt64 near the top of its range cannot be safely widened either
+        -- so the failure would surface past this boundary, in polars'
+        words instead of this module's.
+        """
+        frame = _full_grid_frame().with_columns(pl.col("coverage_seconds").cast(dtype))
+        with pytest.raises(ConfigError, match="Int64"):
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+                window=_WINDOW,
+            )
 
     def test_window_is_coerced_from_a_string_like_other_public_entry_points(
         self,
