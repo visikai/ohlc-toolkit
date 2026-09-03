@@ -12,6 +12,7 @@ import math
 import pytest
 
 from ohlc_toolkit.schedules import (
+    ExplicitSpec,
     GeneratorKind,
     LogSpacedSpec,
     RoundingRule,
@@ -430,6 +431,38 @@ class TestValueSemantics:
     def test_equal_schedules_hash_equal(self) -> None:
         """Python's hash agrees with equality, as it must."""
         assert hash(_metallic()) == hash(_metallic())
+
+
+class TestResolvedListInvariants:
+    """A window list is checked wherever it comes from, payload included."""
+
+    def test_a_zero_window_in_a_payload_is_refused(self) -> None:
+        """A stored 0s window is refused on the way in.
+
+        The generators cannot produce one -- they refuse a term that
+        quantizes to nothing -- but a payload is not a generator, and a
+        zero-length window read back out of one would carry no data.
+
+        The message is about the window rather than about the id it no
+        longer matches: a payload is checked for what it says before it
+        is checked against what it is called.
+        """
+        payload = _explicit().to_dict()
+        payload["windows"] = ["1m", "0s"]
+        with pytest.raises(ConfigError, match="strictly positive"):
+            WindowSchedule.from_dict(payload)
+
+    def test_a_non_duration_window_is_refused_at_construction(self) -> None:
+        """A schedule built directly still has to hold Durations."""
+        with pytest.raises(ConfigError, match="Duration"):
+            WindowSchedule(spec=ExplicitSpec(name=None), windows=("1m",))  # type: ignore[arg-type]
+
+    def test_a_non_string_name_in_a_payload_is_refused(self) -> None:
+        """A name is text or nothing; a number is neither."""
+        payload = _explicit().to_dict()
+        payload["parameters"] = {"name": 7, "limiting_ratio": None}
+        with pytest.raises(ConfigError, match="name"):
+            WindowSchedule.from_dict(payload)
 
 
 if __name__ == "__main__":

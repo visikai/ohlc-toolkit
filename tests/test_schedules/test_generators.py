@@ -668,5 +668,47 @@ class TestExplicit:
             explicit("1m")
 
 
+class TestRecordedRules:
+    """The rounding and dedup rules are recorded, so they must be real rules."""
+
+    def test_a_rounding_rule_that_is_not_a_rule_is_refused(self) -> None:
+        """A plain string is not accepted in place of a RoundingRule member.
+
+        The value is recorded in the identity and read back by name, so
+        a string that merely looks like a member would serialize into a
+        payload nothing can read.
+        """
+        with pytest.raises(ConfigError, match="rounding"):
+            metallic_recurrence(
+                coefficient=_COEFFICIENT,
+                seed="1m",
+                grain="1m",
+                maximum="2w",
+                rounding="nearest_ties_away",  # type: ignore[arg-type]
+            )
+
+    def test_a_log_spaced_rounding_rule_is_checked_the_same_way(self) -> None:
+        """Every kind that quantizes checks its tie rule in the same words."""
+        with pytest.raises(ConfigError, match="rounding"):
+            log_spaced(
+                count=5,
+                minimum="1m",
+                maximum="1h",
+                grain="1m",
+                rounding="nearest_ties_even",  # type: ignore[arg-type]
+            )
+
+    def test_a_dedup_rule_that_is_not_a_rule_is_refused(self) -> None:
+        """The dedup rule is recorded too, and checked the same way."""
+        with pytest.raises(ConfigError, match="dedup"):
+            MetallicRecurrenceSpec(
+                coefficient=2.0,
+                seed=Duration.parse("1m"),
+                grain=Duration.parse("1m"),
+                maximum=Duration.parse("1d"),
+                dedup="drop_later_repeats",  # type: ignore[arg-type]
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
