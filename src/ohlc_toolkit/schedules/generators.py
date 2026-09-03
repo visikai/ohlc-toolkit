@@ -274,6 +274,32 @@ def _validated_count(value: object) -> int:
     return value
 
 
+def _require_rules(rounding: RoundingRule, dedup: DedupRule) -> None:
+    """Check that the recorded rounding and dedup rules are enum members.
+
+    Both are written into the identity by name and read back the same
+    way, so a plain string that merely looks like a member -- the
+    realistic mistake -- would serialize into a payload nothing can
+    read.
+
+    Args:
+        rounding: The candidate rounding rule.
+        dedup: The candidate dedup rule.
+
+    Raises:
+        ConfigError: If either is not a member of its enum.
+
+    """
+    if not isinstance(rounding, RoundingRule):
+        logger.warning("Rejecting non-RoundingRule rounding: {!r}", rounding)
+        raise ConfigError(
+            f"rounding must be a RoundingRule, got {type(rounding).__name__}"
+        )
+    if not isinstance(dedup, DedupRule):
+        logger.warning("Rejecting non-DedupRule dedup: {!r}", dedup)
+        raise ConfigError(f"dedup must be a DedupRule, got {type(dedup).__name__}")
+
+
 @dataclass(frozen=True)
 class MetallicRecurrenceSpec:
     """The parameters of one metallic-recurrence schedule.
@@ -341,6 +367,7 @@ class MetallicRecurrenceSpec:
         if self.minimum is not None:
             object.__setattr__(self, "minimum", validate_window_duration(self.minimum))
             _require_ordered_bounds(self.minimum, self.maximum)
+        _require_rules(self.rounding, self.dedup)
 
     @property
     def limiting_ratio(self) -> float:
@@ -461,6 +488,7 @@ class LogSpacedSpec:
         object.__setattr__(self, "maximum", validate_window_duration(self.maximum))
         object.__setattr__(self, "grain", validate_cadence(self.grain))
         _require_ordered_bounds(self.minimum, self.maximum)
+        _require_rules(self.rounding, self.dedup)
 
     @property
     def limiting_ratio(self) -> float:
@@ -654,8 +682,9 @@ class WindowSchedule:
         """Check the resolved list against the invariants every kind shares.
 
         Raises:
-            ConfigError: If ``windows`` is empty, holds a repeat, or
-                names more windows than :data:`MAX_RESOLVED_WINDOWS`.
+            ConfigError: If ``windows`` is empty, holds anything but a
+                strictly positive Duration, holds a repeat, or names
+                more windows than :data:`MAX_RESOLVED_WINDOWS`.
 
         """
         _require_resolved_windows(self.windows)
@@ -738,8 +767,9 @@ def _require_resolved_windows(windows: tuple[Duration, ...]) -> None:
     """Check a resolved window list, whichever generator produced it.
 
     Raises:
-        ConfigError: If the list is empty, repeats a value, or is longer
-            than the cap.
+        ConfigError: If the list is empty, holds anything but a strictly
+            positive Duration, repeats a value, or is longer than the
+            cap.
 
     """
     if not windows:
@@ -756,6 +786,14 @@ def _require_resolved_windows(windows: tuple[Duration, ...]) -> None:
         )
     seen: set[Duration] = set()
     for window in windows:
+        if not isinstance(window, Duration):
+            logger.warning("Rejecting non-Duration schedule window: {!r}", window)
+            raise ConfigError(
+                f"Schedule windows must be Durations, got {type(window).__name__}"
+            )
+        if window.total_seconds == 0:
+            logger.warning("Rejecting a zero-length schedule window.")
+            raise ConfigError("Schedule windows must be strictly positive, got 0s.")
         if window in seen:
             logger.warning("Rejecting a schedule repeating the window {}.", window)
             raise ConfigError(
