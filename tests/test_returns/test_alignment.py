@@ -140,8 +140,18 @@ class TestRequiredDtypes:
         and a floating close time has no exact equality to join on.
         Refusing every other width keeps all three failures at this
         module's boundary and in its own words.
+
+        The close times here are small enough to be held by every dtype
+        under test, ``Int8`` included, so the refusal is about the width
+        the column is declared in and not about values that would not
+        fit in it.
         """
-        frame = gap_free_frame().with_columns(pl.col("close_time").cast(dtype))
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", [0, 60, 120], dtype=dtype),
+                pl.Series("close", [100.0, 110.0, 120.0], dtype=pl.Float64),
+            ]
+        )
         with pytest.raises(ConfigError, match="Int64"):
             _add(entry_point, frame)
 
