@@ -19,9 +19,11 @@ class ConfigError(Exception):
 class DataValidationError(Exception):
     """A source data frame failed strict validation.
 
-    Reserved for the temporal package's data-validation surface. No code
-    in this package raises it yet; it is defined now so the public
-    exception taxonomy is stable for callers to depend on.
+    Strict source-frame validation raises this, typically via a subclass
+    that carries a structured findings report (for example
+    ``ohlc_toolkit.source.validation.SourceValidationError``) rather than
+    this base class directly, so callers can inspect exactly what failed
+    instead of parsing a message.
     """
 
 

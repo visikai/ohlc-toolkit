@@ -18,6 +18,7 @@ dependencies = [
     "loguru>=0.7.3,<0.8.0",
     "orjson>=3.10.15,<4.0.0",
     "pandas>=2.3.0,<3.0.0",
+    "polars>=1.35.0,<2.0.0",
     "requests>=2.32.3,<3.0.0",
     "tqdm>=4.66.4,<5.0.0",
 ]
@@ -40,7 +41,6 @@ dev = [
 [tool.ruff]
 line-length = 88
 lint.pycodestyle.max-line-length = 120
-target-version = "py314"
 lint.select = [
     "E",   # pycodestyle errors (style errors)
     "W",   # pycodestyle warnings (style warnings)
@@ -59,6 +59,7 @@ lint.ignore = [
     "D213",    # Multi-line docstring summary should start at the second line
     "PLE1205", # False positive: Too many arguments for `logging` format string
 ]
+target-version = "py314"
 include = ["examples/*.py", "src/*.py", "tests/*.py"]
 
 [tool.pytest.ini_options]
