@@ -157,24 +157,63 @@ class TestWOverK:
             Duration.parse(f"{m}m") for m in expected_emit_minutes
         ]
 
-    def test_a_window_too_small_for_the_divisor_is_refused(self) -> None:
-        """A schedule reaching below K times the finest allowed cadence refuses.
+    def test_a_window_too_small_for_the_divisor_clamps_to_the_source(self) -> None:
+        """A window whose ratio undercuts the whole allowed set still resolves.
 
-        This is the shape the refusal takes in practice: a metallic
-        schedule seeded at the source cadence starts at 1m, and 1m/4 is
-        below every member of a minute-and-up allowed set, so the whole
-        rule is refused rather than quietly dropping that window.
+        A metallic schedule seeded at the source cadence starts at 1m,
+        and 1m/4 is below every member of a minute-and-up allowed set.
+        A quantized cadence would then lie below the smallest member,
+        hence below the source-cadence floor's reach, so the floor
+        answers directly rather than the rule refusing and dropping the
+        schedule's own smallest windows.
         """
         schedule = metallic_recurrence(
             coefficient=2.0, seed="1m", grain="1m", maximum="1d"
         )
-        with pytest.raises(ConfigError, match="allowed"):
-            w_over_k(
-                schedule.windows,
-                divisor=4,
-                allowed=_ALLOWED,
-                source_cadence=_SOURCE_CADENCE,
-            )
+
+        rule = w_over_k(
+            schedule.windows,
+            divisor=4,
+            allowed=_ALLOWED,
+            source_cadence=_SOURCE_CADENCE,
+        )
+
+        assert rule.pairs[0].window == Duration.parse("1m")
+        assert rule.pairs[0].emit_every == Duration.parse(_SOURCE_CADENCE)
+
+    def test_an_allowed_set_entirely_above_the_ratio_clamps_to_the_source(
+        self,
+    ) -> None:
+        """Nothing at or below W/K resolves to the source-cadence floor.
+
+        The quantized cadence would lie below every member, hence below
+        anything the floor could have admitted, so the floor answers --
+        the same answer a too-fine member gets, not a refusal. The
+        result is deliberately finer than every allowed member; the
+        allowed set expresses preference, the source cadence expresses
+        possibility.
+        """
+        rule = w_over_k(
+            ["1h"], divisor=4, allowed=["1h", "4h"], source_cadence=_SOURCE_CADENCE
+        )
+
+        assert _texts(rule) == [("1h", "1m")]
+
+    def test_quantized_and_clamped_windows_resolve_side_by_side(self) -> None:
+        """One rule can quantize one window and clamp its neighbour.
+
+        4h/4 lands exactly on the allowed 1h; 1h/4 undercuts the whole
+        allowed set and takes the source cadence instead. Neither
+        outcome disturbs the other.
+        """
+        rule = w_over_k(
+            ["4h", "1h"],
+            divisor=4,
+            allowed=["1h"],
+            source_cadence=_SOURCE_CADENCE,
+        )
+
+        assert _texts(rule) == [("4h", "1h"), ("1h", "1m")]
 
     def test_the_parameters_are_recorded(self) -> None:
         """The divisor, the allowed set, and the source cadence are the identity."""
@@ -258,28 +297,6 @@ class TestWOverKRefusals:
         """With nothing allowed, no window can be resolved at all."""
         with pytest.raises(ConfigError, match="allowed"):
             w_over_k(["1h"], divisor=4, allowed=[], source_cadence=_SOURCE_CADENCE)
-
-    def test_an_allowed_set_entirely_above_the_ratio_is_refused(self) -> None:
-        """Nothing at or below W/K means there is no answer to give.
-
-        Emitting at the smallest allowed cadence anyway would be a
-        cadence coarser than the caller asked for, silently; refusing
-        says so instead.
-        """
-        with pytest.raises(ConfigError, match="allowed"):
-            w_over_k(
-                ["1h"], divisor=4, allowed=["1h", "4h"], source_cadence=_SOURCE_CADENCE
-            )
-
-    def test_the_refusal_names_the_window_it_could_not_resolve(self) -> None:
-        """A rule over many windows says which one failed."""
-        with pytest.raises(ConfigError, match="1h"):
-            w_over_k(
-                ["4h", "1h"],
-                divisor=4,
-                allowed=["1h"],
-                source_cadence=_SOURCE_CADENCE,
-            )
 
     def test_an_empty_window_list_is_refused(self) -> None:
         """A rule that maps nothing is not a rule."""

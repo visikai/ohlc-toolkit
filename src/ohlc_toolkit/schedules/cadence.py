@@ -22,15 +22,20 @@ Reading it in order:
 - ``quantize_down`` takes the LARGEST allowed cadence at or below that
   ratio. Down, not nearest: rounding up would emit more often than the
   caller asked for, which is the direction that costs work and overlaps
-  windows. If the allowed set has nothing at or below the ratio, there
-  is no answer to give and the rule refuses, naming the window it could
-  not resolve. Emitting at the smallest allowed cadence anyway would
-  silently hand back a coarser cadence than was asked for.
+  windows.
 - The clamp to the source cadence ``d`` is last, and it wins over the
   allowed set: nothing can be emitted more often than the source
   produces candles, whereas a cadence the caller did not list is merely
-  not preferred. This is the one case where the resolved cadence is
-  COARSER than ``W / K``, and it is deliberate.
+  not preferred. The clamp is what answers when the allowed set has
+  nothing at or below the ratio, too -- a quantized cadence would then
+  lie below the smallest member, hence below anything the floor could
+  admit, so the floor is the answer directly. Composed this way the
+  rule is total for every non-empty allowed set, which matters for the
+  natural configuration of feeding a resolved schedule in as its own
+  allowed set: a large divisor puts the smallest windows' ratios below
+  the smallest member, and they must still resolve. These clamped cases
+  are the only ones where the resolved cadence is COARSER than
+  ``W / K``, and they are deliberate.
 
 What this layer does not decide
 -------------------------------
@@ -463,10 +468,11 @@ def _resolve_emit(window: Duration, spec: WOverKSpec) -> Duration:
 
     Returns:
         The largest allowed cadence at or below ``W / K``, raised to the
-        source cadence if it falls below it.
-
-    Raises:
-        ConfigError: If no allowed cadence is at or below ``W / K``.
+        source cadence if it falls below it. When no allowed cadence is
+        at or below ``W / K`` at all, the quantized cadence would lie
+        below the smallest member and therefore below anything the floor
+        could have admitted, so the floor answers directly: the emit
+        cadence is the source cadence itself.
 
     """
     # `a <= W / K` without dividing: exact, in whole seconds, whatever
@@ -478,17 +484,15 @@ def _resolve_emit(window: Duration, spec: WOverKSpec) -> Duration:
         if cadence.total_seconds * spec.divisor <= window_seconds
     ]
     if not candidates:
-        logger.warning(
-            "No allowed cadence at or below {}/{}; the smallest allowed is {}.",
+        logger.debug(
+            "Clamping the emit cadence for {} up to the {} source cadence; no "
+            "allowed cadence is at or below {}/{}.",
+            window,
+            spec.source_cadence,
             window,
             spec.divisor,
-            spec.allowed[0],
         )
-        raise ConfigError(
-            f"No allowed cadence is at or below {window}/{spec.divisor}, so the "
-            f"window {window} has no emit cadence; the smallest allowed cadence "
-            f"is {spec.allowed[0]}."
-        )
+        return spec.source_cadence
 
     # `allowed` is sorted ascending, so the last survivor is the largest.
     chosen = candidates[-1]
@@ -547,9 +551,8 @@ def w_over_k(
         that produced them.
 
     Raises:
-        ConfigError: If any parameter is invalid, if the window list is
-            empty, repeats a window, or is too long, or if some window
-            has no allowed cadence at or below ``W / K``.
+        ConfigError: If any parameter is invalid, or if the window list
+            is empty, repeats a window, or is too long.
 
     """
     _require_sequence(windows, label="list of window durations")
