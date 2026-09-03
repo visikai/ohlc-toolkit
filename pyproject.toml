@@ -60,7 +60,7 @@ lint.ignore = [
     "PLE1205", # False positive: Too many arguments for `logging` format string
 ]
 target-version = "py314"
-include = ["examples/*.py", "src/*.py", "tests/*.py"]
+include = ["benchmarks/*.py", "examples/*.py", "src/*.py", "tests/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = "tests"
