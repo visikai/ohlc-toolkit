@@ -1,18 +1,28 @@
-"""Windowed candle aggregation: the brute-force reference implementation.
+"""Windowed candle aggregation: one contract, two implementations.
 
 This namespace is not re-exported from the top-level ``ohlc_toolkit``
 package; import from ``ohlc_toolkit.windows`` directly.
 
-What lives here is a correctness oracle: the plainest possible reading of
-the window contract, meant to be checked against by eye and property-
-tested against by faster implementations. It is not the fast path.
+:func:`~ohlc_toolkit.windows.engine.compute_windows` is the one to call.
+It is Polars-native and linear in rows plus emit ticks.
+
+:func:`~ohlc_toolkit.windows.reference.compute_reference_windows` is a
+correctness oracle: the plainest possible reading of the window contract,
+quadratic on purpose, meant to be checked against by eye and tested
+against by the engine. It is not the fast path, and it is not deprecated
+either -- it is what the fast path is measured by.
+
+Both resolve their schedules through
+:mod:`ohlc_toolkit.windows.resolution`, so a configuration one refuses is
+refused by the other in the same words.
 """
 
-from ohlc_toolkit.windows.reference import (
+from ohlc_toolkit.windows.engine import compute_windows
+from ohlc_toolkit.windows.reference import compute_reference_windows
+from ohlc_toolkit.windows.resolution import (
     ExplicitRange,
     Materialization,
     MaterializationRule,
-    compute_reference_windows,
 )
 
 __all__ = [
@@ -20,4 +30,5 @@ __all__ = [
     "Materialization",
     "MaterializationRule",
     "compute_reference_windows",
+    "compute_windows",
 ]
