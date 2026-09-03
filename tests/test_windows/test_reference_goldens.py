@@ -13,13 +13,13 @@ of duration ``W`` if and only if ``open_time >= t - W`` and
 
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
+
 from ohlc_toolkit.windows import (
     ExplicitRange,
     MaterializationRule,
     compute_reference_windows,
 )
-from polars.testing import assert_frame_equal
-
 from tests.test_windows.factories import (
     SourceRow,
     expected_frame,
@@ -261,6 +261,9 @@ def test_candle_straddling_the_window_open_is_excluded_whole() -> None:
     The straddling candle spans [30, 90) while the window is [60, 180). Its
     extreme high and low would be unmistakable in the output if any part of
     it leaked in.
+
+    The emit cadence is 1m so that t=180 is on the emit grid; the range
+    then pins the run to that single tick.
     """
     rows: tuple[SourceRow, ...] = (
         (0, 100.0, 110.0, 90.0, 105.0, 1.0),
@@ -272,7 +275,7 @@ def test_candle_straddling_the_window_open_is_excluded_whole() -> None:
         frame_from_rows(rows),
         profile_for(60),
         window="2m",
-        emit_every="2m",
+        emit_every="1m",
         materialization=ExplicitRange(start=180, end=181),
     )
 
@@ -491,6 +494,43 @@ def test_output_schema_is_exactly_the_nine_declared_columns() -> None:
     ]
     # The ambiguous name the output contract deliberately refuses to use.
     assert "timestamp" not in result.columns
+
+
+def test_open_and_close_come_from_the_extreme_open_times_not_the_end_rows() -> None:
+    """Row position is never used as a proxy for time order.
+
+    The rows below are shuffled, so a reference implementation that read
+    ``open`` off the first included row and ``close`` off the last would
+    report 102.0 and 106.0 instead of 100.0 and 107.0. Validated input is
+    ordered and this frame is not, which is exactly why the oracle has to
+    compare open times rather than trust positions.
+    """
+    rows: tuple[SourceRow, ...] = (
+        (120, 102.0, 112.0, 92.0, 107.0, 4.0),
+        (0, 100.0, 110.0, 90.0, 105.0, 1.0),
+        (60, 101.0, 111.0, 91.0, 106.0, 2.0),
+    )
+    result = compute_reference_windows(
+        frame_from_rows(rows),
+        profile_for(60),
+        window="3m",
+        emit_every="3m",
+        materialization=ExplicitRange(start=180, end=181),
+    )
+
+    assert_frame_equal(
+        result,
+        expected_frame(
+            [
+                # [0, 180): open from the candle opening at 0, close from
+                # the candle opening at 120.
+                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180),
+            ]
+        ),
+        check_dtypes=True,
+        check_column_order=True,
+        check_row_order=True,
+    )
 
 
 def test_empty_tick_range_still_returns_the_declared_schema() -> None:

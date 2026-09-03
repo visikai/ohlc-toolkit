@@ -16,9 +16,9 @@ import polars as pl
 import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from ohlc_toolkit.windows import ExplicitRange, compute_reference_windows
 
 from ohlc_toolkit.source.profile import SourceProfile
+from ohlc_toolkit.windows import ExplicitRange, compute_reference_windows
 from tests.test_windows.factories import SourceRow, frame_from_rows, profile_for
 
 # A small fixed set of cadences rather than an unbounded search space: the

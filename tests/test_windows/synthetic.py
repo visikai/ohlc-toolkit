@@ -27,13 +27,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import polars as pl
+
+from ohlc_toolkit.source.profile import SourceProfile
 from ohlc_toolkit.windows import (
     ExplicitRange,
     MaterializationRule,
     compute_reference_windows,
 )
-
-from ohlc_toolkit.source.profile import SourceProfile
 from tests.test_windows.factories import SourceRow, frame_from_rows, profile_for
 
 GOLDENS_DIRECTORY = Path(__file__).parent / "goldens"

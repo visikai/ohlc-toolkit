@@ -7,14 +7,14 @@ not ask for.
 
 import polars as pl
 import pytest
+
+from ohlc_toolkit.source.profile import Availability, ColumnKind, SourceProfile
+from ohlc_toolkit.temporal import ConfigError
 from ohlc_toolkit.windows import (
     ExplicitRange,
     MaterializationRule,
     compute_reference_windows,
 )
-
-from ohlc_toolkit.source.profile import Availability, ColumnKind, SourceProfile
-from ohlc_toolkit.temporal import ConfigError
 from tests.test_windows.factories import (
     SourceRow,
     frame_from_rows,
@@ -202,6 +202,23 @@ def test_an_unknown_materialization_rule_name_is_rejected() -> None:
             emit_every="1m",
             materialization="skip-warmup",
         )
+
+
+def test_a_rejected_rule_name_is_echoed_back_bounded() -> None:
+    """A huge bad value must not become a huge log line or error message."""
+    oversized = "s" * 500
+    with pytest.raises(ConfigError, match="Unknown materialization rule") as caught:
+        compute_reference_windows(
+            frame_from_rows(_MINUTE_CANDLES),
+            profile_for(60),
+            window="1m",
+            emit_every="1m",
+            materialization=oversized,
+        )
+
+    message = str(caught.value)
+    assert oversized not in message
+    assert "500 chars total" in message
 
 
 def test_a_materialization_of_an_unsupported_type_is_rejected() -> None:
