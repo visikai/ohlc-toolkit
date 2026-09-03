@@ -430,9 +430,11 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
         anchor="7s",
         materialization=_SKIP_WARMUP,
     ),
-    # Boundary-straddling candles: excluded whole at both edges.
+    # Boundary-straddling candles: excluded whole at both edges. Named
+    # invalid_* because the family's extra rows are off-grid and
+    # overlapping -- input strict source validation rejects.
     GoldenCase(
-        label="straddling_1m_rolling_4m_every_2m",
+        label="invalid_straddling_1m_rolling_4m_every_2m",
         family="straddling_1m",
         window="4m",
         emit_every="2m",
