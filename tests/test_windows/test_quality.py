@@ -970,6 +970,149 @@ class TestExactThreshold:
             )
 
 
+# (min_coverage, window_seconds, exact threshold, least passing second)
+# quadruples whose exact threshold is NOT a whole second -- 0.5 * 101 is
+# 50.5 -- so no row can sit exactly on it. The integer-threshold pairs
+# above cannot tell rounding up from rounding down: ceil and floor agree
+# on every whole number, so a bound rounded the wrong way passes all of
+# them. These pairs separate the two directions deterministically: the
+# whole second just below the threshold must fail, and the least whole
+# second above it must pass.
+_FRACTIONAL_THRESHOLDS = [
+    (0.5, 101, Fraction(101, 2), 51),
+    (0.9, 101, Fraction(909, 10), 91),
+    (0.55, 181, Fraction(1991, 20), 100),
+    (0.17, 301, Fraction(5117, 100), 52),
+]
+_FRACTIONAL_IDS = ["0.5_of_101s", "0.9_of_101s", "0.55_of_181s", "0.17_of_301s"]
+
+
+class TestFractionalThreshold:
+    """A threshold between whole seconds rounds up, never down.
+
+    ``coverage_seconds`` is a whole number but the exact threshold need
+    not be: at ``min_coverage=0.5`` of a 101s window the threshold is
+    50.5s. A row at 50s is below half coverage (50/101 is 49.5049...%)
+    and must fail; a row at 51s is above it and must pass. A bound
+    rounded DOWN admits the 50s row through a 50% policy -- it fails
+    open -- while a bound rounded one PAST the least passing second
+    rejects genuinely sufficient coverage. Both directions are pinned
+    here on fixed inputs, with no randomness anywhere.
+    """
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold", "least_passing"),
+        _FRACTIONAL_THRESHOLDS,
+        ids=_FRACTIONAL_IDS,
+    )
+    def test_the_chosen_thresholds_really_do_fall_between_whole_seconds(
+        self,
+        min_coverage: float,
+        window_seconds: int,
+        threshold: Fraction,
+        least_passing: int,
+    ) -> None:
+        """Guard the fixtures themselves: each threshold must be fractional.
+
+        A whole-number threshold is met exactly by some row, so rounding
+        it up and rounding it down name the same bound and the case
+        guards nothing. Only a threshold strictly between two whole
+        seconds separates the two rounding directions.
+        """
+        assert Fraction(str(min_coverage)) * window_seconds == threshold
+        assert threshold.denominator > 1
+        assert math.ceil(threshold) == least_passing
+        assert math.floor(threshold) == least_passing - 1
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold", "least_passing"),
+        _FRACTIONAL_THRESHOLDS,
+        ids=_FRACTIONAL_IDS,
+    )
+    def test_filter_drops_below_the_threshold_and_keeps_the_least_passing(
+        self,
+        min_coverage: float,
+        window_seconds: int,
+        threshold: Fraction,
+        least_passing: int,
+    ) -> None:
+        """FILTER rejects the whole second below and admits the one above."""
+        frame = _quality_frame_from_coverages(
+            [least_passing - 1, least_passing, window_seconds]
+        )
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=min_coverage),
+            window=f"{window_seconds}s",
+        )
+
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.get_column("coverage_seconds").to_list() == [
+            least_passing,
+            window_seconds,
+        ]
+        assert result.report.offending_count == 1
+        assert result.report.threshold_seconds == threshold
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold", "least_passing"),
+        _FRACTIONAL_THRESHOLDS,
+        ids=_FRACTIONAL_IDS,
+    )
+    def test_the_strict_gate_raises_on_the_whole_second_below_the_threshold(
+        self,
+        min_coverage: float,
+        window_seconds: int,
+        threshold: Fraction,
+        least_passing: int,
+    ) -> None:
+        """GATE/STRICT counts the second just below a fractional threshold."""
+        frame = _quality_frame_from_coverages([least_passing - 1])
+
+        with pytest.raises(WindowCoverageError) as caught:
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(
+                    mode=QualityMode.GATE,
+                    min_coverage=min_coverage,
+                    gate_mode=GateMode.STRICT,
+                ),
+                window=f"{window_seconds}s",
+            )
+
+        assert caught.value.report.threshold_seconds == threshold
+        assert caught.value.report.offending_count == 1
+
+    @pytest.mark.parametrize(
+        ("min_coverage", "window_seconds", "threshold", "least_passing"),
+        _FRACTIONAL_THRESHOLDS,
+        ids=_FRACTIONAL_IDS,
+    )
+    def test_the_strict_gate_passes_the_least_whole_second_above_the_threshold(
+        self,
+        min_coverage: float,
+        window_seconds: int,
+        threshold: Fraction,
+        least_passing: int,
+    ) -> None:
+        """GATE/STRICT does not over-round: the least passing second is no violation."""
+        frame = _quality_frame_from_coverages([least_passing, window_seconds])
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(
+                mode=QualityMode.GATE,
+                min_coverage=min_coverage,
+                gate_mode=GateMode.STRICT,
+            ),
+            window=f"{window_seconds}s",
+        )
+
+        assert isinstance(result, QualityPolicyResult)
+        assert result.report.threshold_seconds == threshold
+
+
 # --- Property-based: filter keeps exactly the rows meeting the threshold ---
 
 
