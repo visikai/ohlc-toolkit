@@ -226,7 +226,7 @@ class WindowQualityPolicy:
             raise ConfigError(
                 f"gate_mode must be a GateMode, got {type(self.gate_mode).__name__}"
             )
-        _validate_min_coverage(self.min_coverage)
+        _validated_min_coverage(self.min_coverage)
 
     def to_dict(self) -> dict[str, str | float]:
         """Serialize this identity to a deterministic, JSON-compatible dict.
@@ -285,13 +285,25 @@ class WindowQualityPolicy:
             logger.warning("Rejecting unknown gate_mode: {!r}", data["gate_mode"])
             raise ConfigError(f"Unknown gate_mode: {data['gate_mode']!r}") from error
 
-        min_coverage = data["min_coverage"]
-        _validate_min_coverage(min_coverage)
-        return cls(mode=mode, min_coverage=float(min_coverage), gate_mode=gate_mode)  # type: ignore[arg-type]
+        min_coverage = _validated_min_coverage(data["min_coverage"])
+        return cls(mode=mode, min_coverage=min_coverage, gate_mode=gate_mode)
 
 
-def _validate_min_coverage(value: object) -> None:
-    """Reject a ``min_coverage`` that is not a non-NaN number in ``[0, 1]``.
+def _validated_min_coverage(value: object) -> float:
+    """Return a ``min_coverage`` as a float, rejecting anything unusable.
+
+    Returning the validated value, rather than only raising, is what lets
+    :meth:`WindowQualityPolicy.from_dict` pass a value read out of an
+    untyped mapping straight to the constructor: the check has already
+    established it is a number, and saying so in the return type spares
+    the caller a cast the checker would otherwise have to be told to
+    ignore.
+
+    Args:
+        value: The candidate ``min_coverage``, of any type.
+
+    Returns:
+        ``value`` as a ``float``.
 
     Raises:
         ConfigError: If ``value`` is not an ``int``/``float`` (``bool`` is
@@ -310,6 +322,7 @@ def _validate_min_coverage(value: object) -> None:
     if value < 0 or value > 1:
         logger.warning("Rejecting out-of-range min_coverage: {}", value)
         raise ConfigError(f"min_coverage must be in [0, 1], got {value}.")
+    return float(value)
 
 
 @dataclass(frozen=True)
