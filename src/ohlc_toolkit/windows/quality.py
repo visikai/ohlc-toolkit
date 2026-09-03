@@ -22,10 +22,11 @@ mode's findings are thrown away:
   way it names any other choice. Its report still measures the frame, so
   a recorded no-op records what it declined to act on.
 - ``FILTER`` drops rows whose ``coverage_seconds`` falls below the
-  policy's threshold, returning a new frame. The input is never mutated,
-  row order is otherwise preserved, and no OHLCV value is touched. The
-  report accounts for exactly the rows dropped: both come from one mask,
-  so they cannot disagree.
+  policy's threshold -- and rows that state no coverage at all -- and
+  returns a new frame. The input is never mutated, row order is
+  otherwise preserved, and no OHLCV value is touched. The report
+  accounts for exactly the rows dropped: both come from one mask, so
+  they cannot disagree.
 - ``GATE`` checks the same threshold without dropping anything. In
   ``GateMode.STRICT`` a violation logs and raises
   :class:`WindowCoverageError`, which carries the whole
@@ -49,7 +50,9 @@ kept (``FILTER``) or counted as covered (``GATE``) exactly when
 Both sides are ordinary integers -- ``coverage_seconds`` is an exact
 whole-second count, which this module requires of the column it reads --
 so no float ever touches the decision, and there is no rounding rule
-left to get wrong in either direction.
+left to get wrong in either direction. A row whose ``coverage_seconds``
+is null meets nothing: it has not been shown to reach the threshold, so
+every mode treats it as offending and ``FILTER`` drops it.
 
 That integer comparison is applied in the algebraically identical form
 ``coverage_seconds >= least_integer_at_or_above(p / q)``, with the bound
@@ -318,7 +321,14 @@ class QualityReport:
             rather than the nearest double to it: a caller re-deriving a
             verdict from this value gets the same answer the policy gave.
             It compares directly against ``int`` and ``float``.
-        offending_count: How many rows fell below ``threshold_seconds``.
+        offending_count: How many rows failed to meet
+            ``threshold_seconds`` -- rows below it, plus rows that stated
+            no coverage at all.
+        null_coverage_count: How many of those offending rows had a null
+            ``coverage_seconds``. Always ``<= offending_count``. Reported
+            separately because "below the bar" and "no measurement" are
+            different problems with different fixes, even though the gate
+            refuses both.
         first_offending_close_time: The ``close_time`` of the first
             offending row, in ROW order -- the frame is never sorted and
             no sortedness is assumed, so on an out-of-order frame this
@@ -331,6 +341,7 @@ class QualityReport:
     rows_checked: int
     threshold_seconds: Fraction
     offending_count: int
+    null_coverage_count: int
     first_offending_close_time: int | None
 
     @property
@@ -471,13 +482,25 @@ def _least_passing_seconds(threshold_seconds: Fraction) -> int:
 
 
 def _offending_mask(frame: pl.DataFrame, minimum_seconds: int) -> pl.Series:
-    """Return the row mask of coverages below the threshold, without mutating.
+    """Return the row mask of coverages that do not meet the threshold.
 
-    Every mode decides from this one mask -- what ``FILTER`` drops is
-    what the report counts -- so the returned frame and the report it
-    travels with cannot disagree about which rows offended.
+    Never mutates ``frame``. Every mode decides from this one mask --
+    what ``FILTER`` drops is what the report counts -- so the returned
+    frame and the report it travels with cannot disagree about which rows
+    offended.
+
+    A null ``coverage_seconds`` compares to neither side, and filling
+    that null verdict with ``True`` is what makes this gate fail closed:
+    a row that states no coverage has not been shown to meet the
+    threshold, and left as a null it would vanish from the count
+    entirely -- ``Series.sum`` skips nulls -- so a strict gate would
+    report a clean frame while having checked one row fewer than it
+    said. :mod:`ohlc_toolkit.source.validation` treats a null in a column
+    it reads the same way, for the same reason.
     """
-    return frame.get_column("coverage_seconds") < minimum_seconds
+    return (frame.get_column("coverage_seconds") < minimum_seconds).fill_null(
+        value=True
+    )
 
 
 def _build_report(
@@ -485,6 +508,7 @@ def _build_report(
 ) -> QualityReport:
     """Summarize an offending-row mask into a bounded report."""
     offending_count = int(mask.sum())
+    null_coverage_count = frame.get_column("coverage_seconds").null_count()
 
     first_offending_close_time: int | None = None
     if offending_count > 0:
@@ -497,7 +521,28 @@ def _build_report(
         rows_checked=frame.height,
         threshold_seconds=threshold_seconds,
         offending_count=offending_count,
+        null_coverage_count=null_coverage_count,
         first_offending_close_time=first_offending_close_time,
+    )
+
+
+def _gate_failure_message(report: QualityReport, minimum_seconds: int) -> str:
+    """Summarize a failed strict gate in one bounded line.
+
+    Every number here comes from the report, which is attached to the
+    raised error too: this is a convenience for a human reading a
+    traceback, never the only way to reach a finding.
+    """
+    unstated = (
+        f" {report.null_coverage_count} of those state no coverage at all."
+        if report.null_coverage_count
+        else ""
+    )
+    return (
+        f"Window quality gate failed: {report.offending_count}/"
+        f"{report.rows_checked} row(s) do not meet the required "
+        f"coverage_seconds minimum of {minimum_seconds}s; first offending "
+        f"close_time={report.first_offending_close_time}.{unstated}"
     )
 
 
@@ -527,9 +572,9 @@ def apply_quality_policy(
         pairing the resulting frame with the report measured over
         ``frame``. Its ``.frame`` is ``frame`` itself for
         :attr:`QualityMode.PASS_THROUGH` and for a :attr:`QualityMode.GATE`
-        that did not raise, and a new row-subset -- below-threshold rows
-        dropped, the rest in their original order -- for
-        :attr:`QualityMode.FILTER`.
+        that did not raise, and a new row-subset -- rows below the
+        threshold or stating no coverage dropped, the rest in their
+        original order -- for :attr:`QualityMode.FILTER`.
 
     Raises:
         ConfigError: If ``frame`` is missing a required column, if
@@ -576,28 +621,27 @@ def apply_quality_policy(
     if policy.gate_mode is GateMode.REPORT:
         if not report.passed:
             logger.warning(
-                "Quality gate (report): {}/{} row(s) below the {}s coverage minimum.",
+                "Quality gate (report): {}/{} row(s) miss the {}s coverage "
+                "minimum ({} state none at all).",
                 report.offending_count,
                 report.rows_checked,
                 minimum_seconds,
+                report.null_coverage_count,
             )
         return QualityPolicyResult(frame=frame, report=report)
 
     if not report.passed:
         logger.error(
-            "Quality gate (strict): {}/{} row(s) below the {}s coverage "
-            "minimum; first offending close_time={}.",
+            "Quality gate (strict): {}/{} row(s) miss the {}s coverage minimum "
+            "({} state none at all); first offending close_time={}.",
             report.offending_count,
             report.rows_checked,
             minimum_seconds,
+            report.null_coverage_count,
             report.first_offending_close_time,
         )
         raise WindowCoverageError(
-            f"Window quality gate failed: {report.offending_count}/"
-            f"{report.rows_checked} row(s) have coverage_seconds below the "
-            f"required minimum of {minimum_seconds}s; first offending "
-            f"close_time={report.first_offending_close_time}.",
-            report,
+            _gate_failure_message(report, minimum_seconds), report
         )
 
     logger.debug(
