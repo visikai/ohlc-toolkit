@@ -13,6 +13,7 @@ import pytest
 
 from ohlc_toolkit.schedules import (
     GeneratorKind,
+    LogSpacedSpec,
     RoundingRule,
     log_spaced,
     metallic_recurrence,
@@ -475,9 +476,15 @@ class TestLogSpaced:
         assert schedule.spec.kind is GeneratorKind.LOG_SPACED
 
     def test_the_count_is_recorded(self) -> None:
-        """The count is a parameter of the identity, not just of the call."""
+        """The count is a parameter of the identity, not just of the call.
+
+        The spec is reached through an isinstance check rather than an
+        attribute lookup on the union: a generator's own parameters are
+        its own, and only a spec of the right kind has a count at all.
+        """
         count = 5
         schedule = log_spaced(count=count, minimum="1m", maximum="1h", grain="1m")
+        assert isinstance(schedule.spec, LogSpacedSpec)
         assert schedule.spec.count == count
 
     def test_a_two_point_ladder_is_just_the_endpoints(self) -> None:

@@ -13,9 +13,12 @@ from ohlc_toolkit.schedules.generators import (
     MAX_RESOLVED_WINDOWS,
     DedupRule,
     GeneratorKind,
+    GeneratorSpec,
+    LogSpacedSpec,
     MetallicRecurrenceSpec,
     RoundingRule,
     WindowSchedule,
+    log_spaced,
     metallic_recurrence,
 )
 
@@ -23,8 +26,11 @@ __all__ = [
     "MAX_RESOLVED_WINDOWS",
     "DedupRule",
     "GeneratorKind",
+    "GeneratorSpec",
+    "LogSpacedSpec",
     "MetallicRecurrenceSpec",
     "RoundingRule",
     "WindowSchedule",
+    "log_spaced",
     "metallic_recurrence",
 ]

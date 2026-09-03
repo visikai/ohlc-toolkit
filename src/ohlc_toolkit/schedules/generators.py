@@ -26,6 +26,16 @@ decides an exact tie rather than whatever a double happened to land on.
 This is the same reasoning
 :mod:`ohlc_toolkit.windows.quality` applies to its coverage threshold.
 
+A log-spaced ladder cannot be exact -- its points are irrational powers
+-- so it is computed in :class:`~decimal.Decimal` at a fixed working
+precision instead, and converted to exact rationals from there. Not for
+the extra digits, but for reproducibility: the resolved list is part of
+the identity that gets hashed, and a schedule must hash the same on
+every machine that resolves it. ``Decimal``'s ``ln`` and ``exp`` are
+correctly rounded to the working precision by specification, whereas a
+libm ``pow`` is only nearly so, and may differ in the last place from
+one platform's C library to another.
+
 Bounds
 ------
 
@@ -69,6 +79,7 @@ range IS a meaningful statement about a stretch of time.
 
 import math
 from dataclasses import dataclass
+from decimal import Decimal, localcontext
 from enum import Enum, unique
 from fractions import Fraction
 from typing import ClassVar
@@ -90,6 +101,14 @@ logger = get_logger(__name__)
 # hangs is worse than one that refuses. One number for every kind, so
 # there is a single answer to "how long can a schedule be".
 MAX_RESOLVED_WINDOWS = 512
+
+# The working precision, in significant digits, for the log-spaced
+# ladder. Fifty is far more than any duration needs -- a two-week window
+# in seconds is seven digits -- and the surplus is the point: a point
+# computed this far out lands unambiguously on one side of a
+# quantization boundary, so the schedule does not depend on the last
+# digits of the arithmetic that produced it.
+_DECIMAL_DIGITS = 50
 
 _HALF = Fraction(1, 2)
 
@@ -188,39 +207,59 @@ def _validated_coefficient(value: object) -> float:
     return float(value)
 
 
-def _validated_bounds(
-    minimum: Duration | None, maximum: Duration
-) -> tuple[Duration | None, Duration]:
-    """Coerce and check a schedule's duration bounds.
+def _require_ordered_bounds(minimum: Duration, maximum: Duration) -> None:
+    """Check that a schedule's bounds are the right way round.
 
     Args:
-        minimum: The optional lower bound.
-        maximum: The upper bound.
-
-    Returns:
-        The validated ``(minimum, maximum)`` pair.
+        minimum: The lower bound, already validated as a duration.
+        maximum: The upper bound, already validated as a duration.
 
     Raises:
-        ConfigError: If either bound is not a strictly positive
-            duration, or if the minimum is above the maximum.
+        ConfigError: If the minimum is above the maximum. Equal bounds
+            are legal: they name a single scale.
 
     """
-    checked_maximum = validate_window_duration(maximum)
-    if minimum is None:
-        return None, checked_maximum
-
-    checked_minimum = validate_window_duration(minimum)
-    if checked_minimum.total_seconds > checked_maximum.total_seconds:
+    if minimum.total_seconds > maximum.total_seconds:
         logger.warning(
             "Rejecting inverted schedule bounds: minimum {} above maximum {}.",
-            checked_minimum,
-            checked_maximum,
+            minimum,
+            maximum,
         )
         raise ConfigError(
             f"A schedule's minimum must not exceed its maximum, got "
-            f"{checked_minimum} > {checked_maximum}."
+            f"{minimum} > {maximum}."
         )
-    return checked_minimum, checked_maximum
+
+
+def _validated_count(value: object) -> int:
+    """Return a point count as an int, refusing anything unusable.
+
+    Args:
+        value: The candidate count, of any type.
+
+    Returns:
+        ``value`` as an ``int``.
+
+    Raises:
+        ConfigError: If ``value`` is not an ``int`` (``bool`` is refused
+            too, even though it is an ``int`` subtype), is below two, or
+            is above :data:`MAX_RESOLVED_WINDOWS`. Two is the smallest
+            count that means anything: with a single point, naming both
+            endpoints does not say which of them it is.
+
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        logger.warning("Rejecting non-integer point count: {!r}", value)
+        raise ConfigError(f"count must be an int, got {type(value).__name__}")
+    if value < 2:  # noqa: PLR2004 - the two endpoints, named in the docstring
+        logger.warning("Rejecting a point count below two: {}", value)
+        raise ConfigError(
+            f"count must be at least 2, one point per endpoint, got {value}."
+        )
+    if value > MAX_RESOLVED_WINDOWS:
+        logger.warning("Rejecting a point count past the cap: {}", value)
+        raise ConfigError(f"count must be at most {MAX_RESOLVED_WINDOWS}, got {value}.")
+    return value
 
 
 @dataclass(frozen=True)
@@ -286,9 +325,10 @@ class MetallicRecurrenceSpec:
         )
         object.__setattr__(self, "seed", validate_window_duration(self.seed))
         object.__setattr__(self, "grain", validate_cadence(self.grain))
-        minimum, maximum = _validated_bounds(self.minimum, self.maximum)
-        object.__setattr__(self, "minimum", minimum)
-        object.__setattr__(self, "maximum", maximum)
+        object.__setattr__(self, "maximum", validate_window_duration(self.maximum))
+        if self.minimum is not None:
+            object.__setattr__(self, "minimum", validate_window_duration(self.minimum))
+            _require_ordered_bounds(self.minimum, self.maximum)
         _require_rules(self.rounding, self.dedup)
 
     @property
@@ -303,6 +343,86 @@ class MetallicRecurrenceSpec:
         re-derived.
         """
         return (self.coefficient + math.sqrt(self.coefficient**2 + 4)) / 2
+
+
+@dataclass(frozen=True)
+class LogSpacedSpec:
+    """The parameters of one log-spaced schedule.
+
+    Frozen and hashable, like every other spec here. The module-level
+    :func:`log_spaced` is the documented boundary; direct construction
+    expects ``Duration`` instances and revalidates them anyway.
+
+    Attributes:
+        count: How many points to place, both endpoints included. At
+            least two, and never more than
+            :data:`MAX_RESOLVED_WINDOWS`.
+        minimum: The first point, and the lower bound.
+        maximum: The last point, and the upper bound. Equal to
+            ``minimum`` is legal and names a single scale.
+        grain: The quantization grain every resolved duration is a whole
+            multiple of.
+        rounding: The tie rule quantization applies. Defaults to
+            :attr:`RoundingRule.NEAREST_TIES_AWAY`.
+        dedup: The rule applied to repeated quantized values. Defaults
+            to :attr:`DedupRule.DROP_LATER_REPEATS`. A count too high
+            for the range relies on it: several neighbouring points can
+            land on the same grain multiple.
+
+    """
+
+    count: int
+    minimum: Duration
+    maximum: Duration
+    grain: Duration
+    rounding: RoundingRule = RoundingRule.NEAREST_TIES_AWAY
+    dedup: DedupRule = DedupRule.DROP_LATER_REPEATS
+
+    kind: ClassVar[GeneratorKind] = GeneratorKind.LOG_SPACED
+
+    def __post_init__(self) -> None:
+        """Normalize the durations and check every parameter.
+
+        Raises:
+            ConfigError: If the count is not an int in
+                ``[2, MAX_RESOLVED_WINDOWS]``, if a bound or the grain is
+                not a strictly positive duration, if the minimum exceeds
+                the maximum, or if ``rounding``/``dedup`` are not enum
+                members.
+
+        """
+        object.__setattr__(self, "count", _validated_count(self.count))
+        object.__setattr__(self, "minimum", validate_window_duration(self.minimum))
+        object.__setattr__(self, "maximum", validate_window_duration(self.maximum))
+        object.__setattr__(self, "grain", validate_cadence(self.grain))
+        _require_ordered_bounds(self.minimum, self.maximum)
+        _require_rules(self.rounding, self.dedup)
+
+    @property
+    def limiting_ratio(self) -> float:
+        """The constant ratio between neighbouring points of this ladder.
+
+        A ladder of ``count`` points has ``count - 1`` steps, so the
+        ratio is ``(maximum / minimum) ** (1 / (count - 1))`` -- the
+        number that, raised to the step count, spans the bounds. Equal
+        bounds give exactly 1.0.
+        """
+        with localcontext() as context:
+            context.prec = _DECIMAL_DIGITS
+            span = _log_span(self.minimum, self.maximum)
+            return float((span / (self.count - 1)).exp())
+
+
+# What a schedule's generator parameters may be. A discriminated union
+# rather than one class with a nullable field per generator: each kind
+# then validates and serializes only the parameters it actually has, and
+# a spec that names a coefficient it does not use is unrepresentable.
+GeneratorSpec = MetallicRecurrenceSpec | LogSpacedSpec
+
+
+def _log_span(minimum: Duration, maximum: Duration) -> Decimal:
+    """Return ``ln(maximum / minimum)``, at the caller's decimal precision."""
+    return (Decimal(maximum.total_seconds) / Decimal(minimum.total_seconds)).ln()
 
 
 def _require_rules(rounding: RoundingRule, dedup: DedupRule) -> None:
@@ -340,7 +460,7 @@ class WindowSchedule:
 
     """
 
-    spec: MetallicRecurrenceSpec
+    spec: GeneratorSpec
     windows: tuple[Duration, ...]
 
     def __post_init__(self) -> None:
@@ -462,7 +582,7 @@ def _resolve_windows(
             raise ConfigError(
                 f"A generated duration of {float(value)}s quantizes to 0s at a "
                 f"{grain} grain; every scheduled window must be strictly "
-                "positive, so choose a finer grain or a larger seed."
+                "positive, so choose a finer grain or longer durations."
             )
         if minimum_seconds <= seconds <= maximum_seconds and seconds not in kept:
             kept.append(seconds)
@@ -575,5 +695,93 @@ def metallic_recurrence(  # noqa: PLR0913 - one keyword per recorded parameter
         "Resolved a metallic schedule of {} window(s) from a {} seed.",
         len(windows),
         spec.seed,
+    )
+    return WindowSchedule(spec=spec, windows=windows)
+
+
+def _log_spaced_terms(spec: LogSpacedSpec) -> list[Fraction]:
+    """Place the log-spaced points between the bounds, in exact rationals.
+
+    The two endpoints are the caller's bounds themselves, not the
+    logarithm round trip of them: ``exp(ln(x))`` is a hair away from
+    ``x``, and a schedule whose last window is a hair under the maximum
+    the caller named would be a puzzle with no benefit.
+
+    Args:
+        spec: The validated ladder parameters.
+
+    Returns:
+        The points in seconds, ascending, endpoints included.
+
+    """
+    minimum_seconds = spec.minimum.total_seconds
+    with localcontext() as context:
+        context.prec = _DECIMAL_DIGITS
+        span = _log_span(spec.minimum, spec.maximum)
+        low = Decimal(minimum_seconds)
+        steps = spec.count - 1
+        interior = [
+            Fraction(low * (span * step / steps).exp()) for step in range(1, steps)
+        ]
+    return [
+        Fraction(minimum_seconds),
+        *interior,
+        Fraction(spec.maximum.total_seconds),
+    ]
+
+
+def log_spaced(
+    *,
+    count: int,
+    minimum: Duration | str,
+    maximum: Duration | str,
+    grain: Duration | str,
+    rounding: RoundingRule = RoundingRule.NEAREST_TIES_AWAY,
+) -> WindowSchedule:
+    """Resolve a schedule of log-spaced durations between two bounds.
+
+    ``count`` points are placed so that the ratio between neighbours is
+    constant, with both endpoints included, and the result is quantized,
+    bounded, and deduplicated by the same machinery every other
+    generator here uses.
+
+    Args:
+        count: How many points to place, endpoints included. At least
+            two.
+        minimum: The first point, and the lower bound.
+        maximum: The last point, and the upper bound.
+        grain: The quantization grain.
+        rounding: The tie rule for quantization. Defaults to
+            :attr:`RoundingRule.NEAREST_TIES_AWAY`.
+
+    Returns:
+        The resolved schedule, carrying both its windows and the
+        parameters that produced them. It may name fewer windows than
+        ``count`` asked for: neighbouring points that land on the same
+        grain multiple are deduplicated.
+
+    Raises:
+        ConfigError: If any parameter is invalid, if a point quantizes
+            to nothing, or if the bounds leave no windows.
+
+    """
+    spec = LogSpacedSpec(
+        count=count,
+        minimum=validate_window_duration(minimum),
+        maximum=validate_window_duration(maximum),
+        grain=validate_cadence(grain),
+        rounding=rounding,
+    )
+    windows = _resolve_windows(
+        _log_spaced_terms(spec),
+        grain=spec.grain,
+        rounding=spec.rounding,
+        minimum=spec.minimum,
+        maximum=spec.maximum,
+    )
+    logger.debug(
+        "Resolved a log-spaced schedule of {} window(s) from {} point(s).",
+        len(windows),
+        spec.count,
     )
     return WindowSchedule(spec=spec, windows=windows)
