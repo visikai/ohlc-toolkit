@@ -23,6 +23,7 @@ from ohlc_toolkit.windows import ExplicitRange, compute_windows
 from ohlc_toolkit.windows.quality import (
     GateMode,
     QualityMode,
+    QualityPolicyResult,
     QualityReport,
     WindowCoverageError,
     WindowQualityPolicy,
@@ -269,8 +270,8 @@ class TestPassThrough:
         result = apply_quality_policy(
             frame, WindowQualityPolicy(mode=QualityMode.PASS_THROUGH), window=_WINDOW
         )
-        assert isinstance(result, pl.DataFrame)
-        assert_frame_equal(result, frame, check_exact=True)
+        assert isinstance(result, QualityPolicyResult)
+        assert_frame_equal(result.frame, frame, check_exact=True)
 
     def test_does_not_mutate_the_input(self) -> None:
         """The input frame is byte-for-byte the same after the call."""
@@ -287,8 +288,8 @@ class TestPassThrough:
         result = apply_quality_policy(
             frame, WindowQualityPolicy(mode=QualityMode.PASS_THROUGH), window=_WINDOW
         )
-        assert isinstance(result, pl.DataFrame)
-        assert result.height == 0
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.height == 0
 
 
 class TestFilter:
@@ -318,8 +319,8 @@ class TestFilter:
             window=_WINDOW,
         )
 
-        assert isinstance(result, pl.DataFrame)
-        assert result.get_column("close_time").to_list() == expected_close_times
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.get_column("close_time").to_list() == expected_close_times
 
     def test_returns_a_new_frame_and_does_not_mutate_the_input(self) -> None:
         """Filtering never touches the frame it was given."""
@@ -331,7 +332,7 @@ class TestFilter:
             window=_WINDOW,
         )
         assert_frame_equal(frame, before, check_exact=True)
-        assert result is not frame
+        assert result.frame is not frame
 
     def test_row_order_is_preserved(self) -> None:
         """Kept rows keep their original relative order."""
@@ -341,8 +342,8 @@ class TestFilter:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.5),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
-        close_times = result.get_column("close_time").to_list()
+        assert isinstance(result, QualityPolicyResult)
+        close_times = result.frame.get_column("close_time").to_list()
         assert close_times == sorted(close_times)
 
     def test_ohlc_values_are_never_altered(self) -> None:
@@ -353,8 +354,8 @@ class TestFilter:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.5),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
-        _assert_ohlcv_untouched(frame, result)
+        assert isinstance(result, QualityPolicyResult)
+        _assert_ohlcv_untouched(frame, result.frame)
 
     def test_min_coverage_zero_keeps_every_row_including_zero_coverage(self) -> None:
         """min_coverage=0 admits even a window with no source candles."""
@@ -367,8 +368,8 @@ class TestFilter:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.0),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
-        assert result.height == frame.height
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.height == frame.height
 
     def test_min_coverage_one_keeps_only_fully_covered_rows(self) -> None:
         """min_coverage=1 is the full-coverage requirement."""
@@ -379,12 +380,12 @@ class TestFilter:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
+        assert isinstance(result, QualityPolicyResult)
         assert (
-            result.get_column("coverage_seconds").to_list()
-            == [window_seconds] * result.height
+            result.frame.get_column("coverage_seconds").to_list()
+            == [window_seconds] * result.frame.height
         )
-        assert (result.get_column("coverage_seconds") < window_seconds).sum() == 0
+        assert (result.frame.get_column("coverage_seconds") < window_seconds).sum() == 0
 
     def test_fractional_boundary_is_pinned(self) -> None:
         """A row exactly at 0.9 * W is kept; one src_count short is dropped.
@@ -403,9 +404,9 @@ class TestFilter:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.9),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
+        assert isinstance(result, QualityPolicyResult)
 
-        kept_close_times = set(result.get_column("close_time").to_list())
+        kept_close_times = set(result.frame.get_column("close_time").to_list())
         for close_time, src_count in zip(
             frame.get_column("close_time").to_list(),
             frame.get_column("src_count").to_list(),
@@ -424,8 +425,8 @@ class TestFilter:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.5),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
-        assert result.height == 0
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.height == 0
 
 
 class TestGateStrict:
@@ -439,8 +440,8 @@ class TestGateStrict:
             WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
-        assert_frame_equal(result, frame, check_exact=True)
+        assert isinstance(result, QualityPolicyResult)
+        assert_frame_equal(result.frame, frame, check_exact=True)
 
     def test_a_violation_raises_an_error_carrying_the_whole_report(self) -> None:
         """Strict mode attaches the findings, so no caller has to parse a message."""
@@ -547,8 +548,8 @@ class TestGateStrict:
             WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
-        assert result.height == 0
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.height == 0
 
 
 class TestGateReport:
@@ -566,12 +567,13 @@ class TestGateReport:
             window=_WINDOW,
         )
 
-        assert isinstance(result, QualityReport)
-        assert result.passed is False
-        assert result.offending_count == offenders.height
-        assert result.rows_checked == frame.height
+        assert isinstance(result, QualityPolicyResult)
+        assert result.report.passed is False
+        assert result.report.offending_count == offenders.height
+        assert result.report.rows_checked == frame.height
         assert (
-            result.first_offending_close_time == offenders.get_column("close_time")[0]
+            result.report.first_offending_close_time
+            == offenders.get_column("close_time")[0]
         )
 
     def test_a_clean_frame_reports_passed_true(self) -> None:
@@ -582,10 +584,10 @@ class TestGateReport:
             WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.REPORT),
             window=_WINDOW,
         )
-        assert isinstance(result, QualityReport)
-        assert result.passed is True
-        assert result.offending_count == 0
-        assert result.first_offending_close_time is None
+        assert isinstance(result, QualityPolicyResult)
+        assert result.report.passed is True
+        assert result.report.offending_count == 0
+        assert result.report.first_offending_close_time is None
 
     def test_does_not_mutate_the_input(self) -> None:
         """Report mode is read-only over the frame it was given."""
@@ -606,9 +608,88 @@ class TestGateReport:
             WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.REPORT),
             window=_WINDOW,
         )
-        assert isinstance(result, QualityReport)
-        assert result.passed is True
-        assert result.rows_checked == 0
+        assert isinstance(result, QualityPolicyResult)
+        assert result.report.passed is True
+        assert result.report.rows_checked == 0
+
+
+class TestNamedResult:
+    """Every non-raising path returns the same pair: the frame and the report."""
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            WindowQualityPolicy(mode=QualityMode.PASS_THROUGH),
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.5),
+            WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.REPORT),
+            WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
+        ],
+        ids=["pass_through", "filter", "gate_report", "gate_strict"],
+    )
+    def test_every_mode_returns_the_same_type(
+        self, policy: WindowQualityPolicy
+    ) -> None:
+        """No caller has to discriminate a return value by isinstance."""
+        frame = _full_grid_frame()  # clean, so even a strict gate returns
+        result = apply_quality_policy(frame, policy, window=_WINDOW)
+
+        assert type(result) is QualityPolicyResult
+        assert isinstance(result.frame, pl.DataFrame)
+        assert isinstance(result.report, QualityReport)
+
+    def test_report_mode_no_longer_loses_the_frame(self) -> None:
+        """The findings and the data they describe travel together."""
+        frame = _ramping_coverage_frame()
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.REPORT),
+            window=_WINDOW,
+        )
+        assert_frame_equal(result.frame, frame, check_exact=True)
+        assert result.report.passed is False
+
+    def test_a_filter_result_accounts_for_exactly_the_rows_it_dropped(self) -> None:
+        """The report and the returned frame cannot disagree about the drop."""
+        frame = _ramping_coverage_frame()
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=0.9),
+            window=_WINDOW,
+        )
+
+        report = result.report
+        assert report.offending_count > 0, "scenario must drop something"
+        assert report.rows_checked == frame.height
+        assert result.frame.height == report.rows_checked - report.offending_count
+
+    def test_pass_through_records_what_it_declined_to_act_on(self) -> None:
+        """A recorded no-op is still a recorded measurement of the frame."""
+        frame = _ramping_coverage_frame()
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.PASS_THROUGH, min_coverage=0.9),
+            window=_WINDOW,
+        )
+
+        assert_frame_equal(result.frame, frame, check_exact=True)
+        assert result.report.rows_checked == frame.height
+        assert result.report.threshold_seconds == 90  # noqa: PLR2004 - 0.9 * 100s
+        assert result.report.offending_count > 0
+
+    def test_the_result_is_frozen(self) -> None:
+        """A returned result is a record of what happened, not a mutable box."""
+        result = apply_quality_policy(
+            _full_grid_frame(),
+            WindowQualityPolicy(mode=QualityMode.PASS_THROUGH),
+            window=_WINDOW,
+        )
+        with pytest.raises(AttributeError):
+            result.frame = _full_grid_frame()  # type: ignore[misc]
+
+    def test_the_result_is_exported_from_the_windows_namespace(self) -> None:
+        """Callers name the return type the same way they name the policy."""
+        assert windows_namespace.QualityPolicyResult is QualityPolicyResult
+        assert "QualityPolicyResult" in windows_namespace.__all__
 
 
 class TestBoundaryConditions:
@@ -646,8 +727,8 @@ class TestBoundaryConditions:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
             window=_WINDOW,
         )
-        assert isinstance(result, pl.DataFrame)
-        assert result.height == frame.height
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.height == frame.height
 
     def test_window_is_coerced_from_a_string_like_other_public_entry_points(
         self,
@@ -659,7 +740,7 @@ class TestBoundaryConditions:
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
             window="1m40s",
         )
-        assert isinstance(result, pl.DataFrame)
+        assert isinstance(result, QualityPolicyResult)
 
     def test_an_invalid_window_string_is_refused(self) -> None:
         """A malformed duration string is rejected at the boundary."""
@@ -725,8 +806,8 @@ class TestExactThreshold:
             window=f"{window_seconds}s",
         )
 
-        assert isinstance(result, pl.DataFrame)
-        assert result.get_column("coverage_seconds").to_list() == [
+        assert isinstance(result, QualityPolicyResult)
+        assert result.frame.get_column("coverage_seconds").to_list() == [
             threshold_seconds,
             window_seconds,
         ]
@@ -752,7 +833,7 @@ class TestExactThreshold:
             window=f"{window_seconds}s",
         )
 
-        assert isinstance(result, pl.DataFrame)
+        assert isinstance(result, QualityPolicyResult)
 
     @pytest.mark.parametrize(
         ("min_coverage", "window_seconds", "threshold_seconds"),
@@ -812,9 +893,9 @@ def test_filter_keeps_exactly_the_rows_meeting_the_threshold(
         window=f"{window_seconds}s",
     )
 
-    assert isinstance(result, pl.DataFrame)
+    assert isinstance(result, QualityPolicyResult)
     expected = [c for c in coverages if c >= threshold]
-    assert result.get_column("coverage_seconds").to_list() == expected
+    assert result.frame.get_column("coverage_seconds").to_list() == expected
 
 
 if __name__ == "__main__":
