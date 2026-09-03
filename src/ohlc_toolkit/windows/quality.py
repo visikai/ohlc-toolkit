@@ -119,9 +119,11 @@ from ohlc_toolkit.temporal import (
 logger = get_logger(__name__)
 
 # The only columns this step reads, and therefore the only ones it
-# requires. Requiring them up front, rather than letting a missing
-# column surface later as a bare polars ColumnNotFoundError, keeps the
-# failure at this module's own boundary and in this module's own words.
+# requires. Requiring them up front -- present, and `coverage_seconds`
+# as Int64 specifically -- rather than letting a missing column surface
+# later as a bare polars ColumnNotFoundError or a narrow integer width
+# as a bare OverflowError, keeps the failure at this module's own
+# boundary and in this module's own words.
 #
 # `src_count` is deliberately not among them. It was required and never
 # read: a requirement that refuses a frame for lacking something no
@@ -437,18 +439,23 @@ class QualityPolicyResult:
 def _require_quality_columns(frame: pl.DataFrame) -> None:
     """Check that the frame carries every column this step reads, in the right kind.
 
-    ``coverage_seconds`` must be an integer column. That is what the
-    engine emits -- a whole number of seconds, never accumulated -- and
-    the threshold comparison relies on it: an exact rational threshold
-    can be compared against a whole second exactly, whereas a fractional
-    coverage would have no exact answer to give. Refusing such a column
-    here says so, rather than quietly answering a slightly different
-    question.
+    ``coverage_seconds`` must be an ``Int64`` column -- exactly the type
+    the engine emits and the schema declares, not merely any integer
+    width. The threshold comparison relies on the integer part: an exact
+    rational threshold can be compared against a whole second exactly,
+    whereas a fractional coverage would have no exact answer to give.
+    The width matters separately: a narrower column overflows inside
+    polars when compared against a large whole-second minimum (``Int8``
+    against a one-hour window), and ``UInt64`` cannot be safely widened
+    -- a strict cast raises near the top of its range and a lenient one
+    yields a null, which this gate exists to refuse. Refusing every
+    other width here keeps both failures at this module's boundary and
+    in this module's words.
 
     Raises:
         ConfigError: If ``close_time`` or ``coverage_seconds`` is absent
-            from ``frame``, or if ``coverage_seconds`` is not an integer
-            column.
+            from ``frame``, or if ``coverage_seconds`` is not an
+            ``Int64`` column.
 
     """
     missing = [name for name in _REQUIRED_COLUMNS if name not in frame.columns]
@@ -460,10 +467,10 @@ def _require_quality_columns(frame: pl.DataFrame) -> None:
         )
 
     coverage_dtype = frame.schema["coverage_seconds"]
-    if not coverage_dtype.is_integer():
-        logger.warning("Rejecting non-integer coverage_seconds: {}", coverage_dtype)
+    if coverage_dtype != pl.Int64:
+        logger.warning("Rejecting non-Int64 coverage_seconds: {}", coverage_dtype)
         raise ConfigError(
-            "coverage_seconds must be an integer count of whole seconds, got "
+            "coverage_seconds must be an Int64 count of whole seconds, got "
             f"{coverage_dtype}; apply this policy to an engine-produced window "
             "frame."
         )
@@ -604,7 +611,7 @@ def apply_quality_policy(
 
     Raises:
         ConfigError: If ``frame`` is missing a required column, if
-            ``coverage_seconds`` is not an integer column, or if
+            ``coverage_seconds`` is not an ``Int64`` column, or if
             ``window`` cannot be coerced to a
             :class:`~ohlc_toolkit.temporal.Duration` or coerces to the
             zero duration. A zero window is refused for the same reason
