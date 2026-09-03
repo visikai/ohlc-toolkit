@@ -27,7 +27,9 @@ from ohlc_toolkit.returns import (
 from ohlc_toolkit.temporal import Duration
 from tests.test_returns.factories import (
     CADENCE,
+    CADENCE_SECONDS,
     GAP_FREE_OFFSETS,
+    GAPPED_CLOSES,
     GAPPED_OFFSETS,
     TIME_BASE,
     gap_free_frame,
@@ -99,12 +101,35 @@ class TestForwardSimpleReturns:
         assert _values(result, column) == _GAPPED_FORWARD_2M
 
     def test_a_shift_by_rows_would_have_disagreed(self) -> None:
-        """Guard the discriminator: the two answers must actually differ."""
-        assert _GAPPED_ROW_SHIFT_2M != _GAPPED_FORWARD_2M
-        assert _GAPPED_ROW_SHIFT_2M[1] is not None
-        assert _GAPPED_FORWARD_2M[1] is None
-        assert _GAPPED_ROW_SHIFT_2M[2] == -0.6875  # noqa: PLR2004 - shift, not time
-        assert _GAPPED_FORWARD_2M[2] == -0.75  # noqa: PLR2004 - time, not shift
+        """Guard the discriminator: the gap is what separates the two lookups.
+
+        Both answers are DERIVED here from the fixture itself -- the
+        row-shift one by shifting ``horizon // cadence`` rows forward,
+        the defect this module replaces, and the time-based one from a
+        dict of the fixture's own closes. If the fixture ever stopped
+        separating them, the two derivations would agree and this test
+        would fail loudly, instead of two stale literals continuing to
+        agree with themselves.
+        """
+        horizon_seconds = 120
+        rows = horizon_seconds // CADENCE_SECONDS
+        row_shifted = [
+            None
+            if index + rows >= len(GAPPED_CLOSES)
+            else (GAPPED_CLOSES[index + rows] - close) / close
+            for index, close in enumerate(GAPPED_CLOSES)
+        ]
+        close_by_offset = dict(zip(GAPPED_OFFSETS, GAPPED_CLOSES, strict=True))
+        time_based = [
+            (close_by_offset[offset + horizon_seconds] - close) / close
+            if (offset + horizon_seconds) in close_by_offset
+            else None
+            for offset, close in zip(GAPPED_OFFSETS, GAPPED_CLOSES, strict=True)
+        ]
+
+        assert time_based == _GAPPED_FORWARD_2M
+        assert row_shifted == _GAPPED_ROW_SHIFT_2M
+        assert row_shifted != time_based
 
     def test_one_cadence_horizon_over_a_gap_free_frame(self) -> None:
         """With every tick present, only the last row has nothing ahead of it."""
