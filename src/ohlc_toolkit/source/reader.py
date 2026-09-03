@@ -8,6 +8,7 @@ is on disk is what comes back, so validation (see
 provider published it.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Literal, overload
 
@@ -53,18 +54,24 @@ class SourceReadResult:
 
 @overload
 def read_source_csv(
-    path: str, profile: SourceProfile, *, mode: Literal[ValidationMode.STRICT]
+    path: str | os.PathLike[str],
+    profile: SourceProfile,
+    *,
+    mode: Literal[ValidationMode.STRICT],
 ) -> pl.DataFrame: ...
 
 
 @overload
 def read_source_csv(
-    path: str, profile: SourceProfile, *, mode: Literal[ValidationMode.REPORT]
+    path: str | os.PathLike[str],
+    profile: SourceProfile,
+    *,
+    mode: Literal[ValidationMode.REPORT],
 ) -> SourceReadResult: ...
 
 
 def read_source_csv(
-    path: str, profile: SourceProfile, *, mode: ValidationMode
+    path: str | os.PathLike[str], profile: SourceProfile, *, mode: ValidationMode
 ) -> pl.DataFrame | SourceReadResult:
     """Read a raw source CSV (plain or gzipped) and validate it.
 
@@ -88,8 +95,8 @@ def read_source_csv(
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
-        DataValidationError: In strict mode, when validation produces one
-            or more findings.
+        SourceValidationError: In strict mode, when validation produces
+            one or more findings.
 
     """
     frame = _read_raw_frame(path, profile)
@@ -102,14 +109,18 @@ def read_source_csv(
     return SourceReadResult(frame=frame, report=report)
 
 
-def _read_raw_frame(path: str, profile: SourceProfile) -> pl.DataFrame:
+def _read_raw_frame(
+    path: str | os.PathLike[str], profile: SourceProfile
+) -> pl.DataFrame:
     """Read a raw CSV with dtypes pinned by the profile's raw schema."""
     schema_overrides = {
         name: _COLUMN_KIND_DTYPES[kind] for name, kind in profile.raw_schema.items()
     }
     logger.debug("Reading source frame {!r} for profile {!r}.", path, profile.name)
     try:
-        return pl.read_csv(path, schema_overrides=schema_overrides)
+        # os.fspath() normalizes any PathLike (not just pathlib.Path) to
+        # the str/bytes union polars' read_csv is typed to accept.
+        return pl.read_csv(os.fspath(path), schema_overrides=schema_overrides)
     except FileNotFoundError:
         logger.error("Source file not found: {}", path)
         raise

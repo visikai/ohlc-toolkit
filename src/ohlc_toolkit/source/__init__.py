@@ -14,6 +14,7 @@ from ohlc_toolkit.source.reader import SourceReadResult, read_source_csv
 from ohlc_toolkit.source.validation import (
     Finding,
     FindingKind,
+    SourceValidationError,
     ValidationMode,
     ValidationReport,
     validate_source_frame,
@@ -27,6 +28,7 @@ __all__ = [
     "FindingKind",
     "SourceProfile",
     "SourceReadResult",
+    "SourceValidationError",
     "ValidationMode",
     "ValidationReport",
     "read_source_csv",
