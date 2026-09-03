@@ -29,6 +29,17 @@ _ALLOWED = ["15m", "1m", "5m", "1h", "1m"]
 _SOURCE_CADENCE = "1m"
 
 
+def _schedule_windows() -> tuple[Duration, ...]:
+    """Resolve a window schedule whose smallest scale a rule can still divide.
+
+    Seeded at 5m rather than at the source cadence, so that W/K stays at
+    or above the finest allowed cadence for every window in it.
+    """
+    return metallic_recurrence(
+        coefficient=2.0, seed="5m", grain="5m", maximum="1d"
+    ).windows
+
+
 def _texts(rule: CadenceRule) -> list[tuple[str, str]]:
     """Render resolved pairs as compact duration strings, for readable asserts."""
     return [(str(pair.window), str(pair.emit_every)) for pair in rule.pairs]
@@ -96,31 +107,50 @@ class TestWOverK:
 
     def test_the_windows_of_a_schedule_can_be_fed_straight_in(self) -> None:
         """A resolved schedule's windows are the intended input to a rule."""
-        schedule = metallic_recurrence(
-            coefficient=2.0, seed="1m", grain="1m", maximum="1d"
-        )
         rule = w_over_k(
-            schedule.windows,
+            _schedule_windows(),
             divisor=4,
             allowed=_ALLOWED,
             source_cadence=_SOURCE_CADENCE,
         )
-        assert [pair.window for pair in rule.pairs] == list(schedule.windows)
+        assert [pair.window for pair in rule.pairs] == list(_schedule_windows())
 
     def test_every_resolved_cadence_is_at_least_the_source_cadence(self) -> None:
-        """The clamp holds across a whole schedule, not just the small end."""
+        """The clamp holds across a whole schedule, not just at its small end.
+
+        The allowed set here reaches below the source cadence, so the
+        smallest window's W/K really does select a sub-cadence member --
+        and every resolved cadence still comes back at or above the
+        source cadence.
+        """
+        rule = w_over_k(
+            _schedule_windows(),
+            divisor=8,
+            allowed=["10s", "30s", *_ALLOWED],
+            source_cadence=_SOURCE_CADENCE,
+        )
+        source_cadence = Duration.parse(_SOURCE_CADENCE)
+        assert all(pair.emit_every >= source_cadence for pair in rule.pairs)
+        assert rule.pairs[0].emit_every == source_cadence
+
+    def test_a_window_too_small_for_the_divisor_is_refused(self) -> None:
+        """A schedule reaching below K times the finest allowed cadence refuses.
+
+        This is the shape the refusal takes in practice: a metallic
+        schedule seeded at the source cadence starts at 1m, and 1m/4 is
+        below every member of a minute-and-up allowed set, so the whole
+        rule is refused rather than quietly dropping that window.
+        """
         schedule = metallic_recurrence(
             coefficient=2.0, seed="1m", grain="1m", maximum="1d"
         )
-        rule = w_over_k(
-            schedule.windows,
-            divisor=8,
-            allowed=_ALLOWED,
-            source_cadence=_SOURCE_CADENCE,
-        )
-        assert all(
-            pair.emit_every >= Duration.parse(_SOURCE_CADENCE) for pair in rule.pairs
-        )
+        with pytest.raises(ConfigError, match="allowed"):
+            w_over_k(
+                schedule.windows,
+                divisor=4,
+                allowed=_ALLOWED,
+                source_cadence=_SOURCE_CADENCE,
+            )
 
     def test_the_parameters_are_recorded(self) -> None:
         """The divisor, the allowed set, and the source cadence are the identity."""
@@ -262,6 +292,11 @@ class TestWOverKRefusals:
                 allowed=allowed,
                 source_cadence=source_cadence,
             )
+
+    def test_a_bare_string_is_not_an_allowed_set(self) -> None:
+        """The allowed set is a list of durations, not one duration."""
+        with pytest.raises(ConfigError, match="allowed"):
+            w_over_k(["1h"], divisor=4, allowed="15m", source_cadence=_SOURCE_CADENCE)
 
     def test_a_bare_string_is_not_a_list_of_windows(self) -> None:
         """A string is iterable, and iterating it would be nonsense."""
@@ -437,6 +472,25 @@ class TestCadenceIdentity:
         payload = explicit_pairs([("1h", "15m")]).to_dict()
         payload["pairs"] = [{"window": "1h", "emit_every": "30m"}]
         with pytest.raises(ConfigError, match="schedule_id"):
+            CadenceRule.from_dict(payload)
+
+    def test_a_stored_allowed_set_that_is_not_a_list_is_refused(self) -> None:
+        """A payload's allowed set is read as the list it was written as."""
+        rule = w_over_k(["1h"], divisor=4, allowed=["15m"], source_cadence="1m")
+        payload = rule.to_dict()
+        payload["parameters"] = {
+            "divisor": 4,
+            "allowed": "15m",
+            "source_cadence": "1m",
+        }
+        with pytest.raises(ConfigError, match="allowed"):
+            CadenceRule.from_dict(payload)
+
+    def test_stored_pairs_that_are_not_a_list_are_refused(self) -> None:
+        """So is the mapping itself."""
+        payload = explicit_pairs([("1h", "15m")]).to_dict()
+        payload["pairs"] = {"window": "1h", "emit_every": "15m"}
+        with pytest.raises(ConfigError, match="pairs"):
             CadenceRule.from_dict(payload)
 
     def test_a_pair_that_is_not_an_object_is_refused(self) -> None:

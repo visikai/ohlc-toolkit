@@ -687,7 +687,7 @@ class WindowSchedule:
                 more windows than :data:`MAX_RESOLVED_WINDOWS`.
 
         """
-        _require_resolved_windows(self.windows)
+        require_resolved_windows(self.windows)
 
     @property
     def schedule_id(self) -> str:
@@ -763,8 +763,12 @@ class WindowSchedule:
         return schedule
 
 
-def _require_resolved_windows(windows: tuple[Duration, ...]) -> None:
-    """Check a resolved window list, whichever generator produced it.
+def require_resolved_windows(windows: tuple[Duration, ...]) -> None:
+    """Check a resolved window list, wherever it came from.
+
+    Shared with :mod:`ohlc_toolkit.schedules.cadence`, whose rules map
+    the same window lists: one statement of what a list of window
+    scales may be, rather than two that could drift.
 
     Raises:
         ConfigError: If the list is empty, holds anything but a strictly
