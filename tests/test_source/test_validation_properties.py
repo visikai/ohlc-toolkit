@@ -20,10 +20,11 @@ from tests.test_source.factories import build_clean_frame
 _CADENCE_CHOICES = (1, 5, 60, 300)
 
 
-def _profile_for(cadence_seconds: int) -> SourceProfile:
-    """Build a minimal profile for a given cadence, for property tests."""
+def _profile_for(cadence_seconds: int, phase_seconds: int = 0) -> SourceProfile:
+    """Build a minimal profile for a given cadence and declared phase."""
     return SourceProfile(
         name="property-test-source",
+        phase=Duration(phase_seconds),
         cadence=Duration(cadence_seconds),
         timestamp_column="timestamp",
         availability=Availability.CLOSE_TIME,
@@ -54,12 +55,14 @@ def _duplicate_row(frame: pl.DataFrame, index: int) -> pl.DataFrame:
 def test_random_complete_grids_always_validate_clean(
     cadence_seconds: int, start: int, length: int
 ) -> None:
-    """Any complete, evenly spaced grid validates clean, whatever its phase."""
+    """Any complete grid validates clean against its declared phase."""
     frame = build_clean_frame(
         start=start, cadence_seconds=cadence_seconds, length=length
     )
     report = validate_source_frame(
-        frame, _profile_for(cadence_seconds), mode=ValidationMode.REPORT
+        frame,
+        _profile_for(cadence_seconds, phase_seconds=start % cadence_seconds),
+        mode=ValidationMode.REPORT,
     )
     assert report.passed
 

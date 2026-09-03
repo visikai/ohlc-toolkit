@@ -155,5 +155,28 @@ class TestBitstampProfile(unittest.TestCase):
         self.assertEqual(bounds.get_column("close_time").to_list(), [1420070460])
 
 
+class TestSourceProfilePhase(unittest.TestCase):
+    """Test cases for the profile's declared cadence-grid phase."""
+
+    def test_phase_defaults_to_zero(self):
+        """A profile that declares no phase sits on the plain epoch grid."""
+        self.assertEqual(_make_profile().phase, Duration(0))
+
+    def test_phase_accepts_a_string_and_normalizes_to_duration(self):
+        """The constructor boundary accepts a compact duration string."""
+        self.assertEqual(_make_profile(phase="30s").phase, Duration(30))
+
+    def test_phase_must_be_smaller_than_the_cadence(self):
+        """A phase at or beyond the cadence is not a grid offset."""
+        for phase in ("1m", "2m"):
+            with self.subTest(phase=phase):
+                with self.assertRaises(ConfigError):
+                    _make_profile(phase=phase)
+
+    def test_bitstamp_profile_declares_the_zero_phase(self):
+        """The published minute grid sits on round minute boundaries."""
+        self.assertEqual(BITSTAMP_BTCUSD_1M.phase, Duration(0))
+
+
 if __name__ == "__main__":
     unittest.main()

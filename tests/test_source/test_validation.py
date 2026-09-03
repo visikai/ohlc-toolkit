@@ -101,11 +101,13 @@ class TestEmptyAndSingleRowFrames(unittest.TestCase):
         self.assertEqual(report.rows_checked, 1)
         self.assertTrue(report.passed)
 
-    def test_single_row_frame_defines_its_own_phase(self):
-        """A lone row has nothing to disagree with, whatever its residue."""
+    def test_single_row_off_the_declared_phase_is_reported(self):
+        """Even a lone row must lie on the profile's declared grid."""
         frame = build_clean_frame(start=37, cadence_seconds=_CADENCE_SECONDS, length=1)
         report = validate_source_frame(frame, _PROFILE, mode=ValidationMode.REPORT)
-        self.assertTrue(report.passed)
+        findings = _find(report, FindingKind.OFF_PHASE)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].count, 1)
 
 
 class TestSchemaValidationBothModes(unittest.TestCase):
@@ -202,11 +204,12 @@ class TestMonotonicityBothModes(unittest.TestCase):
 class TestOffPhaseBothModes(unittest.TestCase):
     """Test cases for the cadence-grid phase check.
 
-    The grid's phase is established by its first row: every other
-    timestamp must share the same residue modulo the cadence. Shifting one
-    interior row necessarily disturbs its neighbouring diffs too, so this
-    corruption is expected to also raise other findings; only the presence
-    of the phase finding itself is asserted here.
+    The grid's phase is DECLARED by the profile (default: zero), never
+    inferred from the data: a uniformly shifted grid is corruption, not a
+    new convention. Shifting one interior row necessarily disturbs its
+    neighbouring diffs too, so that corruption is expected to also raise
+    other findings; only the presence of the phase finding itself is
+    asserted here.
     """
 
     def setUp(self):
@@ -231,6 +234,31 @@ class TestOffPhaseBothModes(unittest.TestCase):
         """An off-phase row raises in strict mode."""
         with self.assertRaises(DataValidationError):
             validate_source_frame(self.off_phase, _PROFILE, mode=ValidationMode.STRICT)
+
+    def test_uniformly_shifted_grid_fails_the_declared_phase(self):
+        """A consistent but shifted grid is off-grid corruption, not a pass."""
+        clean = build_clean_frame(start=0, cadence_seconds=_CADENCE_SECONDS, length=5)
+        shifted = _set_timestamps(
+            clean, [t + 30 for t in clean.get_column("timestamp").to_list()]
+        )
+        report = validate_source_frame(shifted, _PROFILE, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.OFF_PHASE)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].count, 5)
+
+    def test_declared_nonzero_phase_accepts_a_matching_grid(self):
+        """A grid on a shifted schedule passes when the profile declares it."""
+        profile = SourceProfile(
+            name=_PROFILE.name,
+            timestamp_column=_PROFILE.timestamp_column,
+            availability=_PROFILE.availability,
+            raw_schema=dict(_PROFILE.raw_schema),
+            cadence="1m",
+            phase="30s",
+        )
+        frame = build_clean_frame(start=30, cadence_seconds=_CADENCE_SECONDS, length=5)
+        report = validate_source_frame(frame, profile, mode=ValidationMode.REPORT)
+        self.assertTrue(report.passed)
 
 
 class TestGapDetectionBothModes(unittest.TestCase):
