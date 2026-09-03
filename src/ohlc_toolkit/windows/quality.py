@@ -11,21 +11,28 @@ naming an offending row in a message. It never reads or alters ``open``,
 A :class:`WindowQualityPolicy` is a frozen, JSON-round-trippable identity
 -- a recipe can record it the same way it records a schedule -- and
 :func:`apply_quality_policy` is the single entry point that interprets
-one against a frame:
+one against a frame. Every mode that returns at all returns the same
+thing: a :class:`QualityPolicyResult` pairing the resulting frame with
+the :class:`QualityReport` measured over the input. One shape, in every
+mode, so no caller has to discriminate a return value by type, and no
+mode's findings are thrown away:
 
 - ``PASS_THROUGH`` returns the frame unchanged: still an explicit,
   recorded step, useful so a recipe can name "no quality policy" the same
-  way it names any other choice.
+  way it names any other choice. Its report still measures the frame, so
+  a recorded no-op records what it declined to act on.
 - ``FILTER`` drops rows whose ``coverage_seconds`` falls below the
   policy's threshold, returning a new frame. The input is never mutated,
-  row order is otherwise preserved, and no OHLCV value is touched.
+  row order is otherwise preserved, and no OHLCV value is touched. The
+  report accounts for exactly the rows dropped: both come from one mask,
+  so they cannot disagree.
 - ``GATE`` checks the same threshold without dropping anything. In
   ``GateMode.STRICT`` a violation logs and raises
   :class:`WindowCoverageError`, which carries the whole
-  :class:`QualityReport`; in ``GateMode.REPORT`` it always returns a
-  :class:`QualityReport` and never raises. This mirrors the strict/report
-  split in :mod:`ohlc_toolkit.source.validation`, applied to windows
-  instead of a raw source frame.
+  :class:`QualityReport`; in ``GateMode.REPORT`` it never raises. This
+  mirrors the strict/report split in
+  :mod:`ohlc_toolkit.source.validation`, applied to windows instead of a
+  raw source frame.
 
 Threshold rounding
 -------------------
@@ -296,7 +303,11 @@ def _validate_min_coverage(value: object) -> None:
 
 @dataclass(frozen=True)
 class QualityReport:
-    """The outcome of evaluating a ``GATE`` policy's coverage check.
+    """The outcome of measuring a frame against a policy's coverage threshold.
+
+    Produced in every mode, including the ones that do not act on it: a
+    ``PASS_THROUGH`` policy records what it declined to act on, and a
+    ``FILTER`` policy's report accounts for exactly the rows it dropped.
 
     Attributes:
         rows_checked: How many rows were present in the evaluated frame.
@@ -357,6 +368,33 @@ class WindowCoverageError(CoverageError):
         """
         super().__init__(message)
         self.report = report
+
+
+@dataclass(frozen=True)
+class QualityPolicyResult:
+    """A window frame paired with the quality report measured over its input.
+
+    Returned by :func:`apply_quality_policy` from every non-raising path,
+    so the frame and its (possibly failing) report travel together
+    instead of as a bare, order-ambiguous tuple -- and so no mode has to
+    be told apart from another by the type of what it returned. Mirrors
+    :class:`~ohlc_toolkit.source.reader.SourceReadResult`, which does the
+    same for a raw source frame and its validation report.
+
+    Attributes:
+        frame: The resulting frame: the input unchanged for
+            ``PASS_THROUGH`` and for a ``GATE`` that did not raise, or a
+            new row-subset for ``FILTER``.
+        report: The report measured over the INPUT frame, whatever mode
+            produced it. Its ``rows_checked`` is therefore the input's
+            height, not ``frame``'s, and for ``FILTER``
+            ``frame.height == report.rows_checked -
+            report.offending_count``.
+
+    """
+
+    frame: pl.DataFrame
+    report: QualityReport
 
 
 def _require_quality_columns(frame: pl.DataFrame) -> None:
@@ -432,17 +470,20 @@ def _least_passing_seconds(threshold_seconds: Fraction) -> int:
     return -(-threshold_seconds.numerator // threshold_seconds.denominator)
 
 
-def _filter_frame(frame: pl.DataFrame, minimum_seconds: int) -> pl.DataFrame:
-    """Return a new frame holding only rows at or above the threshold."""
-    return frame.filter(pl.col("coverage_seconds") >= minimum_seconds)
+def _offending_mask(frame: pl.DataFrame, minimum_seconds: int) -> pl.Series:
+    """Return the row mask of coverages below the threshold, without mutating.
+
+    Every mode decides from this one mask -- what ``FILTER`` drops is
+    what the report counts -- so the returned frame and the report it
+    travels with cannot disagree about which rows offended.
+    """
+    return frame.get_column("coverage_seconds") < minimum_seconds
 
 
-def _evaluate_gate(
-    frame: pl.DataFrame, threshold_seconds: Fraction, minimum_seconds: int
+def _build_report(
+    frame: pl.DataFrame, mask: pl.Series, threshold_seconds: Fraction
 ) -> QualityReport:
-    """Check every row's coverage against the threshold, without mutating."""
-    coverage = frame.get_column("coverage_seconds")
-    mask = coverage < minimum_seconds
+    """Summarize an offending-row mask into a bounded report."""
     offending_count = int(mask.sum())
 
     first_offending_close_time: int | None = None
@@ -465,7 +506,7 @@ def apply_quality_policy(
     policy: WindowQualityPolicy,
     *,
     window: Duration | str,
-) -> pl.DataFrame | QualityReport:
+) -> QualityPolicyResult:
     """Apply a window quality policy to an engine-produced window frame.
 
     Never mutates ``frame``. Never reads or alters ``open``, ``high``,
@@ -482,14 +523,13 @@ def apply_quality_policy(
             duration string.
 
     Returns:
-        For :attr:`QualityMode.PASS_THROUGH`: ``frame``, unchanged.
-        For :attr:`QualityMode.FILTER`: a new frame with every row whose
-        ``coverage_seconds`` falls below the threshold dropped, other
-        rows and their order preserved.
-        For :attr:`QualityMode.GATE` in :attr:`GateMode.STRICT`: ``frame``,
-        unchanged, when every row meets the threshold.
-        For :attr:`QualityMode.GATE` in :attr:`GateMode.REPORT`: the
-        :class:`QualityReport`, always.
+        A :class:`QualityPolicyResult` in every mode that returns at all,
+        pairing the resulting frame with the report measured over
+        ``frame``. Its ``.frame`` is ``frame`` itself for
+        :attr:`QualityMode.PASS_THROUGH` and for a :attr:`QualityMode.GATE`
+        that did not raise, and a new row-subset -- below-threshold rows
+        dropped, the rest in their original order -- for
+        :attr:`QualityMode.FILTER`.
 
     Raises:
         ConfigError: If ``frame`` is missing a required column, if
@@ -512,26 +552,26 @@ def apply_quality_policy(
     _require_quality_columns(frame)
     window_duration = coerce_duration(window)
 
-    if policy.mode is QualityMode.PASS_THROUGH:
-        logger.debug("Quality policy pass-through: {} row(s) unchanged.", frame.height)
-        return frame
-
     threshold_seconds = _threshold_seconds(
         policy.min_coverage, window_duration.total_seconds
     )
     minimum_seconds = _least_passing_seconds(threshold_seconds)
+    mask = _offending_mask(frame, minimum_seconds)
+    report = _build_report(frame, mask, threshold_seconds)
+
+    if policy.mode is QualityMode.PASS_THROUGH:
+        logger.debug("Quality policy pass-through: {} row(s) unchanged.", frame.height)
+        return QualityPolicyResult(frame=frame, report=report)
 
     if policy.mode is QualityMode.FILTER:
-        filtered = _filter_frame(frame, minimum_seconds)
+        filtered = frame.filter(~mask)
         logger.debug(
             "Quality policy filter: kept {}/{} row(s) at >= {}s coverage.",
             filtered.height,
             frame.height,
             minimum_seconds,
         )
-        return filtered
-
-    report = _evaluate_gate(frame, threshold_seconds, minimum_seconds)
+        return QualityPolicyResult(frame=filtered, report=report)
 
     if policy.gate_mode is GateMode.REPORT:
         if not report.passed:
@@ -541,7 +581,7 @@ def apply_quality_policy(
                 report.rows_checked,
                 minimum_seconds,
             )
-        return report
+        return QualityPolicyResult(frame=frame, report=report)
 
     if not report.passed:
         logger.error(
@@ -565,4 +605,4 @@ def apply_quality_policy(
         report.rows_checked,
         minimum_seconds,
     )
-    return frame
+    return QualityPolicyResult(frame=frame, report=report)
