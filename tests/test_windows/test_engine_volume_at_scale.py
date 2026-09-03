@@ -53,6 +53,7 @@ seed.
 
 import math
 import random
+import struct
 from dataclasses import dataclass
 
 import polars as pl
@@ -370,6 +371,108 @@ def test_the_engine_agrees_with_an_exact_sum_over_sampled_windows(
             assert abs(actual - exact) <= _VOLUME_RELATIVE_TOLERANCE * exact, (
                 f"window {position}: {actual!r} vs exact {exact!r}"
             )
+
+
+_LAYOUT_ROW_COUNT = 4097
+_LAYOUT_LARGE_VOLUME = 1.0
+_LAYOUT_RESIDUE_VOLUME = 1e-16
+_LAYOUT_CHUNK_ROWS = (7, 64, 999)
+_LAYOUT_WINDOW_MINUTES = (2048, _LAYOUT_ROW_COUNT)
+
+
+def _build_layout_grid() -> pl.DataFrame:
+    """Build a grid whose volumes make chunked summation observable.
+
+    One large volume followed by a long tail of values far below its last
+    representable bit. Adding the tail to the running total loses every
+    addend individually, but adding the tail to itself first does not, so
+    the total depends on how the addends were grouped -- which is exactly
+    what a physical chunk boundary decides.
+    """
+    row = pl.int_range(0, _LAYOUT_ROW_COUNT, dtype=pl.Int64)
+    volume = (
+        pl.when(row == 0)
+        .then(pl.lit(_LAYOUT_LARGE_VOLUME))
+        .otherwise(pl.lit(_LAYOUT_RESIDUE_VOLUME))
+        .cast(pl.Float64)
+    )
+    price = pl.lit(_PRICE_BASE).cast(pl.Float64)
+    return pl.select(
+        (_FIRST_OPEN + row * _MINUTE).alias("timestamp"),
+        price.alias("open"),
+        (price + 5.0).alias("high"),
+        (price - 5.0).alias("low"),
+        (price + 1.0).alias("close"),
+        volume.alias("volume"),
+    )
+
+
+def _carried_in_chunks(frame: pl.DataFrame, rows_per_chunk: int) -> pl.DataFrame:
+    """Return the same rows carried in fixed-size physical chunks."""
+    pieces = [
+        frame.slice(offset, rows_per_chunk)
+        for offset in range(0, frame.height, rows_per_chunk)
+    ]
+    return pl.concat(pieces, rechunk=False)
+
+
+def _volume_bit_patterns(frame: pl.DataFrame) -> list[bytes | None]:
+    """Return each volume as raw IEEE-754 bits, so ``-0.0 != 0.0``."""
+    return [
+        None if value is None else struct.pack(">d", value)
+        for value in frame.get_column("volume").to_list()
+    ]
+
+
+@pytest.mark.parametrize("window_minutes", _LAYOUT_WINDOW_MINUTES)
+@pytest.mark.parametrize("rows_per_chunk", _LAYOUT_CHUNK_ROWS)
+def test_volume_ignores_the_callers_chunk_layout(
+    window_minutes: int, rows_per_chunk: int
+) -> None:
+    """Identical candles must total identically however they are stored.
+
+    Polars sums a column chunk by chunk, so the same values carried in a
+    different number of physical chunks can total to a different float.
+    A caller does not choose that layout deliberately: reading the
+    published history yields hundreds of chunks, and concatenating or
+    stacking frames yields as many pieces as were joined. If the layout
+    reached the summation, ``volume`` would be a function of how the
+    frame was built rather than of the candles the window contains --
+    the same containment-only violation as a sliding sum, arriving
+    through a different door.
+
+    The engine forecloses that by rechunking once when it extracts the
+    candle columns. This test is what holds that line: it fails if the
+    rechunk is ever dropped as redundant.
+    """
+    grid = _build_layout_grid()
+    window = f"{window_minutes}m"
+
+    reference = compute_windows(
+        grid.rechunk(),
+        profile_for(_MINUTE),
+        window=window,
+        emit_every="1m",
+        materialization=MaterializationRule.SKIP_WARMUP,
+    )
+    assert reference.height >= 1
+
+    chunked = _carried_in_chunks(grid, rows_per_chunk)
+    assert chunked.n_chunks() > 1, "the layout under test must be chunked"
+
+    actual = compute_windows(
+        chunked,
+        profile_for(_MINUTE),
+        window=window,
+        emit_every="1m",
+        materialization=MaterializationRule.SKIP_WARMUP,
+    )
+
+    assert _volume_bit_patterns(actual) == _volume_bit_patterns(reference), (
+        f"volume changed when the same {_LAYOUT_ROW_COUNT} candles were "
+        f"carried in {chunked.n_chunks()} chunks instead of one"
+    )
+    assert actual.equals(reference)
 
 
 if __name__ == "__main__":
