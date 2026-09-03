@@ -14,14 +14,20 @@ integer arithmetic, so they are compared exactly, always. ``open``,
 of values that already exist in the input -- no arithmetic is performed
 on them at all -- so they are compared exactly too.
 
-``volume`` is the one sum. The oracle folds the included volumes left to
-right in the frame's own row order; the engine sums them with a
-vectorized rolling sum. Floating-point addition is not associative, so
-the two orders can differ in the last bits whenever a partial sum is not
-exactly representable. Every synthetic family draws volumes on a
-quarter-unit grid, where every partial sum IS exact, so those comparisons
-are exact as well. Only the real-data fixture needs a tolerance, and it
-is stated and justified at that test.
+``volume`` is the one sum, and the two implementations add the same
+addends in different orders: the oracle folds the included volumes left
+to right in the frame's own row order, one addend at a time, while the
+engine hands the window's contiguous slice to polars, which folds it in
+blocks. Both look only at the candles the window contains and neither
+carries a term in from the rows before them, so they can differ only in
+where the rounding lands.
+
+Where every partial sum is exactly representable they cannot differ at
+all. Every synthetic family draws volumes on a quarter-unit grid, which
+is exactly that case, so those comparisons stay exact. Real volumes are
+not on such a grid, so the real-data fixture is the one place a tolerance
+is needed -- and it is derived from the oracle's own fold where it is
+defined below, not picked to make a test pass.
 
 Error parity counts as equivalence
 ----------------------------------
@@ -49,7 +55,7 @@ from ohlc_toolkit.windows import (
     compute_windows,
 )
 from tests.test_windows.factories import frame_from_rows, profile_for
-from tests.test_windows.fixtures import load_real_slice
+from tests.test_windows.fixtures import REAL_SLICE_CADENCE_SECONDS, load_real_slice
 from tests.test_windows.synthetic import (
     FAMILY_NAMES,
     GOLDEN_CASES,
@@ -298,18 +304,32 @@ def test_an_explicit_range_over_an_empty_frame_still_emits_its_grid() -> None:
     assert_frame_equal(result, expected, check_exact=True, check_dtypes=True)
 
 
-# How far apart the two summation orders are allowed to land on real
-# volumes. A few parts in 1e13 is what float rounding actually produces
-# between a vectorized rolling sum and a fresh left fold over these
-# volumes; 1e-12 leaves an order of magnitude of headroom and still fails
-# long before any real aggregation mistake could hide inside it.
-_VOLUME_RELATIVE_TOLERANCE = 1e-12
-
 # Two representative schedules over the committed 14-day minute slice: one
 # short window emitted often, one schedule-scale window emitted hourly.
 # The oracle is quadratic, so the emit cadence is kept coarse enough that
 # running it over 20160 real candles stays a few seconds, not minutes.
 _REAL_SCHEDULES = (("15m", "15m"), ("2590m", "1h"))
+
+# The unit roundoff of binary64: half an ulp at 1.0, and the size of the
+# relative error one floating-point addition may introduce.
+_UNIT_ROUNDOFF = 2.0**-53
+
+# How far apart the two summations may land on real volumes. The gap
+# belongs to the ORACLE, not to the window rule: folding m non-negative
+# addends left to right in row order carries up to (m - 1) * _UNIT_ROUNDOFF
+# relative rounding, which is 2.9e-13 for the 2590-candle schedule above,
+# while the engine's block fold over the same slice stays within a few
+# units in the last place of math.fsum. 1e-12 covers that derived bound
+# with roughly threefold headroom.
+#
+# The measured disagreement over this fixture is far smaller: the
+# 15-candle schedule matches bit for bit on all 1344 rows, and the
+# 2590-candle schedule lands at most 3.9e-15 relative away. So the
+# tolerance is headroom against float addition and nothing else: it is
+# still some eleven orders of magnitude below the effect of dropping one
+# average-sized candle from a 2590-candle window, so no membership
+# mistake can hide inside it.
+_VOLUME_RELATIVE_TOLERANCE = 1e-12
 
 
 @pytest.mark.parametrize(("window", "emit_every"), _REAL_SCHEDULES)
@@ -319,13 +339,18 @@ def test_the_engine_agrees_with_the_oracle_on_the_real_slice(
     """Twenty thousand real candles, and the two implementations still agree.
 
     Every column but ``volume`` is compared exactly. ``volume`` is
-    compared with a relative tolerance of 1e-12 because real Bitstamp
+    compared with the tolerance derived above, because real Bitstamp
     volumes are not exactly representable in binary floating point: the
     oracle's left-to-right fold over the frame's row order and the
-    engine's vectorized rolling sum are both correct sums of the same
-    addends, and they differ only in the order the rounding happens. The
-    observed disagreement is a handful of parts in 1e15; the tolerance is
-    about float addition, not about the window being fuzzy.
+    engine's block fold over the window's own slice are sums of the same
+    addends and differ only in where the rounding lands.
+
+    Measured over this committed fixture, the 15-candle schedule agrees
+    bit for bit on all 1344 rows and the 2590-candle schedule disagrees by
+    at most 3.9e-15 relative -- two orders of magnitude inside the
+    tolerance, and nearly two inside the oracle's own derived rounding
+    bound. The tolerance is about float addition, not about the window
+    being fuzzy.
     """
     frame = load_real_slice()
     arguments = {
@@ -353,6 +378,22 @@ def test_the_engine_agrees_with_the_oracle_on_the_real_slice(
         rel_tol=_VOLUME_RELATIVE_TOLERANCE,
         abs_tol=0.0,
     )
+
+
+def test_the_volume_tolerance_covers_the_oracles_own_rounding() -> None:
+    """The tolerance is derived from the fold, not tuned until a test passed.
+
+    Written as an assertion rather than only as a comment so that widening
+    a schedule above -- a longer window means more addends means more
+    rounding -- cannot silently leave the tolerance too tight to hold.
+    """
+    longest_window_candles = max(
+        Duration.parse(window).total_seconds // REAL_SLICE_CADENCE_SECONDS
+        for window, _ in _REAL_SCHEDULES
+    )
+    oracle_fold_bound = (longest_window_candles - 1) * _UNIT_ROUNDOFF
+
+    assert _VOLUME_RELATIVE_TOLERANCE >= oracle_fold_bound
 
 
 if __name__ == "__main__":
