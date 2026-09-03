@@ -214,11 +214,13 @@ def test_every_row_matches_an_independent_recomputation(data: st.DataObject) -> 
 def test_only_candles_inside_both_boundaries_are_counted(
     data: st.DataObject,
 ) -> None:
-    """src_count counts exactly the candles passing BOTH boundary inequalities.
+    """src_count matches an independent recomputation of the two-sided rule.
 
-    The close-time test alone is not enough, and neither is the open-time
-    test alone: both single-sided counts are computed here, and the oracle
-    must match the two-sided one.
+    The candles counted here are selected by restating both boundary
+    inequalities against the raw rows directly, independently of the
+    oracle's own ``_included_candles``. If ``src_count`` ever drifted from
+    that independent count -- for example by counting a candle that only
+    passes one of the two inequalities -- this would catch it.
     """
     scenario = _draw_scenario(data)
     cadence = scenario.profile.cadence.total_seconds
@@ -233,9 +235,6 @@ def test_only_candles_inside_both_boundaries_are_counted(
             if row[0] >= open_time and row[0] + cadence <= close_time
         ]
         assert src_count == len(both_sides)
-        for row in both_sides:
-            assert row[0] >= open_time
-            assert row[0] + cadence <= close_time
 
 
 @_SETTINGS
@@ -289,7 +288,16 @@ def test_the_emitted_grid_is_total_and_uniformly_spaced(
 def test_coverage_seconds_is_the_exact_sum_of_included_durations(
     data: st.DataObject,
 ) -> None:
-    """Coverage is arithmetic, never an estimate, and never exceeds the window."""
+    """Coverage is arithmetic, never an estimate.
+
+    ``0 <= coverage`` holds unconditionally: a sum of non-negative
+    durations is never negative. The upper bound ``coverage <=
+    window_seconds`` holds only because this strategy (see
+    ``_draw_scenario``) draws candles on a single non-overlapping grid --
+    it is not a universal property of the oracle. Overlapping, invalid
+    input can push coverage past the window; that case is pinned
+    separately by a hand-computed golden, not by this strategy.
+    """
     scenario = _draw_scenario(data)
     cadence = scenario.profile.cadence.total_seconds
     result = _run(scenario)
@@ -300,7 +308,10 @@ def test_coverage_seconds_is_the_exact_sum_of_included_durations(
         included = _naive_included(scenario, tick)
         assert coverage == sum(cadence for _ in included)
         assert coverage == cadence * src_count
-        assert 0 <= coverage <= scenario.window_seconds
+        assert 0 <= coverage
+        # Holds for this strategy's non-overlapping input only -- see the
+        # docstring above.
+        assert coverage <= scenario.window_seconds
 
 
 @_SETTINGS

@@ -327,6 +327,81 @@ def test_candle_straddling_the_emit_time_is_excluded_whole() -> None:
     )
 
 
+def test_overlapping_candles_report_coverage_above_the_window_unclamped() -> None:
+    """coverage_seconds is the literal sum of included durations, never clamped.
+
+    Five candles, each declared 60s wide by the profile's cadence but
+    published only 45s apart -- overlapping input strict validation would
+    reject, deliberately used here the same way ``straddling_1m`` uses
+    off-grid rows in the synthetic goldens:
+
+    ==============  ==========  ========================================
+    open_time       close_time  (open_time + the 60s declared cadence)
+    ==============  ==========  ========================================
+    1700000280      1700000340
+    1700000325      1700000385
+    1700000370      1700000430
+    1700000415      1700000475
+    1700000460      1700000520
+    ==============  ==========  ========================================
+
+    The window is ``[1700000280, 1700000520)``, 240s wide. Every
+    ``open_time`` above is ``>= 1700000280`` and every ``close_time`` is
+    ``<= 1700000520``, so the inclusion rule -- which only ever includes
+    or excludes a candle whole, never splits one -- admits all five. By
+    hand: 5 candles x 60s each = 300s of summed duration, packed into a
+    240s window. 300 > 240 is not a bug to hide: a reference
+    implementation that clamped coverage to ``min(300, 240) == 240`` would
+    silently misreport how much of the window's duration the underlying
+    candles actually cover when the input overlaps itself. This test
+    exists to catch exactly that clamping mistake.
+
+    ``open`` comes from the earliest candle by ``open_time`` (100.0);
+    ``close`` from the latest (109.0); ``high``/``low`` are the extremes
+    over all five; ``volume`` is 1 + 2 + 4 + 8 + 16 = 31.0, chosen as
+    distinct powers of two so a wrong subset sums to a recognisably wrong
+    total.
+    """
+    rows: tuple[SourceRow, ...] = (
+        (1_700_000_280, 100.0, 110.0, 90.0, 105.0, 1.0),
+        (1_700_000_325, 101.0, 111.0, 91.0, 106.0, 2.0),
+        (1_700_000_370, 102.0, 112.0, 92.0, 107.0, 4.0),
+        (1_700_000_415, 103.0, 113.0, 93.0, 108.0, 8.0),
+        (1_700_000_460, 104.0, 114.0, 94.0, 109.0, 16.0),
+    )
+    result = compute_reference_windows(
+        frame_from_rows(rows),
+        profile_for(60),
+        window="4m",
+        emit_every="1m",
+        materialization=ExplicitRange(start=1_700_000_520, end=1_700_000_521),
+    )
+
+    assert_frame_equal(
+        result,
+        expected_frame(
+            [
+                # coverage_seconds = 300, the literal sum of five 60s
+                # candles, ABOVE the 240s window_seconds -- unclamped.
+                (
+                    1_700_000_280,
+                    1_700_000_520,
+                    100.0,
+                    114.0,
+                    90.0,
+                    109.0,
+                    31.0,
+                    5,
+                    300,
+                ),
+            ]
+        ),
+        check_dtypes=True,
+        check_column_order=True,
+        check_row_order=True,
+    )
+
+
 def test_explicit_range_emits_empty_rows_before_and_after_all_data() -> None:
     """The emit grid is total: every tick in [start, end) emits, data or not."""
     rows: tuple[SourceRow, ...] = (
