@@ -196,12 +196,11 @@ class TestMetallicRecurrence:
     ) -> None:
         """The cap admits exactly its own number of terms, then refuses.
 
-        At the real cap of 512 an integer-second maximum cannot land
-        between two consecutive terms of any recurrence slow enough to
-        need that many, so the boundary is pinned with the cap lowered
-        to six. A coefficient-one recurrence from a 1m seed needs a
-        seventh term to reach 13m: refused. The same recurrence bounded
-        at 8m needs exactly six terms: accepted.
+        The boundary is pinned with the cap lowered to six so the test
+        need not name the astronomically large maximum a 512-term
+        recurrence reaches. A coefficient-one recurrence from a 1m seed
+        needs a seventh term to reach 13m: refused. The same recurrence
+        bounded at 8m needs exactly six terms: accepted.
         """
         monkeypatch.setattr("ohlc_toolkit.schedules.generators.MAX_RESOLVED_WINDOWS", 6)
         with pytest.raises(ConfigError, match="terms"):
