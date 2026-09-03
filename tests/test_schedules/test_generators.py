@@ -15,6 +15,7 @@ from ohlc_toolkit.schedules import (
     ExplicitSpec,
     GeneratorKind,
     LogSpacedSpec,
+    MetallicRecurrenceSpec,
     RoundingRule,
     explicit,
     log_spaced,
@@ -279,6 +280,7 @@ class TestMetallicRounding:
             maximum="2w",
             rounding=RoundingRule.NEAREST_TIES_EVEN,
         )
+        assert isinstance(schedule.spec, MetallicRecurrenceSpec)
         assert schedule.spec.rounding is RoundingRule.NEAREST_TIES_EVEN
 
     def test_a_term_that_quantizes_to_nothing_is_refused(self) -> None:
@@ -522,6 +524,7 @@ class TestLogSpacedRatio:
         ratio raised to that power must take the minimum to the maximum.
         """
         schedule = log_spaced(count=7, minimum="5m", maximum="1d", grain="1m")
+        assert isinstance(schedule.spec, LogSpacedSpec)
         spanned = schedule.spec.limiting_ratio**6
         assert spanned == pytest.approx(86400 / 300, rel=1e-12)
 

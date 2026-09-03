@@ -13,6 +13,7 @@ import pytest
 
 from ohlc_toolkit.schedules import (
     GeneratorKind,
+    LogSpacedSpec,
     RoundingRule,
     WindowSchedule,
     explicit,
@@ -418,6 +419,7 @@ class TestValueSemantics:
     def test_a_spec_is_frozen(self) -> None:
         """So are the parameters it records."""
         schedule = _log()
+        assert isinstance(schedule.spec, LogSpacedSpec)
         with pytest.raises(AttributeError):
             schedule.spec.grain = Duration.parse("1h")  # type: ignore[misc]
 

@@ -78,13 +78,25 @@ range IS a meaningful statement about a stretch of time.
 """
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from enum import Enum, unique
 from fractions import Fraction
-from typing import ClassVar
+from typing import ClassVar, Self
 
 from ohlc_toolkit.config.logging import get_logger
+from ohlc_toolkit.schedules.identity import (
+    content_hash,
+    duration_from_payload,
+    durations_from_payload,
+    enum_from_payload,
+    mapping_from_payload,
+    optional_duration_from_payload,
+    optional_text_from_payload,
+    require_keys,
+    require_recorded_id,
+)
 from ohlc_toolkit.temporal import (
     ConfigError,
     Duration,
@@ -329,7 +341,6 @@ class MetallicRecurrenceSpec:
         if self.minimum is not None:
             object.__setattr__(self, "minimum", validate_window_duration(self.minimum))
             _require_ordered_bounds(self.minimum, self.maximum)
-        _require_rules(self.rounding, self.dedup)
 
     @property
     def limiting_ratio(self) -> float:
@@ -343,6 +354,60 @@ class MetallicRecurrenceSpec:
         re-derived.
         """
         return (self.coefficient + math.sqrt(self.coefficient**2 + 4)) / 2
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize these parameters to a JSON-compatible dict.
+
+        The coefficient is stored as a plain float. ``repr`` of a float
+        is the shortest string that reads back as the same double, and
+        that is what ``json`` writes, so a stored coefficient names the
+        same recurrence after a round trip as it did before one --
+        which is what makes the id stable across one.
+
+        Returns:
+            A dict holding the coefficient, the implied ratio, the seed,
+            the grain, both bounds, and both rules, in that fixed key
+            order.
+
+        """
+        return {
+            "coefficient": self.coefficient,
+            "limiting_ratio": self.limiting_ratio,
+            "seed": str(self.seed),
+            "grain": str(self.grain),
+            "minimum": None if self.minimum is None else str(self.minimum),
+            "maximum": str(self.maximum),
+            "rounding": self.rounding.value,
+            "dedup": self.dedup.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> Self:
+        """Reconstruct these parameters from their :meth:`to_dict` form.
+
+        Args:
+            data: A mapping as produced by :meth:`to_dict`.
+
+        Returns:
+            The reconstructed parameters.
+
+        Raises:
+            ConfigError: If a key is missing, or any value fails the
+                same validation it would have failed at construction.
+
+        """
+        require_keys(data, _METALLIC_KEYS, label="metallic_recurrence parameters")
+        return cls(
+            coefficient=_validated_coefficient(data["coefficient"]),
+            seed=duration_from_payload(data["seed"], label="seed"),
+            grain=duration_from_payload(data["grain"], label="grain"),
+            maximum=duration_from_payload(data["maximum"], label="maximum"),
+            minimum=optional_duration_from_payload(data["minimum"], label="minimum"),
+            rounding=enum_from_payload(
+                RoundingRule, data["rounding"], label="rounding rule"
+            ),
+            dedup=enum_from_payload(DedupRule, data["dedup"], label="dedup rule"),
+        )
 
 
 @dataclass(frozen=True)
@@ -396,7 +461,6 @@ class LogSpacedSpec:
         object.__setattr__(self, "maximum", validate_window_duration(self.maximum))
         object.__setattr__(self, "grain", validate_cadence(self.grain))
         _require_ordered_bounds(self.minimum, self.maximum)
-        _require_rules(self.rounding, self.dedup)
 
     @property
     def limiting_ratio(self) -> float:
@@ -412,36 +476,159 @@ class LogSpacedSpec:
             span = _log_span(self.minimum, self.maximum)
             return float((span / (self.count - 1)).exp())
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialize these parameters to a JSON-compatible dict.
+
+        Returns:
+            A dict holding the count, the implied ratio, both bounds,
+            the grain, and both rules, in that fixed key order.
+
+        """
+        return {
+            "count": self.count,
+            "limiting_ratio": self.limiting_ratio,
+            "minimum": str(self.minimum),
+            "maximum": str(self.maximum),
+            "grain": str(self.grain),
+            "rounding": self.rounding.value,
+            "dedup": self.dedup.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> Self:
+        """Reconstruct these parameters from their :meth:`to_dict` form.
+
+        Args:
+            data: A mapping as produced by :meth:`to_dict`.
+
+        Returns:
+            The reconstructed parameters.
+
+        Raises:
+            ConfigError: If a key is missing, or any value fails the
+                same validation it would have failed at construction.
+
+        """
+        require_keys(data, _LOG_SPACED_KEYS, label="log_spaced parameters")
+        return cls(
+            count=_validated_count(data["count"]),
+            minimum=duration_from_payload(data["minimum"], label="minimum"),
+            maximum=duration_from_payload(data["maximum"], label="maximum"),
+            grain=duration_from_payload(data["grain"], label="grain"),
+            rounding=enum_from_payload(
+                RoundingRule, data["rounding"], label="rounding rule"
+            ),
+            dedup=enum_from_payload(DedupRule, data["dedup"], label="dedup rule"),
+        )
+
+
+@dataclass(frozen=True)
+class ExplicitSpec:
+    """The parameters of a caller-supplied window list: at most a name.
+
+    An explicit schedule is generated by nothing -- the caller states
+    the resolved list, which :class:`WindowSchedule` holds -- so the
+    only parameter it has is what to call it. It exists so that a
+    control list, or a list an older implementation produced, can be
+    recorded and compared the same way a generated one is.
+
+    Attributes:
+        name: The name a registered list is asked for by, or None for
+            an ad-hoc one.
+
+    """
+
+    name: str | None = None
+
+    kind: ClassVar[GeneratorKind] = GeneratorKind.EXPLICIT
+
+    @property
+    def limiting_ratio(self) -> None:
+        """Always None: a hand-written list implies no constant ratio.
+
+        Recorded as None rather than omitted, so every kind's payload
+        answers the same question, and answering "none" is different
+        from not being asked.
+        """
+        return None
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize these parameters to a JSON-compatible dict.
+
+        Returns:
+            A dict holding the name and the (always null) implied ratio,
+            in that fixed key order.
+
+        """
+        return {"name": self.name, "limiting_ratio": self.limiting_ratio}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> Self:
+        """Reconstruct these parameters from their :meth:`to_dict` form.
+
+        Args:
+            data: A mapping as produced by :meth:`to_dict`.
+
+        Returns:
+            The reconstructed parameters.
+
+        Raises:
+            ConfigError: If a key is missing, or the name is neither a
+                string nor null.
+
+        """
+        require_keys(data, _EXPLICIT_KEYS, label="explicit schedule parameters")
+        return cls(name=optional_text_from_payload(data["name"], label="schedule name"))
+
 
 # What a schedule's generator parameters may be. A discriminated union
 # rather than one class with a nullable field per generator: each kind
 # then validates and serializes only the parameters it actually has, and
 # a spec that names a coefficient it does not use is unrepresentable.
-GeneratorSpec = MetallicRecurrenceSpec | LogSpacedSpec
+GeneratorSpec = MetallicRecurrenceSpec | LogSpacedSpec | ExplicitSpec
+
+# Which parameter class reads which kind's payload. The one place the
+# discriminator is turned back into a type.
+_SPEC_TYPES: dict[
+    GeneratorKind,
+    type[MetallicRecurrenceSpec] | type[LogSpacedSpec] | type[ExplicitSpec],
+] = {
+    GeneratorKind.METALLIC_RECURRENCE: MetallicRecurrenceSpec,
+    GeneratorKind.LOG_SPACED: LogSpacedSpec,
+    GeneratorKind.EXPLICIT: ExplicitSpec,
+}
+
+# Every key each kind's payload carries, and therefore every key its
+# reader requires. `limiting_ratio` is required and then ignored: it is
+# derived from the other parameters, so it is written for a reader that
+# wants the number without re-deriving it, and recomputed rather than
+# trusted on the way back in.
+_METALLIC_KEYS = (
+    "coefficient",
+    "limiting_ratio",
+    "seed",
+    "grain",
+    "minimum",
+    "maximum",
+    "rounding",
+    "dedup",
+)
+_LOG_SPACED_KEYS = (
+    "count",
+    "limiting_ratio",
+    "minimum",
+    "maximum",
+    "grain",
+    "rounding",
+    "dedup",
+)
+_EXPLICIT_KEYS = ("name", "limiting_ratio")
+_SCHEDULE_KEYS = ("kind", "parameters", "windows", "schedule_id")
 
 
 def _log_span(minimum: Duration, maximum: Duration) -> Decimal:
     """Return ``ln(maximum / minimum)``, at the caller's decimal precision."""
     return (Decimal(maximum.total_seconds) / Decimal(minimum.total_seconds)).ln()
-
-
-def _require_rules(rounding: RoundingRule, dedup: DedupRule) -> None:
-    """Check that the rounding and dedup rules are enum members.
-
-    Raises:
-        ConfigError: If either is not a member of its enum. A plain
-            string is the realistic mistake, and accepting one would
-            silently record a rule nothing implements.
-
-    """
-    if not isinstance(rounding, RoundingRule):
-        logger.warning("Rejecting non-RoundingRule rounding: {!r}", rounding)
-        raise ConfigError(
-            f"rounding must be a RoundingRule, got {type(rounding).__name__}"
-        )
-    if not isinstance(dedup, DedupRule):
-        logger.warning("Rejecting non-DedupRule dedup: {!r}", dedup)
-        raise ConfigError(f"dedup must be a DedupRule, got {type(dedup).__name__}")
 
 
 @dataclass(frozen=True)
@@ -467,21 +654,92 @@ class WindowSchedule:
         """Check the resolved list against the invariants every kind shares.
 
         Raises:
-            ConfigError: If ``windows`` is empty, holds a non-Duration,
-                holds a repeat, or names more windows than
-                :data:`MAX_RESOLVED_WINDOWS`.
+            ConfigError: If ``windows`` is empty, holds a repeat, or
+                names more windows than :data:`MAX_RESOLVED_WINDOWS`.
 
         """
         _require_resolved_windows(self.windows)
+
+    @property
+    def schedule_id(self) -> str:
+        """The content hash naming this schedule.
+
+        A sha256 over the canonical JSON of the generator kind, its
+        parameters, and the resolved window list -- everything that
+        makes this schedule the schedule it is, and nothing else. Two
+        independently resolved but identical schedules therefore share
+        an id, and any difference in any recorded parameter changes it,
+        including one that happens not to change the resolved list.
+        """
+        return content_hash(self._identity_payload())
+
+    def _identity_payload(self) -> dict[str, object]:
+        """Build the payload the schedule id is the hash of."""
+        return {
+            "kind": self.spec.kind.value,
+            "parameters": self.spec.to_dict(),
+            "windows": [str(window) for window in self.windows],
+        }
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize this schedule to a deterministic, JSON-compatible dict.
+
+        Returns:
+            A dict with exactly the keys ``"kind"``, ``"parameters"``,
+            ``"windows"``, and ``"schedule_id"``, in that fixed key
+            order. The id is the hash of the other three, so it is
+            written last and never hashed into itself.
+
+        """
+        payload = self._identity_payload()
+        return {**payload, "schedule_id": content_hash(payload)}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> Self:
+        """Reconstruct a schedule from its :meth:`to_dict` form.
+
+        The resolved windows are read from the payload rather than
+        regenerated from the parameters. The embedded list is the record
+        of what the schedule actually used; re-running the generator
+        here would make deserialization depend on the reading machine's
+        arithmetic, and a disagreement between the two would have no
+        obvious winner. The recorded id is checked instead, which
+        catches the payload having been edited.
+
+        Args:
+            data: A mapping as produced by :meth:`to_dict`.
+
+        Returns:
+            The reconstructed schedule.
+
+        Raises:
+            ConfigError: If a key is missing, the kind names no
+                generator, any parameter or window is malformed, the
+                window list breaks a schedule invariant, or the recorded
+                id does not match the payload it names.
+
+        """
+        require_keys(data, _SCHEDULE_KEYS, label="schedule")
+        kind = enum_from_payload(GeneratorKind, data["kind"], label="generator kind")
+        parameters = mapping_from_payload(
+            data["parameters"], label="schedule parameters"
+        )
+        schedule = cls(
+            spec=_SPEC_TYPES[kind].from_dict(parameters),
+            windows=durations_from_payload(data["windows"], label="schedule window"),
+        )
+        require_recorded_id(
+            data["schedule_id"], schedule.schedule_id, label="schedule_id"
+        )
+        return schedule
 
 
 def _require_resolved_windows(windows: tuple[Duration, ...]) -> None:
     """Check a resolved window list, whichever generator produced it.
 
     Raises:
-        ConfigError: If the list is empty, holds anything but strictly
-            positive Durations, repeats a value, or is longer than the
-            cap.
+        ConfigError: If the list is empty, repeats a value, or is longer
+            than the cap.
 
     """
     if not windows:
@@ -498,14 +756,6 @@ def _require_resolved_windows(windows: tuple[Duration, ...]) -> None:
         )
     seen: set[Duration] = set()
     for window in windows:
-        if not isinstance(window, Duration):
-            logger.warning("Rejecting non-Duration schedule window: {!r}", window)
-            raise ConfigError(
-                f"Schedule windows must be Durations, got {type(window).__name__}"
-            )
-        if window.total_seconds == 0:
-            logger.warning("Rejecting a zero-length schedule window.")
-            raise ConfigError("Schedule windows must be strictly positive, got 0s.")
         if window in seen:
             logger.warning("Rejecting a schedule repeating the window {}.", window)
             raise ConfigError(
@@ -785,3 +1035,44 @@ def log_spaced(
         spec.count,
     )
     return WindowSchedule(spec=spec, windows=windows)
+
+
+def explicit(
+    windows: Sequence[Duration | str], *, name: str | None = None
+) -> WindowSchedule:
+    """Build a schedule from a caller-supplied resolved list.
+
+    Nothing is generated, quantized, sorted, or deduplicated here: the
+    list is taken as given, in the order given, and only checked against
+    the invariants every schedule shares. A repeat is refused rather
+    than collapsed -- the generated kinds deduplicate because their
+    arithmetic produces repeats, whereas a repeat in a hand-written list
+    is a mistake in that list, and correcting it silently would hide it.
+
+    Args:
+        windows: The window durations, as Durations or compact duration
+            strings.
+        name: The name a registered list is asked for by. Defaults to
+            None, for an ad-hoc list.
+
+    Returns:
+        The schedule, carrying the given windows and the name.
+
+    Raises:
+        ConfigError: If ``windows`` is not a list or tuple, if any entry
+            is not a strictly positive duration, if the list is empty,
+            repeats a window, or is longer than
+            :data:`MAX_RESOLVED_WINDOWS`.
+
+    """
+    if isinstance(windows, str) or not isinstance(windows, Sequence):
+        logger.warning(
+            "Rejecting an explicit schedule that is not a list: {!r}", windows
+        )
+        raise ConfigError(
+            f"An explicit schedule takes a list of durations, got "
+            f"{type(windows).__name__}"
+        )
+    resolved = tuple(validate_window_duration(window) for window in windows)
+    logger.debug("Recorded an explicit schedule of {} window(s).", len(resolved))
+    return WindowSchedule(spec=ExplicitSpec(name=name), windows=resolved)
