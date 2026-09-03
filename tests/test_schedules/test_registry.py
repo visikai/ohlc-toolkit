@@ -26,7 +26,7 @@ from ohlc_toolkit.schedules import (
     named_schedule_names,
     w_over_k,
 )
-from ohlc_toolkit.temporal import ConfigError
+from ohlc_toolkit.temporal import ConfigError, Duration
 
 _MINUTE_SECONDS = 60
 _TWO_WEEKS_MINUTES = 14 * 24 * 60
@@ -108,12 +108,19 @@ class TestLegacyRegistration:
         assert named_schedule(_LEGACY_NAME).windows != generated.windows
 
     def test_its_identity_is_the_hash_of_its_payload(self) -> None:
-        """A registered schedule is named by content like any other."""
+        """A registered schedule is named by content like any other.
+
+        The stored windows are canonical compact durations, so 122m is
+        written as 2h2m and 14723m as 10d5h23m: a payload states a
+        duration one way, whatever spelling built it.
+        """
         schedule = named_schedule(_LEGACY_NAME)
         payload = {
             "kind": "explicit",
             "parameters": {"name": _LEGACY_NAME, "limiting_ratio": None},
-            "windows": [f"{minutes}m" for minutes in _LEGACY_MINUTES],
+            "windows": [
+                str(Duration(minutes * _MINUTE_SECONDS)) for minutes in _LEGACY_MINUTES
+            ],
         }
         text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         assert schedule.schedule_id == hashlib.sha256(text.encode("utf-8")).hexdigest()
