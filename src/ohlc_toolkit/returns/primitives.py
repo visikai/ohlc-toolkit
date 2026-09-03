@@ -26,7 +26,7 @@ it relates the close at ``t + H`` to the close at ``t``. Its value is not
 available at ``t``. It is available at ``t + H``, and consuming it as
 though it were available earlier is the most productive way there is to
 build a model that cannot exist -- so this module makes that mistake
-loud rather than possible, in two independent ways:
+loud rather than silent, in two independent ways:
 
 - the value column is named with a ``forward_`` prefix, which travels
   with it into a column list, a correlation matrix, a parquet file, and
@@ -364,7 +364,9 @@ def add_backward_returns(
             duration string. Strictly positive, and a whole multiple of
             ``cadence``.
         cadence: The cadence the frame's rows are emitted at, in the same
-            two spellings.
+            two spellings. Trusted from the caller: it gates which
+            horizons are accepted and is never verified against the
+            frame's actual row spacing.
         method: Which formula to apply. Required: there is no default.
 
     Returns:
@@ -428,7 +430,9 @@ def add_forward_returns(
             duration string. Strictly positive, and a whole multiple of
             ``cadence``.
         cadence: The cadence the frame's rows are emitted at, in the same
-            two spellings.
+            two spellings. Trusted from the caller: it gates which
+            horizons are accepted and is never verified against the
+            frame's actual row spacing.
         method: Which formula to apply. Required: there is no default.
 
     Returns:

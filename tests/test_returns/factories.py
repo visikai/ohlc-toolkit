@@ -9,10 +9,12 @@ Why these particular closes
 ---------------------------
 
 ``128``, ``160``, ``320``, ``80``, ``100`` and ``25`` are chosen so that
-every ratio the tests take between them -- one cadence apart, two
-cadences apart, in either direction -- is a dyadic rational: ``160/128``
-is exactly ``1.25``, ``320/128`` exactly ``2.5``, ``80/320`` exactly
-``0.25``. Each is representable in an IEEE-754 double with no rounding at
+every ratio the expected values actually take -- the later close over
+the earlier one, one or two cadences apart -- is a dyadic rational:
+``160/128`` is exactly ``1.25``, ``320/128`` exactly ``2.5``, ``80/320``
+exactly ``0.25``. (Not every pair in every direction is: ``128/160`` is
+``0.8``, which no double holds exactly, and no test takes it.) Each
+ratio taken is representable in an IEEE-754 double with no rounding at
 all, and subtracting one from a dyadic rational in ``[0.25, 2.5]`` is
 exact too. The expected simple returns are therefore exact literals that
 a correct implementation must reproduce bit for bit, with no tolerance
@@ -21,7 +23,7 @@ anywhere.
 Why the gap is where it is
 --------------------------
 
-:data:`GAPPED_CLOSE_TIMES` omits the fourth tick, so the frame's rows are
+:data:`GAPPED_OFFSETS` omits the fourth tick, so the frame's rows are
 one cadence apart across most of it and two cadences apart once. That one
 missing tick is what separates a time-based counterpart lookup from a
 row-shift: over a two-cadence horizon, the row after the gap has a
