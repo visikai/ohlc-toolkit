@@ -30,7 +30,9 @@ class DataValidationError(Exception):
 class CoverageError(Exception):
     """A window failed a strict data-quality or coverage gate.
 
-    Reserved for the temporal package's window-quality surface. No code
-    in this package raises it yet; it is defined now so the public
-    exception taxonomy is stable for callers to depend on.
+    A strict window quality gate raises this, typically via a subclass
+    that carries a structured quality report (for example
+    ``ohlc_toolkit.windows.quality.WindowCoverageError``) rather than
+    this base class directly, so callers can inspect exactly which rows
+    failed instead of parsing a message.
     """

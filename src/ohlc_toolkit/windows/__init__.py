@@ -15,9 +15,22 @@ either -- it is what the fast path is measured by.
 Both resolve their schedules through
 :mod:`ohlc_toolkit.windows.resolution`, so a configuration one refuses is
 refused by the other in the same words.
+
+:mod:`ohlc_toolkit.windows.quality` is a separate, later step: a
+recipe-recordable quality policy composed AFTER either implementation's
+output, never inside it.
 """
 
 from ohlc_toolkit.windows.engine import compute_windows
+from ohlc_toolkit.windows.quality import (
+    GateMode,
+    QualityMode,
+    QualityPolicyResult,
+    QualityReport,
+    WindowCoverageError,
+    WindowQualityPolicy,
+    apply_quality_policy,
+)
 from ohlc_toolkit.windows.reference import compute_reference_windows
 from ohlc_toolkit.windows.resolution import (
     ExplicitRange,
@@ -27,8 +40,15 @@ from ohlc_toolkit.windows.resolution import (
 
 __all__ = [
     "ExplicitRange",
+    "GateMode",
     "Materialization",
     "MaterializationRule",
+    "QualityMode",
+    "QualityPolicyResult",
+    "QualityReport",
+    "WindowCoverageError",
+    "WindowQualityPolicy",
+    "apply_quality_policy",
     "compute_reference_windows",
     "compute_windows",
 ]
