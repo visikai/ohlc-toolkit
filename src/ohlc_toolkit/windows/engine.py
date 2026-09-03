@@ -135,10 +135,12 @@ for bit.
 copied straight out of the input. Its addends are exactly the volumes of
 the candles the window contains, summed by polars over that window's own
 contiguous slice. polars folds a Float64 slice in blocks rather than one
-addend at a time, so the total lands within a few units in the last place
-of :func:`math.fsum`, which sums exactly and rounds once. For
-non-negative volumes -- the only kind a source can honestly publish --
-that makes two things exact rather than approximate: a window whose
+addend at a time, so its error does not grow with the window: measured
+against :func:`math.fsum`, which sums exactly and rounds once, the total
+stays within about ten units in the last place whether the window holds
+eight candles or seventeen thousand (``benchmarks/`` records the run).
+For non-negative volumes -- the only kind a source can honestly publish
+-- two things are then exact rather than approximate: a window whose
 candles are all zero totals exactly ``0.0``, and no window totals below
 zero.
 

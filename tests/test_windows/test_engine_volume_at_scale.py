@@ -116,10 +116,17 @@ _STRATUM_SIZE = 60
 
 # How far the engine's per-window sum may sit from the correctly rounded
 # one. polars reduces a Float64 slice in blocks rather than one addend at a
-# time, so its error is bounded by about ``log2(m) * 2**-53`` relative for
-# a window of m non-negative addends: 1.6e-15 at m = 17632. The bound below
-# leaves an order of magnitude of headroom over that and is still far tighter
-# than any residue a sliding sum produces at this scale.
+# time, so its error does not grow with the window: measured against
+# math.fsum it stays within about ten units in the last place -- roughly
+# 1e-15 relative -- whether the window holds 8 candles or 17632, both over
+# this grid and over a full published minute history. The bound below is
+# that observation with an order of magnitude of headroom.
+#
+# It is deliberately NOT the worst case a summation could have, which is
+# ``(m - 1) * 2**-53`` and reaches 2e-12 at m = 17632. A summation that
+# really drifted that far could not support the two exactness assertions
+# in this module, so this suite should fail on it rather than make room
+# for it.
 _VOLUME_RELATIVE_TOLERANCE = 1e-14
 
 # A window whose contained volumes are all zero must report exactly 0.0,
