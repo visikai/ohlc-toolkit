@@ -244,7 +244,10 @@ def require_recorded_id(recorded: object, derived: str, *, label: str) -> None:
     corruption is an edit to a stored recipe -- a window changed, a
     bound nudged -- without re-deriving the id beside it, and reading
     that back as a valid schedule would attach an id to something it
-    does not describe.
+    does not describe. The guarantee covers the fields an object is
+    rebuilt FROM: derived fields such as a recorded limiting ratio are
+    recomputed on read rather than verified, so an edit to one of those
+    is silently replaced by the recomputed value, not detected.
 
     Args:
         recorded: The id the payload carries, of any type.
