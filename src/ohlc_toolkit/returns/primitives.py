@@ -69,6 +69,38 @@ logarithms. ``ln(a) - ln(b)`` subtracts two numbers that are nearly equal
 whenever the price barely moved, which is most of the time, and loses
 most of its significant digits doing so; the ratio of two nearby doubles
 is computed to within half an ulp and stays that way through ``ln``.
+
+Every emitted value is a finite float or null
+---------------------------------------------
+
+Real closes produce ordinary returns. A window frame's closes are not
+guaranteed to be ordinary: the aggregator emits a null close for a window
+holding no source candle, and nothing upstream of here promises a close
+is positive, non-zero, or of a sane magnitude. Left alone, polars returns
+``inf``, ``-inf``, or ``NaN`` from a division or a logarithm, and each of
+those travels through a downstream fit as a number rather than as an
+absence -- silently, and with no error to notice.
+
+So the last thing every path here does is ask whether the value it
+computed is finite, and emit null when it is not. One guard, applied for
+one stated reason -- there is no real number to report -- rather than a
+list of special cases to keep in step:
+
+- a zero denominator: ``x / 0`` is ``+/-inf`` and ``0 / 0`` is ``NaN``;
+- a null close on either side, which polars already propagates as null;
+- a ratio that overflows to infinity, which two closes far enough apart
+  in magnitude will do;
+- a non-positive ratio under ``LOG``: ``ln(0)`` is ``-inf``, and the
+  logarithm of a negative ratio is not real at all, so ``NaN``.
+
+What is NOT nulled is anything the formula produced that happens to be a
+real number. A close that fell to zero has a simple return of exactly
+``-1``. A ratio that underflows to zero has the same. A simple return
+over a NEGATIVE denominator is finite too, and is reported: this step has
+no opinion about the sign of a price, and forming one belongs upstream in
+:func:`~ohlc_toolkit.source.validation.validate_source_frame`, where a
+negative price is a finding about the data rather than a shrug about one
+row.
 """
 
 from enum import Enum, unique
@@ -92,6 +124,14 @@ logger = get_logger(__name__)
 # horizons, or two formulas over one horizon, each keep their own
 # availability column instead of contending for a shared one.
 _AVAILABLE_AT_SUFFIX = "_available_at"
+
+# Column names used only inside the one-expression return computation,
+# never returned. Both closes are renamed onto them because the two
+# series arrive carrying whatever names their source columns had, and one
+# of the two directions would otherwise hand over two columns called the
+# same thing.
+_NUMERATOR = "__numerator_close"
+_DENOMINATOR = "__denominator_close"
 
 
 @unique
@@ -253,7 +293,13 @@ def _require_absent_columns(frame: pl.DataFrame, columns: tuple[str, ...]) -> No
 def _return_values(
     numerator: pl.Series, denominator: pl.Series, method: ReturnMethod
 ) -> pl.Series:
-    """Apply one of the two formulas elementwise to two aligned closes.
+    """Apply one of the two formulas elementwise, nulling what is not finite.
+
+    The finiteness guard is the last step for every method, so a value
+    this module cannot state as a real number is stated as an absence
+    instead of as ``inf`` or ``NaN``. See the module docstring for which
+    inputs reach it and which finite-but-surprising ones deliberately do
+    not.
 
     Args:
         numerator: The later close of each pair, positionally aligned
@@ -262,13 +308,17 @@ def _return_values(
         method: Which formula to apply.
 
     Returns:
-        One ``Float64`` value per row.
+        One ``Float64`` value per row: finite, or null.
 
     """
-    ratio = numerator / denominator
-    if method is ReturnMethod.SIMPLE:
-        return ratio - 1.0
-    return ratio.log()
+    ratio = pl.col(_NUMERATOR) / pl.col(_DENOMINATOR)
+    value = ratio - 1.0 if method is ReturnMethod.SIMPLE else ratio.log()
+    pair = pl.DataFrame(
+        [numerator.rename(_NUMERATOR), denominator.rename(_DENOMINATOR)]
+    )
+    return pair.select(
+        pl.when(value.is_finite()).then(value).otherwise(None).cast(pl.Float64)
+    ).to_series()
 
 
 def add_backward_returns(
