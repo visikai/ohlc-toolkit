@@ -7,6 +7,7 @@ with the arithmetic would still be caught.
 """
 
 import math
+import sys
 from fractions import Fraction
 
 import pytest
@@ -351,6 +352,41 @@ class TestMetallicRefusals:
         """``bool`` is an ``int`` subtype in Python, and is refused anyway."""
         with pytest.raises(ConfigError, match="coefficient"):
             metallic_recurrence(coefficient=True, seed="1m", grain="1m", maximum="2w")
+
+    def test_a_coefficient_whose_square_overflows_is_refused(self) -> None:
+        """Above the square root of the float maximum, the ratio overflows.
+
+        The recurrence itself would resolve (a single seed window,
+        since the first real term already passes any bound), but the
+        recorded identity computes ``(c + sqrt(c**2 + 4)) / 2`` -- so
+        without this refusal the object constructs successfully and then
+        cannot serialize or hash itself, failing later, elsewhere, and
+        in a foreign exception type.
+        """
+        with pytest.raises(ConfigError, match="coefficient"):
+            metallic_recurrence(
+                coefficient=1.35e154, seed="1m", grain="1m", maximum="2w"
+            )
+
+    def test_the_largest_squarable_coefficient_still_serializes(self) -> None:
+        """The bound is exact: the square root of the float maximum works.
+
+        At exactly ``sqrt(float max)`` the squared value still fits, so
+        this coefficient must construct, resolve, serialize, and hash --
+        pinning that the refusal above does not overreach.
+        """
+        schedule = metallic_recurrence(
+            coefficient=math.sqrt(sys.float_info.max),
+            seed="1m",
+            grain="1m",
+            maximum="2w",
+        )
+        assert [str(window) for window in schedule.windows] == ["1m"]
+        assert math.isfinite(schedule.spec.limiting_ratio)
+        assert (
+            schedule.schedule_id
+            == type(schedule).from_dict(schedule.to_dict()).schedule_id
+        )
 
     def test_a_coefficient_too_small_to_terminate_is_refused(self) -> None:
         """A vanishing coefficient grows so slowly it is unbounded in practice.
