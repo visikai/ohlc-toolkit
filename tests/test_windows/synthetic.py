@@ -348,13 +348,16 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
         anchor="0s",
         materialization=_SKIP_WARMUP,
     ),
-    # A nonzero anchor on an otherwise round grid.
+    # A nonzero anchor on an otherwise round grid. The emit cadence has to
+    # exceed the source cadence for an anchor to survive normalization: over
+    # a 60s source every legal anchor is a multiple of 60s, so `anchor mod E`
+    # is only nonzero when E is coarser than a single source candle.
     GoldenCase(
-        label="complete_1m_rolling_3m_anchor_2m",
+        label="complete_1m_rolling_3m_every_2m_anchor_1m",
         family="complete_grid_1m",
         window="3m",
-        emit_every="1m",
-        anchor="2m",
+        emit_every="2m",
+        anchor="1m",
         materialization=_SKIP_WARMUP,
     ),
     # An explicit range that starts inside the warmup and runs past the
