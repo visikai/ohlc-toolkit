@@ -54,7 +54,13 @@ from ohlc_toolkit.windows import (
     compute_reference_windows,
     compute_windows,
 )
-from tests.test_windows.factories import frame_from_rows, profile_for
+from tests.test_windows.factories import (
+    SourceRow,
+    WindowRow,
+    expected_frame,
+    frame_from_rows,
+    profile_for,
+)
 from tests.test_windows.fixtures import REAL_SLICE_CADENCE_SECONDS, load_real_slice
 from tests.test_windows.synthetic import (
     FAMILY_NAMES,
@@ -302,6 +308,62 @@ def test_an_explicit_range_over_an_empty_frame_still_emits_its_grid() -> None:
     assert result.get_column("close_time").to_list() == list(range(0, 300, 60))
     assert result.get_column("src_count").to_list() == [0] * 5
     assert_frame_equal(result, expected, check_exact=True, check_dtypes=True)
+
+
+# Two candles sharing an open time, published in a fixed order and
+# disagreeing about every price. A window ending at 120 holds both, so its
+# ``close`` has to come from one of them; the contract says the first the
+# provider published, and 201.0 rather than 301.0 is the whole assertion.
+_TIED_OPEN_TIME_ROWS: tuple[SourceRow, ...] = (
+    (0, 100.0, 110.0, 90.0, 101.0, 1.0),
+    (60, 200.0, 210.0, 190.0, 201.0, 2.0),
+    (60, 300.0, 310.0, 290.0, 301.0, 4.0),
+    (120, 400.0, 410.0, 390.0, 401.0, 8.0),
+)
+
+# The five windows a 2m window emitted every minute over [0, 241) produces
+# for those rows, worked out by hand. Volumes are whole numbers, so this
+# comparison stays exact.
+_TIED_OPEN_TIME_WINDOWS: tuple[WindowRow, ...] = (
+    # Nothing has closed yet by t = 0.
+    (-120, 0, None, None, None, None, None, 0, 0),
+    # Only the first candle: [0, 60) closes at 60, inside [-60, 60).
+    (-60, 60, 100.0, 110.0, 90.0, 101.0, 1.0, 1, 60),
+    # [0, 120) holds all three of the first three rows. The latest open
+    # time is 60, shared by two rows, so ``close`` is the earlier row's
+    # 201.0 -- not 301.0, which is the last row of the slice.
+    (0, 120, 100.0, 310.0, 90.0, 201.0, 7.0, 3, 180),
+    # [60, 180) drops the first row and gains the fourth. The earliest
+    # open time is now the tied one, so ``open`` is the earlier row's
+    # 200.0 -- the same tie, read from the other end.
+    (60, 180, 200.0, 410.0, 190.0, 401.0, 14.0, 3, 180),
+    # [120, 240) holds the fourth row alone.
+    (120, 240, 400.0, 410.0, 390.0, 401.0, 8.0, 1, 60),
+)
+
+
+def test_candles_sharing_an_open_time_break_ties_toward_the_earlier_row() -> None:
+    """Duplicate open times resolve to the row the provider published first.
+
+    Duplicate open times are invalid input -- strict source validation
+    rejects them -- but both implementations still define an answer for
+    them, and the property suites reach the case only by chance. This pins
+    it deterministically, with the expected frame written out by hand
+    rather than taken from either implementation.
+    """
+    frame = frame_from_rows(_TIED_OPEN_TIME_ROWS)
+    arguments = {
+        "window": "2m",
+        "emit_every": "1m",
+        "materialization": ExplicitRange(start=0, end=241),
+    }
+
+    expected = expected_frame(_TIED_OPEN_TIME_WINDOWS)
+    oracle = compute_reference_windows(frame, profile_for(60), **arguments)  # type: ignore[arg-type]
+    result = compute_windows(frame, profile_for(60), **arguments)  # type: ignore[arg-type]
+
+    assert_frame_equal(result, expected, check_exact=True, check_dtypes=True)
+    assert_frame_equal(result, oracle, check_exact=True, check_dtypes=True)
 
 
 # Two representative schedules over the committed 14-day minute slice: one

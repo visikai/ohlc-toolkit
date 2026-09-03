@@ -2,10 +2,14 @@
 
 Resolution is a statement about the caller's configuration, not about the
 data, so a fast engine that quietly accepted a schedule the oracle
-rejects would be a different library with the same name. Every case here
-runs both implementations over the same input and asserts that they raise
-the same :class:`~ohlc_toolkit.temporal.ConfigError` with the same
-message.
+rejects would be a different library with the same name. Almost every
+case here runs both implementations over the same input and asserts that
+they raise the same :class:`~ohlc_toolkit.temporal.ConfigError` with the
+same message.
+
+The exception is the last test, which covers the one resolution-time
+decision that is not a refusal: an enormous emit grid is allowed, and is
+allowed loudly.
 """
 
 from collections.abc import Callable
@@ -25,6 +29,7 @@ from ohlc_toolkit.windows import (
     MaterializationRule,
     compute_reference_windows,
     compute_windows,
+    engine,
 )
 from tests.test_windows.factories import SourceRow, frame_from_rows, profile_for
 
@@ -307,6 +312,40 @@ def test_a_matching_source_phase_resolves_cleanly() -> None:
 
     assert result.get_column("close_time").to_list() == [150]
     assert result.get_column("src_count").to_list() == [2]
+
+
+def test_an_enormous_emit_grid_is_materialized_but_never_quietly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A huge grid is a huge allocation, and the caller gets told so.
+
+    The engine holds one row per emit tick and one per source candle at
+    once. It does not refuse a large grid -- a long history at a fine emit
+    cadence is a legitimate thing to ask for -- but the cost is logged
+    instead of being paid in silence.
+
+    The cap is lowered for this test rather than the grid being inflated
+    to reach it: allocating twenty million ticks to observe one log line
+    would make the suite pay the very cost the warning is about.
+    """
+    monkeypatch.setattr(engine, "_MAX_UNWARNED_TICKS", 2)
+    logged: list[str] = []
+    sink_id = engine.logger.add(logged.append, level="WARNING", format="{message}")
+    try:
+        result = compute_windows(
+            frame_from_rows(_MINUTE_CANDLES),
+            profile_for(60),
+            window="1m",
+            emit_every="1m",
+            materialization=ExplicitRange(start=60, end=241),
+        )
+    finally:
+        engine.logger.remove(sink_id)
+
+    # Warned about, and then computed anyway: the cap is a warning, not a
+    # refusal.
+    assert result.get_column("close_time").to_list() == [60, 120, 180, 240]
+    assert [message for message in logged if "emit ticks over" in message]
 
 
 if __name__ == "__main__":
