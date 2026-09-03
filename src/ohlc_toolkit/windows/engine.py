@@ -46,21 +46,54 @@ The three aggregates that are not slice endpoints
 ``open`` and ``close`` are read off the ends of the slice, and
 ``src_count`` and ``coverage_seconds`` are its length. ``high``, ``low``
 and ``volume`` are not: they have to look at every candle in the window.
-Restating membership on ``close_time`` alone -- legal because
-``close_time`` is ``open_time + d``, so a two-sided bound on either is a
-two-sided bound on the other -- gives ``close_time`` in
-``[t - W + d, t]``, and that is exactly the window polars' rolling-by-key
-aggregations compute when they reach back ``W - d + 1`` seconds from each
-row.
 
-Those aggregations run over a frame holding one row per source candle AND
-one row per emit tick, merged on that key. Tick rows carry the identity
-element of each aggregate (negative infinity for a maximum, positive
-infinity for a minimum, zero for a sum), so a tick can never change the
-answer for the ticks around it, and the tick rows are where the answers
-are read back out. Every column is then masked to null wherever the
-window held no candle, because an absent observation is not an observed
-zero.
+``high`` and ``low`` are order statistics. No arithmetic is performed on
+them, so any evaluation order returns the same bits, and they are free to
+be computed the cheapest way there is. Restating membership on
+``close_time`` alone -- legal because ``close_time`` is ``open_time + d``,
+so a two-sided bound on either is a two-sided bound on the other -- gives
+``close_time`` in ``[t - W + d, t]``, and that is exactly the window
+polars' rolling-by-key aggregations compute when they reach back
+``W - d + 1`` seconds from each row.
+
+Those two aggregations run over a frame holding one row per source candle
+AND one row per emit tick, merged on that key. Tick rows carry the
+identity element of each aggregate (negative infinity for a maximum,
+positive infinity for a minimum), so a tick can never change the answer
+for the ticks around it, and the tick rows are where the answers are read
+back out.
+
+``volume`` is a sum, and a sum is not order-agnostic, so it does not go
+through that machinery at all -- see the next section. Every column is
+then masked to null wherever the window held no candle, because an absent
+observation is not an observed zero.
+
+Volume is summed per window, never slid
+---------------------------------------
+
+A rolling sum that adds the entering candle and subtracts the leaving one
+is linear in rows and is the obvious thing to reach for. It is also the
+wrong thing here, and not marginally: in floating point that running
+total carries a rounding residue derived from every addition and
+subtraction the series has already performed, so
+
+- the same window over the same candles reports a different total once
+  more history is prepended in front of it, which is not a function of
+  the window's contents at all, and which breaks any "append rows, then
+  recompute only the tail" use;
+- a window whose candles all have exactly zero volume reports a small
+  non-zero total;
+- a sum of non-negative volumes can come back NEGATIVE.
+
+So each window's volume is summed over that window's own candles and
+nothing else: ``volume.slice(lower, upper - lower).sum()``, once per emit
+tick, over the slice the binary searches already located. That the answer
+is a function of the contained candles alone is then a property of the
+shape of the code rather than a claim about error bounds, and all three
+failures above become impossible rather than merely unlikely. Nothing
+clamps the result: with the summation confined to the window there is no
+negative left to clamp, and a clamp would do nothing but hide a summation
+that had gone wrong.
 
 Aligned emission is not a mode
 ------------------------------
@@ -76,27 +109,46 @@ Cost
 ----
 
 One O(rows log rows) sort, skipped when the frame already arrives in
-ascending open-time order; then O(rows + ticks) for the merge and the
-rolling passes, and O(ticks log rows) for the binary searches. Memory is
-O(rows + ticks): the engine materializes one row per candle and one row
-per emit tick, and nothing that scales with the calendar span between
-them.
+ascending open-time order; then O(rows + ticks) for the merge and the two
+rolling passes, and O(ticks log rows) for the binary searches.
+
+Volume is the exception, and deliberately so. Re-summing each window's
+slice costs O(sum of window lengths), which over a complete grid is
+``ticks * W / d``: unlike everything else here it grows with the window,
+and it is the price of the previous section. ``benchmarks/`` records what
+that works out to over a real multi-million-row minute history.
+
+Memory is O(rows + ticks): the engine materializes one row per candle and
+one row per emit tick, and nothing that scales with the calendar span
+between them.
 
 Floating point
 --------------
 
+``open_time``, ``close_time``, ``src_count`` and ``coverage_seconds`` are
+integer arithmetic. ``open``, ``high``, ``low`` and ``close`` are a
+selection, a maximum and a minimum over values that already exist in the
+input, with no arithmetic performed on them at all, so they come back bit
+for bit.
+
 ``volume`` is the only output that is neither an integer nor a value
-copied straight out of the input. The oracle folds each window's volumes
-left to right in the frame's own row order; this engine sums them with a
-vectorized rolling sum. Both are correct sums of the same addends and can
-differ only in the order the rounding happens: measured against the
-oracle over real minute volumes the two agree to within about 1e-13
-relative, and they agree bit for bit wherever the addends and their
-partial sums are exactly representable. Neither number is more true than
-the other -- the oracle's own fold carries comparable rounding -- but the
-engine's is the one that will move if polars changes how it sums, so a
-caller comparing outputs across versions should compare volumes with a
-tolerance. Every other column is exact.
+copied straight out of the input. Its addends are exactly the volumes of
+the candles the window contains, summed by polars over that window's own
+contiguous slice. polars folds a Float64 slice in blocks rather than one
+addend at a time, so the total lands within a few units in the last place
+of :func:`math.fsum`, which sums exactly and rounds once. For
+non-negative volumes -- the only kind a source can honestly publish --
+that makes two things exact rather than approximate: a window whose
+candles are all zero totals exactly ``0.0``, and no window totals below
+zero.
+
+The oracle sums the same addends by folding them left to right in the
+frame's row order, which carries its own rounding -- at most
+``(m - 1) * 2**-53`` relative for a window of m non-negative addends.
+That, and not anything about the window rule being fuzzy, is why
+comparing the two implementations over real volumes needs a small
+tolerance, and why it needs none over the synthetic families, whose
+quarter-unit volumes make every partial sum exactly representable.
 """
 
 from dataclasses import dataclass
@@ -134,7 +186,6 @@ _MAX_UNWARNED_TICKS = 20_000_000
 # infinite price is reported back rather than mistaken for emptiness.
 _NEUTRAL_HIGH = float("-inf")
 _NEUTRAL_LOW = float("inf")
-_NEUTRAL_VOLUME = 0.0
 
 # Column names used only inside the merged candle/tick frame.
 _KEY_COLUMN = "key"
@@ -257,6 +308,14 @@ def _extract_candles(frame: pl.DataFrame, profile: SourceProfile) -> _SortedCand
     allocation the engine makes. When it does run it is stable, so candles
     sharing an open time keep the order the provider published them in --
     the order the contract's tie-breaks are stated in.
+
+    The columns are then held in a single chunk. That is not tidiness: a
+    window's volume is summed over a slice of the volume column, polars
+    reduces each chunk of a series separately and combines the partial
+    results, so a frame that arrived in several chunks would fold a
+    window's volumes in an order decided by where the chunk boundaries
+    happened to fall -- a property of how the caller assembled the frame
+    rather than of the candles in the window.
     """
     require_source_columns(frame, profile)
 
@@ -271,6 +330,7 @@ def _extract_candles(frame: pl.DataFrame, profile: SourceProfile) -> _SortedCand
     if not prepared.get_column("open_time").is_sorted():
         logger.debug("Source frame is not in ascending open-time order; sorting.")
         prepared = prepared.sort("open_time", maintain_order=True)
+    prepared = prepared.rechunk()
 
     return _SortedCandles(
         open_time=prepared.get_column("open_time"),
@@ -450,7 +510,6 @@ def _merge_candles_and_ticks(candles: _SortedCandles, ticks: pl.Series) -> pl.Da
             ),
             candles.high.rename("high"),
             candles.low.rename("low"),
-            candles.volume.rename("volume"),
         ]
     )
     tick_count = ticks.len()
@@ -466,18 +525,15 @@ def _merge_candles_and_ticks(candles: _SortedCandles, ticks: pl.Series) -> pl.Da
             pl.repeat(_NEUTRAL_LOW, tick_count, dtype=pl.Float64, eager=True).rename(
                 "low"
             ),
-            pl.repeat(_NEUTRAL_VOLUME, tick_count, dtype=pl.Float64, eager=True).rename(
-                "volume"
-            ),
         ]
     )
     return candle_rows.merge_sorted(tick_rows, key=_KEY_COLUMN)
 
 
-def _rolling_aggregates(
+def _rolling_extremes(
     candles: _SortedCandles, ticks: pl.Series, schedule: ResolvedSchedule
 ) -> pl.DataFrame:
-    """Compute high, low and volume for every emit tick in three passes.
+    """Compute high and low for every emit tick in two passes.
 
     Membership restated on the merge key: a candle belongs to the window
     closing at ``t`` exactly when its ``close_time`` lies in
@@ -485,6 +541,12 @@ def _rolling_aggregates(
     reaching back ``W - d + 1`` seconds and closed on the right, which is
     positive even when ``W == d`` -- the single-candle window -- so no
     special case is needed for it.
+
+    Only the two order statistics are computed this way. A maximum and a
+    minimum compare values without combining them, so a sliding
+    evaluation returns the same bits a fresh scan of the window would.
+    That is not true of a sum, and ``volume`` is therefore computed
+    elsewhere -- see :func:`_window_volumes`.
     """
     window_size = f"{schedule.window.total_seconds - candles.cadence_seconds + 1}i"
     merged = _merge_candles_and_ticks(candles, ticks)
@@ -496,12 +558,51 @@ def _rolling_aggregates(
             pl.col("low").rolling_min_by(
                 _KEY_COLUMN, window_size=window_size, closed="right"
             ),
-            pl.col("volume").rolling_sum_by(
-                _KEY_COLUMN, window_size=window_size, closed="right"
-            ),
         )
         .filter(pl.col(_IS_TICK_COLUMN))
-        .select("high", "low", "volume")
+        .select("high", "low")
+    )
+
+
+def _window_volumes(
+    candles: _SortedCandles, lower: pl.Series, upper: pl.Series
+) -> pl.Series:
+    """Sum each window's volumes over that window's own candles, and no others.
+
+    The candles in the window are the half-open slice ``[lower, upper)``
+    of the sorted frame, so that slice is what gets summed -- one
+    independent sum per emit tick, with no term carried over from the tick
+    before it. The result is therefore a function of the contained candles
+    and nothing else, which is a property of this expression rather than
+    an error bound anyone has to trust.
+
+    That is worth the cost. The cheap alternative, a running total that
+    adds each entering candle and subtracts each leaving one, is exact in
+    real arithmetic and is not exact in floating point: its residue is a
+    function of the whole prefix, so the same window changes value when
+    history is prepended, an all-zero window comes back non-zero, and a
+    sum of non-negative volumes can come back negative. See this module's
+    docstring for the full argument.
+
+    Args:
+        candles: The sorted source candles.
+        lower: For each emit tick, the first contained row.
+        upper: For each emit tick, one past the last contained row.
+
+    Returns:
+        One volume per emit tick. A tick whose slice is empty sums to
+        ``0.0``; the caller masks those to null, because an absent
+        observation is not an observed zero.
+
+    """
+    volume = candles.volume
+    return pl.Series(
+        "volume",
+        [
+            volume.slice(start, stop - start).sum()
+            for start, stop in zip(lower, upper, strict=True)
+        ],
+        dtype=pl.Float64,
     )
 
 
@@ -518,17 +619,17 @@ def _build_output_frame(
     """
     lower, upper = _window_bounds(candles, ticks, schedule)
     open_price, close_price = _boundary_prices(candles, lower, upper)
-    rolling = _rolling_aggregates(candles, ticks, schedule)
+    extremes = _rolling_extremes(candles, ticks, schedule)
 
     staged = pl.DataFrame(
         [
             ticks.rename("close_time"),
             (upper - lower).rename("src_count"),
             open_price.rename("open"),
-            rolling.get_column("high"),
-            rolling.get_column("low"),
+            extremes.get_column("high"),
+            extremes.get_column("low"),
             close_price.rename("close"),
-            rolling.get_column("volume"),
+            _window_volumes(candles, lower, upper),
         ]
     )
 
