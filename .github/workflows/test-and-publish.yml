@@ -106,4 +106,4 @@ jobs:
         run: uv build
 
       - name: Check package metadata
-        run: uvx twine check --strict dist/*
+        run: uvx twine@7.0.0 check --strict dist/*
