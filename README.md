@@ -24,33 +24,13 @@ pip install ohlc-toolkit
     df_1min = DatasetDownloader().download_bitstamp_btcusd_minute_data(bulk=True)
   ```
 
-- Convert timeframe strings to the number of minutes, and vice versa:
+- Parse and format compact duration strings:
 
   ```py
-    # From string to minutes
-    parse_timeframe("1h15m") == 75
+    Duration.parse("1h15m").total_seconds == 4500
 
-    # From minutes to string
-    format_timeframe(minutes=75) == "1h15m"
+    str(Duration(4500)) == "1h15m"
   ```
-
-## Examples
-
-See the [examples](examples/README.md) directory for examples of how to use the toolkit.
-
-Run the example script to see how the toolkit works:
-
-```bash
-# Clone the repository
-git clone https://github.com/visikai/ohlc-toolkit.git
-cd ohlc-toolkit
-
-# Install dependencies (creates .venv)
-uv sync --all-groups
-
-# Run the example script
-uv run python examples/basic_usage.py
-```
 
 ## Support
 
