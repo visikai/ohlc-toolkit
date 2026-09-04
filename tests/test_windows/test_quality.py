@@ -49,6 +49,11 @@ _EMIT_EVERY = "10s"
 # because "0" happens to occur inside "100.0".
 _TIME_BASE = 1_700_000_000
 
+# A dtype wide enough that echoing it whole would swamp the message, and a
+# ceiling comfortably above any bounded rendering of it.
+_PATHOLOGICAL_STRUCT_FIELDS = 1000
+_MAX_REFUSAL_MESSAGE_CHARS = 1000
+
 
 def _rows(*open_times: int) -> tuple[SourceRow, ...]:
     """Build source rows at the given open times, with distinct OHLCV values.
@@ -871,6 +876,34 @@ class TestBoundaryConditions:
                 WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
                 window=_WINDOW,
             )
+
+    @pytest.mark.parametrize(
+        "column", ["close_time", "coverage_seconds"], ids=["close_time", "coverage"]
+    )
+    def test_a_pathological_dtype_is_echoed_bounded(self, column: str) -> None:
+        """Refusing a column must not quote its whole dtype back.
+
+        The dtype in the message is read off the caller's frame, so its
+        size is theirs to choose rather than ours; a thousand-field
+        struct renders to roughly fifteen thousand characters. Both
+        columns are checked because they are the same guard twice.
+        """
+        fields = range(_PATHOLOGICAL_STRUCT_FIELDS)
+        wide = pl.Struct({f"f{index}": pl.Int64 for index in fields})
+        frame = _full_grid_frame().with_columns(
+            pl.lit({f"f{index}": 1 for index in fields}, dtype=wide).alias(column)
+        )
+
+        with pytest.raises(ConfigError, match="Int64") as raised:
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+                window=_WINDOW,
+            )
+
+        message = str(raised.value)
+        assert len(message) < _MAX_REFUSAL_MESSAGE_CHARS
+        assert f"f{_PATHOLOGICAL_STRUCT_FIELDS - 1}" not in message
 
     def test_the_engines_own_int64_close_time_is_accepted(self) -> None:
         """Int64 is what the engine emits for close_time, and it passes."""

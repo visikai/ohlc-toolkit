@@ -33,7 +33,7 @@ import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.source.profile import SourceProfile
-from ohlc_toolkit.temporal import DataValidationError
+from ohlc_toolkit.temporal import DataValidationError, bounded_echo
 
 logger = get_logger(__name__)
 
@@ -260,7 +260,10 @@ def _check_schema(frame: pl.DataFrame, profile: SourceProfile) -> list[Finding]:
     if wrong_kind:
         details = [
             f"{_bounded_column_name(name)} (expected {profile.raw_schema[name].value}, "
-            f"got {frame.schema[name]})"
+            # The expected kind is first-party and short; the dtype beside
+            # it is read off the caller's frame, so its size is theirs to
+            # choose. A wide struct renders to thousands of characters.
+            f"got {bounded_echo(frame.schema[name])})"
             for name in wrong_kind[:_MAX_SCHEMA_COLUMN_NAMES]
         ]
         parts.append(f"wrong-kind columns: {details}")

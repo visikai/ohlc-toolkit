@@ -184,6 +184,39 @@ class TestSchemaValidationBothModes(unittest.TestCase):
         self.assertIn("...", findings[0].message)
         self.assertNotIn(long_name, findings[0].message)
 
+    def test_a_pathological_dtype_is_echoed_bounded(self):
+        """A wide struct dtype must not put its whole shape in the message.
+
+        The echoed dtype is read off the INPUT frame, so its size is the
+        caller's to choose rather than ours. A thousand-field struct
+        renders to roughly fifteen thousand characters unbounded.
+        """
+        wide = pl.Struct({f"f{index}": pl.Int64 for index in range(1000)})
+        frame = pl.DataFrame(
+            {"timestamp": pl.Series([{f"f{i}": 1 for i in range(1000)}], dtype=wide)}
+        )
+
+        report = validate_source_frame(frame, _PROFILE, mode=ValidationMode.REPORT)
+
+        findings = _find(report, FindingKind.SCHEMA)
+        self.assertEqual(len(findings), 1)
+        message = findings[0].message
+        self.assertLess(len(message), 1000)
+        self.assertNotIn("f999", message)
+
+    def test_an_ordinary_dtype_is_echoed_in_full(self):
+        """Bounding the pathological case must not reword the ordinary one."""
+        corrupted = self.frame.with_columns(pl.col("open").cast(pl.Utf8))
+
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+
+        findings = _find(report, FindingKind.SCHEMA)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(
+            findings[0].message,
+            "wrong-kind columns: ['open (expected floating, got String)']",
+        )
+
 
 class TestMonotonicityBothModes(unittest.TestCase):
     """Test cases for the strictly-increasing timestamp check."""
