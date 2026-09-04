@@ -14,9 +14,15 @@ real thing.
 import gzip
 import hashlib
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import orjson
+
+from ohlc_toolkit.snapshot.errors import SnapshotIntegrityError
+from ohlc_toolkit.snapshot.manifest import MANIFEST_ASSET_NAME
+from ohlc_toolkit.snapshot.release import SnapshotRelease
 
 CADENCE_SECONDS = 60
 
@@ -147,3 +153,127 @@ def build_default_assets() -> dict[str, bytes]:
             b"1362229320,1362233460,69,suspected_outage\n"
         ),
     }
+
+
+class RecordingTransport:
+    """An in-process stand-in for the HTTP transport, backed by a URL map.
+
+    It honours the same contract the shipped transport does: it writes the
+    published bytes to the destination it is handed, refuses a body larger
+    than the caller's cap without writing it, and raises
+    ``SnapshotIntegrityError`` for a URL the release does not serve. Every
+    requested URL is recorded, so a test can show that a re-fetch asked
+    for nothing it already had.
+    """
+
+    def __init__(self, payloads: Mapping[str, bytes]) -> None:
+        """Serve exactly the URL-to-bytes map given."""
+        self.payloads = dict(payloads)
+        self.requested: list[str] = []
+
+    def download(self, url: str, destination: Path, *, max_bytes: int) -> None:
+        """Write the bytes published at ``url`` to ``destination``."""
+        self.requested.append(url)
+        payload = self.payloads.get(url)
+        if payload is None:
+            raise SnapshotIntegrityError(f"No asset is published at {url}.")
+        if len(payload) > max_bytes:
+            raise SnapshotIntegrityError(
+                f"Body at {url} exceeds the {max_bytes}-byte cap declared for it."
+            )
+        destination.write_bytes(payload)
+
+
+@dataclass(frozen=True)
+class ReleaseFixture:
+    """A fixture release whose manifest truthfully describes its own bytes.
+
+    Attributes:
+        release: The release identity the URLs are composed from.
+        manifest_bytes: The manifest payload served under the release.
+        assets: Asset name to the exact bytes published under it.
+        payloads: URL to bytes, covering the manifest and every asset.
+
+    """
+
+    release: SnapshotRelease
+    manifest_bytes: bytes
+    assets: Mapping[str, bytes]
+    payloads: Mapping[str, bytes]
+
+    def transport(
+        self, payloads: Mapping[str, bytes] | None = None
+    ) -> RecordingTransport:
+        """Build a transport serving this release, or a perturbed variant."""
+        return RecordingTransport(self.payloads if payloads is None else payloads)
+
+    def serving(self, asset_name: str, payload: bytes | None) -> dict[str, bytes]:
+        """Return this release's payload map with one asset replaced or removed.
+
+        Args:
+            asset_name: The asset to perturb.
+            payload: The bytes to serve instead, or None to serve nothing
+                at all, which is how a test models a missing asset.
+
+        Returns:
+            A new payload map; this fixture's own map is left alone.
+
+        """
+        served = dict(self.payloads)
+        url = self.release.asset_url(asset_name)
+        if payload is None:
+            del served[url]
+        else:
+            served[url] = payload
+        return served
+
+    def url_for(self, asset_name: str) -> str:
+        """Return the URL this release serves one asset under."""
+        return self.release.asset_url(asset_name)
+
+
+def build_release_fixture(
+    *,
+    assets: Mapping[str, bytes] | None = None,
+    timestamps: Sequence[int] | None = None,
+    tag: str = FIXTURE_TAG,
+    manifest_tag: str | None = None,
+    manifest_bytes: bytes | None = None,
+) -> ReleaseFixture:
+    """Build a self-consistent fixture release.
+
+    Args:
+        assets: Asset name to bytes; defaults to the three-asset layout
+            the real releases publish.
+        timestamps: The history the manifest summarizes; defaults to the
+            complete grid the default history asset holds.
+        tag: The tag the release is fetched by.
+        manifest_tag: The tag the manifest itself declares, when a test
+            needs it to disagree with ``tag``.
+        manifest_bytes: A replacement manifest payload, for tests that
+            need it malformed rather than merely wrong.
+
+    Returns:
+        The fixture, including the URL-to-bytes map a transport serves.
+
+    """
+    resolved_assets = dict(build_default_assets() if assets is None else assets)
+    resolved_timestamps = list(
+        history_timestamps() if timestamps is None else timestamps
+    )
+    payload = build_manifest_payload(
+        assets=resolved_assets,
+        timestamps=resolved_timestamps,
+        tag=tag if manifest_tag is None else manifest_tag,
+    )
+    encoded = encode_manifest(payload) if manifest_bytes is None else manifest_bytes
+    release = SnapshotRelease(repository=FIXTURE_REPOSITORY, tag=tag, host=FIXTURE_HOST)
+    payloads = {release.asset_url(MANIFEST_ASSET_NAME): encoded}
+    for name, asset_payload in resolved_assets.items():
+        payloads[release.asset_url(name)] = asset_payload
+    return ReleaseFixture(
+        release=release,
+        manifest_bytes=encoded,
+        assets=resolved_assets,
+        payloads=payloads,
+    )
