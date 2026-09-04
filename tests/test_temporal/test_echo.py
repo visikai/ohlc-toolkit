@@ -1,8 +1,12 @@
 """The one bounded echo every module quotes untrusted input through."""
 
-import polars as pl
+from enum import Enum
 
-from ohlc_toolkit.temporal import MAX_ECHO_CHARS, bounded_echo
+import polars as pl
+import pytest
+
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, bounded_echo
+from ohlc_toolkit.temporal.echo import enum_from_payload
 
 
 def test_a_short_value_is_echoed_as_its_repr() -> None:
@@ -52,3 +56,27 @@ def test_the_cap_measures_the_representation_not_the_raw_length() -> None:
     assert "total" not in bounded_echo("x" * 78)
     assert "total" in bounded_echo("x" * 79)
     assert "total" in bounded_echo("x" * 80)
+
+
+class _Colour(Enum):
+    """A throwaway enum, so this test needs nothing from a higher layer."""
+
+    RED = "red"
+
+
+def test_a_huge_non_string_enum_payload_is_echoed_bounded() -> None:
+    """The non-string refusal echoes through the bounded helper.
+
+    This branch previously interpolated the raw value unbounded, so a
+    500-element list would have produced a multi-kilobyte refusal; the
+    consolidation routed it through the shared bounded echo, and this
+    pins that improvement as deliberate.
+    """
+    # Generous ceiling: the bounded echo caps the interpolated value at 80
+    # visible characters, so the whole refusal stays well under this while
+    # the unbounded form measured multiple kilobytes.
+    bounded_message_ceiling = 300
+
+    with pytest.raises(ConfigError) as caught:
+        enum_from_payload(_Colour, ["garbage"] * 500, label="colour")
+    assert len(str(caught.value)) < bounded_message_ceiling

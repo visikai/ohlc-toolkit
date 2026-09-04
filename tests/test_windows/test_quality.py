@@ -52,6 +52,8 @@ _TIME_BASE = 1_700_000_000
 
 # A dtype wide enough that echoing it whole would swamp the message.
 _PATHOLOGICAL_STRUCT_FIELDS = 1000
+# A serialized value far larger than any real one, for the same reason.
+_OVERSIZED_PAYLOAD_CHARS = 200_000
 # A refusal is fixed prose plus ONE bounded echo, so the ceiling is derived
 # from the echo cap rather than written as a round number: if that cap ever
 # rises, this rises with it instead of quietly going slack.
@@ -241,6 +243,40 @@ class TestWindowQualityPolicyIdentity:
             WindowQualityPolicy.from_dict(
                 {"mode": "gate", "min_coverage": 0.5, "gate_mode": "lenient"}
             )
+
+    @pytest.mark.parametrize("key", ["mode", "gate_mode"])
+    def test_from_dict_does_not_quote_back_an_enormous_value(self, key: str) -> None:
+        """Refusing a payload must not echo the payload back whole.
+
+        `from_dict` exists to consume serialized input, so the value it
+        refuses is the caller's to choose the size of. Both keys are
+        checked because they are the same coercion twice, and both the
+        raised message and the warning line are checked because they are
+        the same echo twice.
+        """
+        payload: dict[str, object] = {
+            "mode": "filter",
+            "min_coverage": 0.5,
+            "gate_mode": "strict",
+        }
+        payload[key] = "x" * _OVERSIZED_PAYLOAD_CHARS
+
+        logged: list[str] = []
+        sink_id = quality_module.logger.add(
+            logged.append, level="WARNING", format="{message}"
+        )
+        try:
+            with pytest.raises(ConfigError) as raised:
+                WindowQualityPolicy.from_dict(payload)
+        finally:
+            quality_module.logger.remove(sink_id)
+
+        message = str(raised.value)
+        assert len(message) < _MAX_REFUSAL_MESSAGE_CHARS
+
+        assert logged, "the refusal warns before it raises; nothing was captured"
+        for line in logged:
+            assert len(line) < _MAX_REFUSAL_MESSAGE_CHARS
 
     def test_from_dict_rejects_an_invalid_threshold(self) -> None:
         """A threshold outside [0, 1] is refused even when round-tripped."""
