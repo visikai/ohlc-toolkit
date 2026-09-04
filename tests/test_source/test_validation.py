@@ -14,7 +14,7 @@ from ohlc_toolkit.source.validation import (
     ValidationReport,
     validate_source_frame,
 )
-from ohlc_toolkit.temporal import DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, DataValidationError
 from tests.test_source.factories import build_clean_frame
 
 _PROFILE = SourceProfile.create(
@@ -33,6 +33,12 @@ _PROFILE = SourceProfile.create(
 )
 
 _CADENCE_SECONDS = 60
+
+# A dtype wide enough that echoing it whole would swamp the finding, and a
+# ceiling derived from the echo cap rather than written as a round number,
+# so raising that cap cannot leave this assertion slack.
+_PATHOLOGICAL_STRUCT_FIELDS = 1000
+_MAX_FINDING_MESSAGE_CHARS = 4 * MAX_ECHO_CHARS
 
 
 def _set_timestamps(frame: pl.DataFrame, timestamps: list[int | None]) -> pl.DataFrame:
@@ -191,9 +197,10 @@ class TestSchemaValidationBothModes(unittest.TestCase):
         caller's to choose rather than ours. A thousand-field struct
         renders to roughly fifteen thousand characters unbounded.
         """
-        wide = pl.Struct({f"f{index}": pl.Int64 for index in range(1000)})
+        fields = range(_PATHOLOGICAL_STRUCT_FIELDS)
+        wide = pl.Struct({f"f{index}": pl.Int64 for index in fields})
         frame = pl.DataFrame(
-            {"timestamp": pl.Series([{f"f{i}": 1 for i in range(1000)}], dtype=wide)}
+            {"timestamp": pl.Series([{f"f{i}": 1 for i in fields}], dtype=wide)}
         )
 
         report = validate_source_frame(frame, _PROFILE, mode=ValidationMode.REPORT)
@@ -201,8 +208,8 @@ class TestSchemaValidationBothModes(unittest.TestCase):
         findings = _find(report, FindingKind.SCHEMA)
         self.assertEqual(len(findings), 1)
         message = findings[0].message
-        self.assertLess(len(message), 1000)
-        self.assertNotIn("f999", message)
+        self.assertLess(len(message), _MAX_FINDING_MESSAGE_CHARS)
+        self.assertNotIn(f"f{_PATHOLOGICAL_STRUCT_FIELDS - 1}", message)
 
     def test_an_ordinary_dtype_is_echoed_in_full(self):
         """Bounding the pathological case must not reword the ordinary one."""
