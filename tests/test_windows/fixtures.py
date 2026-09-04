@@ -1,10 +1,10 @@
 """Committed data fixtures used by the window tests.
 
-Real-data fixtures, and which one to reach for
-----------------------------------------------
+The real-data fixture
+---------------------
 
-``tests/test_data/bitstamp_btcusd_1min_14d.csv.gz`` is the PRIMARY
-real-data fixture for window work. It holds 20160 rows: a complete,
+``tests/test_data/bitstamp_btcusd_1min_14d.csv.gz`` is the real-data
+fixture for window work. It holds 20160 rows: a complete,
 gap-free one-minute grid over the half-open Unix-second range
 ``[1786924800, 1788134400)``, which is 2026-08-17 00:00:00 UTC up to
 2026-08-31 00:00:00 UTC. It is a slice of the recently published public
@@ -12,13 +12,6 @@ Bitstamp BTC/USD minute-data history, with that source's own six columns
 unchanged. Fourteen days of minutes is enough to carry a window measured
 in thousands of source candles, and complete enough to pass strict source
 validation, so it can exercise a schedule-scale run end to end.
-
-``tests/test_data/real_world_data.csv`` (1439 rows, a little under one
-day) is SMOKE-ONLY from here on. A window longer than a day cannot even
-be materialized over it, so it can show that a call runs but never that
-aggregation is right at scale. It stays exactly where it is for the
-legacy tests that already read it; new window work should use the 14-day
-slice above.
 """
 
 from pathlib import Path

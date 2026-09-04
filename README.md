@@ -30,19 +30,6 @@ pip install ohlc-toolkit
     df_1min = DatasetDownloader().download_bitstamp_btcusd_minute_data(bulk=True)
   ```
 
-- Transform your candle data into any desired timeframe and resolution:
-
-  ```py
-    # Convert 1-minute candle data into 5-minute candles (with candle updated every minute)
-    df_5m = transform_ohlc(df_1min, timeframe=5, step_size_minutes=1)
-
-    # Convert 1-minute candle data into 1-day candles (with candle updated every day)
-    df_1d = transform_ohlc(df_1min, timeframe="1d", step_size_minutes=1440)  
-  
-    # Support for arbitrary timeframes is available!
-    df_arb = transform_ohlc(df_1min, timeframe="1d3h7m", step_size_minutes=33)
-  ```
-
 - Convert timeframe strings to the number of minutes, and vice versa:
 
   ```py
