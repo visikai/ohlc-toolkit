@@ -7,6 +7,7 @@ you asked for.
 """
 
 import pytest
+
 from ohlc_toolkit.snapshot.manifest import MANIFEST_ASSET_NAME
 from ohlc_toolkit.snapshot.release import (
     BITSTAMP_BTCUSD_1M_REPOSITORY,
@@ -14,7 +15,6 @@ from ohlc_toolkit.snapshot.release import (
     DEFAULT_RELEASE_HOST,
     SnapshotRelease,
 )
-
 from ohlc_toolkit.temporal import ConfigError
 from tests.test_snapshot.factories import (
     FIXTURE_HOST,

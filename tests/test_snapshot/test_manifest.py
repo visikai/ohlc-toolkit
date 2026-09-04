@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+
 from ohlc_toolkit.snapshot.errors import SnapshotManifestError
 from ohlc_toolkit.snapshot.manifest import (
     MANIFEST_ASSET_NAME,
@@ -21,7 +22,6 @@ from ohlc_toolkit.snapshot.manifest import (
     SnapshotManifest,
     parse_manifest,
 )
-
 from ohlc_toolkit.temporal import DataValidationError
 from tests.test_snapshot.factories import (
     FIXTURE_REVISION,
