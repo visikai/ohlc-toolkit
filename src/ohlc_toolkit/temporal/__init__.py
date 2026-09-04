@@ -1,4 +1,4 @@
-"""Temporal primitives: an exact-second Duration and its exception taxonomy.
+"""Temporal primitives: Duration, the exception taxonomy, and the bounded echo.
 
 This namespace is not re-exported from the top-level ``ohlc_toolkit``
 package; import from ``ohlc_toolkit.temporal`` directly.

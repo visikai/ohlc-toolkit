@@ -9,10 +9,6 @@ one stated size, and a length note so the reader of a truncated echo
 still learns how large the original was.
 """
 
-from ohlc_toolkit.config.logging import get_logger
-
-logger = get_logger(__name__)
-
 # Eighty characters names any ordinary dtype, tag, column, or duration
 # string while keeping a single log line readable.
 MAX_ECHO_CHARS = 80

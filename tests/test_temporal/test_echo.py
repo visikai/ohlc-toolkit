@@ -36,3 +36,19 @@ def test_the_boundary_length_is_not_truncated() -> None:
     """A representation of exactly the cap passes through whole."""
     raw = "s" * (MAX_ECHO_CHARS - 2)  # repr adds two quotes
     assert bounded_echo(raw) == repr(raw)
+
+
+def test_the_cap_measures_the_representation_not_the_raw_length() -> None:
+    """A raw 79-character string truncates; its 78-character neighbour does not.
+
+    The cap bounds what is WRITTEN -- the repr, quotes included -- not
+    the input's own length. Under the raw-length rule this helper
+    replaced, plain-ASCII inputs of raw length 79 and 80 were echoed
+    whole; measuring the representation moves that boundary down by the
+    two quote characters, and measuring anything else would re-open the
+    escape-expansion hole where an 80-character input rendered as
+    hundreds of characters of log line.
+    """
+    assert "total" not in bounded_echo("x" * 78)
+    assert "total" in bounded_echo("x" * 79)
+    assert "total" in bounded_echo("x" * 80)
