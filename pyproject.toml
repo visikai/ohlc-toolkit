@@ -60,7 +60,7 @@ lint.ignore = [
     "PLE1205", # False positive: Too many arguments for `logging` format string
 ]
 target-version = "py311"
-include = ["benchmarks/*.py", "examples/*.py", "src/*.py", "tests/*.py"]
+include = ["benchmarks/*.py", "src/*.py", "tests/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = "tests"
@@ -73,7 +73,7 @@ markers = [
 ]
 
 [tool.coverage.report]
-omit = ["tests/*", "examples/*"]
+omit = ["tests/*"]
 skip_covered = false
 show_missing = true
 
