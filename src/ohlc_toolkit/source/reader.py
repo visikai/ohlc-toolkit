@@ -58,6 +58,7 @@ def read_source_csv(
     profile: SourceProfile,
     *,
     mode: Literal[ValidationMode.STRICT],
+    max_rows: int | None = None,
 ) -> pl.DataFrame: ...
 
 
@@ -67,11 +68,16 @@ def read_source_csv(
     profile: SourceProfile,
     *,
     mode: Literal[ValidationMode.REPORT],
+    max_rows: int | None = None,
 ) -> SourceReadResult: ...
 
 
 def read_source_csv(
-    path: str | os.PathLike[str], profile: SourceProfile, *, mode: ValidationMode
+    path: str | os.PathLike[str],
+    profile: SourceProfile,
+    *,
+    mode: ValidationMode,
+    max_rows: int | None = None,
 ) -> pl.DataFrame | SourceReadResult:
     """Read a raw source CSV (plain or gzipped) and validate it.
 
@@ -88,6 +94,11 @@ def read_source_csv(
         mode: ``ValidationMode.STRICT`` returns the frame on success or
             raises on any finding; ``ValidationMode.REPORT`` always
             returns both the frame and its report.
+        max_rows: Upper bound on rows read from the file, or ``None``
+            for no bound. For a caller who already knows how many rows
+            the file MUST contain: reading one row past that number is
+            enough to prove the file too long, without a longer -- or
+            adversarially compressed -- file ever being fully resident.
 
     Returns:
         The raw frame in strict mode; a :class:`SourceReadResult` in
@@ -99,7 +110,7 @@ def read_source_csv(
             one or more findings.
 
     """
-    frame = _read_raw_frame(path, profile)
+    frame = _read_raw_frame(path, profile, max_rows)
 
     if mode is ValidationMode.STRICT:
         validate_source_frame(frame, profile, mode=ValidationMode.STRICT)
@@ -110,7 +121,7 @@ def read_source_csv(
 
 
 def _read_raw_frame(
-    path: str | os.PathLike[str], profile: SourceProfile
+    path: str | os.PathLike[str], profile: SourceProfile, max_rows: int | None
 ) -> pl.DataFrame:
     """Read a raw CSV with dtypes pinned by the profile's raw schema."""
     schema_overrides = {
@@ -120,7 +131,9 @@ def _read_raw_frame(
     try:
         # os.fspath() normalizes any PathLike (not just pathlib.Path) to
         # the str/bytes union polars' read_csv is typed to accept.
-        return pl.read_csv(os.fspath(path), schema_overrides=schema_overrides)
+        return pl.read_csv(
+            os.fspath(path), schema_overrides=schema_overrides, n_rows=max_rows
+        )
     except FileNotFoundError:
         logger.error("Source file not found: {}", path)
         raise

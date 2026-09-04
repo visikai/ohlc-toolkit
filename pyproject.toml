@@ -64,7 +64,13 @@ include = ["benchmarks/*.py", "examples/*.py", "src/*.py", "tests/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = "tests"
-addopts = "--cov --cov-report term --ruff --ruff-format"
+# `-m 'not network'` deselects the network-touching tests by default. A
+# `-m` given on the command line comes after these and wins, so
+# `pytest -m network` runs exactly those.
+addopts = "--cov --cov-report term --ruff --ruff-format -m 'not network'"
+markers = [
+    "network: fetches from the real published dataset release; deselected by default, run with `pytest -m network`",
+]
 
 [tool.coverage.report]
 omit = ["tests/*", "examples/*"]
