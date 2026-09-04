@@ -40,23 +40,6 @@ pip install ohlc-toolkit
     format_timeframe(minutes=75) == "1h15m"
   ```
 
-- Calculate future price changes:
-
-  ```py
-    # For every minute, compute the 1-hour percentage price change
-    df_future_returns = calculate_percentage_return(
-        df_1min["close"],  # Use the close price column
-        timestep_size=1,  # Compute returns at 1-minute resolution (same as input)
-        future_return_length=60,  # Compute price changes over 60 minutes
-    )
-  ```
-
-🚧 Coming soon™️:
-
-- Calculate technical indicators
-
-All of the above features will enable you to generate extensive training data for machine learning models, whether for research or trading, to predict future price changes based on technical indicators.
-
 ## Examples
 
 See the [examples](examples/README.md) directory for examples of how to use the toolkit.
