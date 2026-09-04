@@ -102,6 +102,11 @@ jobs:
           cache-python: true
           python-version: "3.14.7"
 
+      # A stale lockfile passes uv sync --frozen, so a version bump that
+      # forgets the lockfile is otherwise caught nowhere.
+      - name: Require the lockfile to be in sync
+        run: uv lock --check
+
       - name: Build package
         run: uv build
 
