@@ -57,7 +57,8 @@ pip install "ohlc-toolkit<1"
 Against the real published BTC/USD minute history
 ([ff137/bitstamp-btcusd-minute-data](https://github.com/ff137/bitstamp-btcusd-minute-data)).
 The release is about 260 MB across three assets; it is fetched once and
-re-used on later runs.
+re-used on later runs. The toolkit logs each fetch and verification step
+as it runs; those log lines are omitted from the pasted output below.
 
 ```python
 from ohlc_toolkit.returns import (
