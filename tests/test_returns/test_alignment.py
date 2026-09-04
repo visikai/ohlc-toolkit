@@ -394,6 +394,67 @@ class TestHorizonsThatLeaveTheInt64Range:
                 frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
             )
 
+    def test_a_shift_landing_one_past_the_top_is_refused(self) -> None:
+        """The refusal boundary is exact: one second past the largest Int64.
+
+        The tests above land 30 seconds past the bound, so a constant
+        moved by one would still catch them; this one lands the shifted
+        key on exactly ``2**63``, where an off-by-one in the bound is
+        the difference between a refusal and a silently wrapped key that
+        matches another row.
+        """
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", [_INT64_MAX - 59], dtype=pl.Int64),
+                pl.Series("close", [100.0], dtype=pl.Float64),
+            ]
+        )
+        with pytest.raises(ConfigError, match="Int64 range"):
+            add_forward_returns(
+                frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+            )
+
+    def test_a_shift_landing_exactly_on_the_top_is_accepted(self) -> None:
+        """The largest Int64 itself is a representable key, so it is allowed."""
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", [_INT64_MAX - 60], dtype=pl.Int64),
+                pl.Series("close", [100.0], dtype=pl.Float64),
+            ]
+        )
+        result = add_forward_returns(
+            frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+        )
+        availability = next(c for c in result.columns if c.endswith("_available_at"))
+        assert result.get_column(availability).to_list() == [_INT64_MAX]
+
+    def test_a_shift_landing_one_past_the_bottom_is_refused(self) -> None:
+        """The bottom boundary is exact too: one second below the smallest Int64."""
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", [_INT64_MIN + 59], dtype=pl.Int64),
+                pl.Series("close", [100.0], dtype=pl.Float64),
+            ]
+        )
+        with pytest.raises(ConfigError, match="Int64 range"):
+            add_backward_returns(
+                frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+            )
+
+    def test_a_shift_landing_exactly_on_the_bottom_is_accepted(self) -> None:
+        """The smallest Int64 itself is a representable key, so it is allowed."""
+        frame = pl.DataFrame(
+            [
+                pl.Series("close_time", [_INT64_MIN + 60], dtype=pl.Int64),
+                pl.Series("close", [100.0], dtype=pl.Float64),
+            ]
+        )
+        result = add_backward_returns(
+            frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+        )
+        value = next(c for c in result.columns if c.startswith("backward_return"))
+        assert result.get_column(value).to_list() == [None]
+
     def test_only_the_largest_close_time_overflowing_forward_is_refused(self) -> None:
         """Both extremes guard the shift, not just one of them.
 

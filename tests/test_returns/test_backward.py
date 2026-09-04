@@ -276,6 +276,44 @@ class TestBackwardLogReturns:
         column = backward_return_column(ReturnMethod.SIMPLE, "1m")
         assert _values(result, column) == [None, 0.0]
 
+    def test_a_positive_ratio_at_the_quotient_rounding_boundary_is_nulled(
+        self,
+    ) -> None:
+        """LOG nulls a band of tiny POSITIVE ratios; this pins that as chosen.
+
+        At a price ratio of ``2**-54`` the difference quotient
+        ``(a - b) / b`` rounds to exactly ``-1.0`` (``2**-54`` is half an
+        ulp of 1, and ties round to even), so ``log1p`` sees ``-1`` and
+        the value is nulled -- even though the true log return, about
+        ``-37.43``, is a real number. SIMPLE reports that same rounded
+        quotient, ``-1.0``, as a value. Nulling here is a deliberate
+        fail-safe for a collapse the formula can no longer resolve, not
+        an accident; the module docstring states the band, and this test
+        keeps the statement honest. One ulp higher, at ``2**-53``, the
+        quotient is representable and LOG is finite again.
+        """
+        at_boundary = return_frame((0, 60), (1.0, 2.0**-54))
+        log_result = add_backward_returns(
+            at_boundary, horizon="1m", cadence=CADENCE, method=ReturnMethod.LOG
+        )
+        simple_result = add_backward_returns(
+            at_boundary, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+        )
+        log_column = backward_return_column(ReturnMethod.LOG, "1m")
+        simple_column = backward_return_column(ReturnMethod.SIMPLE, "1m")
+        assert _values(log_result, log_column) == [None, None]
+        assert _values(simple_result, simple_column) == [None, -1.0]
+
+        above_boundary = return_frame((0, 60), (1.0, 2.0**-53))
+        finite_result = add_backward_returns(
+            above_boundary, horizon="1m", cadence=CADENCE, method=ReturnMethod.LOG
+        )
+        finite_value = _values(finite_result, log_column)[1]
+        assert finite_value is not None
+        assert finite_value == pytest.approx(
+            math.log1p(2.0**-53 - 1.0), rel=_LOG_TOLERANCE
+        )
+
     def test_the_two_formulas_are_each_others_log_and_exp(self) -> None:
         """``log_return == ln(1 + simple_return)`` on every defined row.
 
