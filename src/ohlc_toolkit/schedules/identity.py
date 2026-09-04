@@ -205,7 +205,7 @@ def optional_text_from_payload(value: object, *, label: str) -> str | None:
     raise ConfigError(f"The {label} must be a string, got {type(value).__name__}")
 
 
-def enum_from_payload(  # noqa: UP047 - PEP 695 generics need 3.12; this package still declares 3.11
+def enum_from_payload(
     enum_type: type[_EnumMember], value: object, *, label: str
 ) -> _EnumMember:
     """Read an enum member out of a payload by its stored value.
