@@ -1,8 +1,9 @@
 """Emit-cadence rules: how a window scale is turned into an emit cadence.
 
 Every expected cadence here is worked out by hand from the rule -- the
-largest allowed cadence at or below W/K, then clamped up to the source
-cadence -- rather than read back out of the code that computes it.
+largest allowed cadence at or below W/K, snapped up to the smallest
+allowed member at or above the source cadence when that lands below it
+-- rather than read back out of the code that computes it.
 """
 
 import hashlib
@@ -54,7 +55,7 @@ def _hash_of(payload: dict[str, object]) -> str:
 
 
 class TestWOverK:
-    """E is the largest allowed cadence at or below W/K, never below d."""
+    """E is the largest allowed member at or below W/K, snapped up within the set."""
 
     def test_an_exact_division_lands_on_the_allowed_member(self) -> None:
         """W/K is 15m and 1h exactly, and both are in the allowed set."""
@@ -93,16 +94,15 @@ class TestWOverK:
         )
         assert _texts(rule) == [("1h", "1h")]
 
-    def test_a_ratio_below_the_source_cadence_clamps_up(self) -> None:
+    def test_a_ratio_below_the_source_cadence_snaps_to_a_member(self) -> None:
         """Nothing can be emitted faster than the source produces candles.
 
         W/K here is 30s over a 1m source. The allowed set does contain a
-        30s member, and it is still not usable: the clamp to the source
-        cadence wins over the allowed set, because emitting below the
-        source cadence is impossible while emitting at a cadence the
-        caller did not list is merely not preferred. The resolved
-        cadence is therefore coarser than W/K, which is the one case
-        where that happens.
+        30s member, and it is still not usable: the answer snaps up to
+        the 1m member, the smallest one the source can keep up with.
+        The resolved cadence is therefore coarser than W/K, which is the
+        one case where that happens -- and it is still a member of the
+        recorded set.
         """
         rule = w_over_k(["2m"], divisor=4, allowed=["30s", "1m"], source_cadence="1m")
         assert _texts(rule) == [("2m", "1m")]
@@ -118,12 +118,12 @@ class TestWOverK:
         assert [pair.window for pair in rule.pairs] == list(_schedule_windows())
 
     def test_every_resolved_cadence_is_at_least_the_source_cadence(self) -> None:
-        """The clamp holds across a whole schedule, not just at its small end.
+        """The floor holds across a whole schedule, not just at its small end.
 
         The allowed set here reaches below the source cadence, so the
         smallest window's W/K really does select a sub-cadence member --
         and every resolved cadence still comes back at or above the
-        source cadence.
+        source cadence, snapped up to a member where needed.
         """
         rule = w_over_k(
             _schedule_windows(),
@@ -141,13 +141,14 @@ class TestWOverK:
         The natural way to use the rule is to hand a resolved schedule
         in twice: once as the windows, once as the allowed set. With a
         large divisor the smallest windows put ``W / K`` below the
-        smallest member -- 1m/48 is 1.25s -- and the source-cadence
-        floor must answer for them, exactly as it answers for an allowed
-        member that is too fine. Every expected cadence below is worked
-        out by hand from ``a * 48 <= W``: the largest member at or below
-        the ratio where one exists (146m/48 takes 3m; 56m/48 takes 1m
-        with no clamping involved), and the source cadence where none
-        does (the first four windows).
+        smallest member -- 1m/48 is 1.25s -- and the snap answers for
+        them: the smallest member at or above the source cadence, which
+        in this self-similar configuration IS the 1m source cadence.
+        Every expected cadence below is worked out by hand from
+        ``a * 48 <= W``: the largest member at or below the ratio where
+        one exists (146m/48 takes 3m; 56m/48 takes 1m with no snapping
+        involved), and the snapped smallest member where none does (the
+        first four windows).
         """
         minutes = [1, 3, 8, 21, 56, 146, 380, 993, 2590, 6758, 17632]
         windows = [f"{m}m" for m in minutes]
@@ -159,15 +160,14 @@ class TestWOverK:
             Duration.parse(f"{m}m") for m in expected_emit_minutes
         ]
 
-    def test_a_window_too_small_for_the_divisor_clamps_to_the_source(self) -> None:
+    def test_a_window_too_small_for_the_divisor_snaps_to_a_member(self) -> None:
         """A window whose ratio undercuts the whole allowed set still resolves.
 
         A metallic schedule seeded at the source cadence starts at 1m,
         and 1m/4 is below every member of a minute-and-up allowed set.
-        A quantized cadence would then lie below the smallest member,
-        hence below the source-cadence floor's reach, so the floor
-        answers directly rather than the rule refusing and dropping the
-        schedule's own smallest windows.
+        The snap answers with the smallest member at or above the source
+        cadence -- here the set's own 1m -- rather than the rule
+        refusing and dropping the schedule's own smallest windows.
         """
         schedule = metallic_recurrence(
             coefficient=2.0, seed="1m", grain="1m", maximum="1d"
@@ -256,12 +256,13 @@ class TestWOverK:
                 anchor="0s",
             )
 
-    def test_quantized_and_clamped_windows_resolve_side_by_side(self) -> None:
-        """One rule can quantize one window and clamp its neighbour.
+    def test_quantized_and_snapped_windows_resolve_side_by_side(self) -> None:
+        """One rule can quantize one window and snap its neighbour.
 
         4h/4 lands exactly on the allowed 1h; 1h/4 undercuts the whole
-        allowed set and takes the source cadence instead. Neither
-        outcome disturbs the other.
+        allowed set and snaps up to that same 1h member -- the smallest
+        one at or above the source cadence. Neither outcome disturbs the
+        other, and both answers are members of the recorded set.
         """
         rule = w_over_k(
             ["4h", "1h"],
@@ -270,7 +271,7 @@ class TestWOverK:
             source_cadence=_SOURCE_CADENCE,
         )
 
-        assert _texts(rule) == [("4h", "1h"), ("1h", "1m")]
+        assert _texts(rule) == [("4h", "1h"), ("1h", "1h")]
 
     def test_the_parameters_are_recorded(self) -> None:
         """The divisor, the allowed set, and the source cadence are the identity."""

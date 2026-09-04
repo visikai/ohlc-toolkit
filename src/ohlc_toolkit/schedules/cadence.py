@@ -11,7 +11,8 @@ and a content hash over both.
 The W/K rule
 ------------
 
-``E = quantize_down(W / K, allowed)``, then clamped to ``E >= d``.
+``E = quantize_down(W / K, allowed)``, snapped up WITHIN the allowed
+set when that lands below the source cadence ``d``.
 
 Reading it in order:
 
@@ -23,19 +24,19 @@ Reading it in order:
   ratio. Down, not nearest: rounding up would emit more often than the
   caller asked for, which is the direction that costs work and overlaps
   windows.
-- The clamp to the source cadence ``d`` is last, and it wins over the
-  allowed set: nothing can be emitted more often than the source
-  produces candles, whereas a cadence the caller did not list is merely
-  not preferred. The clamp is what answers when the allowed set has
-  nothing at or below the ratio, too -- a quantized cadence would then
-  lie below the smallest member, hence below anything the floor could
-  admit, so the floor is the answer directly. Composed this way the
-  rule is total for every non-empty allowed set, which matters for the
-  natural configuration of feeding a resolved schedule in as its own
-  allowed set: a large divisor puts the smallest windows' ratios below
-  the smallest member, and they must still resolve. These clamped cases
-  are the only ones where the resolved cadence is COARSER than
-  ``W / K``, and they are deliberate.
+- The source cadence ``d`` is a floor, checked last: nothing can be
+  emitted more often than the source produces candles. When the
+  quantized cadence lands below that floor -- or nothing is at or below
+  the ratio at all -- the answer SNAPS UP to the smallest allowed member
+  at or above ``d``, never to ``d`` itself unless ``d`` is a member:
+  every resolved cadence is a member of the set the rule's identity
+  records, so a persisted rule can never claim an allowed set it did not
+  emit on. A set with no member at or above ``d`` is refused rather than
+  approximated. For the natural configuration of feeding a resolved
+  schedule in as its own allowed set with the source cadence as its
+  smallest member, the snap lands on that smallest member and the rule
+  stays total. These snapped cases are the only ones where the resolved
+  cadence is COARSER than ``W / K``, and they are deliberate.
 
 What this layer does not decide
 -------------------------------
@@ -351,11 +352,32 @@ class CadenceRule:
         """Check the resolved mapping against the invariants it shares with a schedule.
 
         Raises:
-            ConfigError: If ``pairs`` is empty, names a window twice, or
-                names more windows than a schedule may.
+            ConfigError: If ``pairs`` is empty, names a window twice,
+                names more windows than a schedule may, or -- for a W/K
+                rule -- pairs any window with a cadence that is not a
+                member of the rule's own allowed set. ``w_over_k``
+                cannot produce such a pair, and ``from_dict`` is guarded
+                by the recorded id, but the dataclass itself is public:
+                a hand-assembled or ``replace``-built rule must not
+                claim an allowed set it does not emit on.
 
         """
         require_resolved_windows(tuple(pair.window for pair in self.pairs))
+        if isinstance(self.spec, WOverKSpec):
+            members = set(self.spec.allowed)
+            for pair in self.pairs:
+                if pair.emit_every not in members:
+                    logger.warning(
+                        "Rejecting a W/K rule pairing {} with {}: not a member "
+                        "of its allowed set.",
+                        pair.window,
+                        pair.emit_every,
+                    )
+                    raise ConfigError(
+                        f"The pair ({pair.window} -> {pair.emit_every}) names a "
+                        "cadence that is not a member of the rule's allowed "
+                        f"set; the largest member is {self.spec.allowed[-1]}."
+                    )
 
     @property
     def schedule_id(self) -> str:
@@ -467,44 +489,63 @@ def _resolve_emit(window: Duration, spec: WOverKSpec) -> Duration:
         spec: The validated rule parameters.
 
     Returns:
-        The largest allowed cadence at or below ``W / K``, raised to the
-        source cadence if it falls below it. When no allowed cadence is
-        at or below ``W / K`` at all, the quantized cadence would lie
-        below the smallest member and therefore below anything the floor
-        could have admitted, so the floor answers directly: the emit
-        cadence is the source cadence itself.
+        The largest allowed cadence at or below ``W / K`` when that
+        cadence is at or above the source cadence. Otherwise -- the
+        quantized cadence undercuts the source cadence, or nothing is at
+        or below ``W / K`` at all -- the SMALLEST allowed member at or
+        above the source cadence, so the answer is always a member of
+        the recorded set. The source cadence itself is never the answer
+        unless it is a member.
+
+    Raises:
+        ConfigError: If no allowed member is at or above the source
+            cadence, so there is nothing the snap could land on. A
+            cadence outside the recorded set is never invented.
 
     """
     # `a <= W / K` without dividing: exact, in whole seconds, whatever
     # the remainder would have been.
     window_seconds = window.total_seconds
+    source_seconds = spec.source_cadence.total_seconds
     candidates = [
         cadence
         for cadence in spec.allowed
         if cadence.total_seconds * spec.divisor <= window_seconds
     ]
-    if not candidates:
-        logger.debug(
-            "Clamping the emit cadence for {} up to the {} source cadence; no "
-            "allowed cadence is at or below {}/{}.",
-            window,
-            spec.source_cadence,
-            window,
-            spec.divisor,
-        )
-        return spec.source_cadence
+    if candidates:
+        # `allowed` is sorted ascending, so the last survivor is the largest.
+        chosen = candidates[-1]
+        if chosen.total_seconds >= source_seconds:
+            return chosen
 
-    # `allowed` is sorted ascending, so the last survivor is the largest.
-    chosen = candidates[-1]
-    if chosen.total_seconds < spec.source_cadence.total_seconds:
-        logger.debug(
-            "Clamping the emit cadence for {} from {} up to the {} source cadence.",
-            window,
-            chosen,
-            spec.source_cadence,
-        )
-        return spec.source_cadence
-    return chosen
+    # Nothing usable at or below the ratio: snap UP to the smallest
+    # member the source can keep up with, so the resolved cadence stays
+    # inside the set the rule's identity records.
+    for member in spec.allowed:
+        if member.total_seconds >= source_seconds:
+            logger.debug(
+                "Snapping the emit cadence for {} up to the {} member; the "
+                "ratio {}/{} yields nothing at or above the {} source cadence.",
+                window,
+                member,
+                window,
+                spec.divisor,
+                spec.source_cadence,
+            )
+            return member
+
+    logger.warning(
+        "Rejecting the W/{} rule for {}: no allowed cadence is at or above "
+        "the {} source cadence.",
+        spec.divisor,
+        window,
+        spec.source_cadence,
+    )
+    raise ConfigError(
+        f"No allowed cadence is at or above the {spec.source_cadence} source "
+        f"cadence, so the window {window} has no emit cadence to snap up to; "
+        f"the largest allowed cadence is {spec.allowed[-1]}."
+    )
 
 
 def _require_sequence(value: object, *, label: str) -> None:
@@ -535,8 +576,9 @@ def w_over_k(
     """Resolve an emit cadence for each window as ``W / K``, quantized down.
 
     See the module docstring for the rule in full, including why the
-    quantization goes down and why the source-cadence clamp wins over
-    the allowed set.
+    quantization goes down and why a result below the source cadence
+    snaps UP to the smallest allowed member rather than to the source
+    cadence itself.
 
     Args:
         windows: The window scales to resolve, typically a resolved
@@ -551,8 +593,10 @@ def w_over_k(
         that produced them.
 
     Raises:
-        ConfigError: If any parameter is invalid, or if the window list
-            is empty, repeats a window, or is too long.
+        ConfigError: If any parameter is invalid, if the window list is
+            empty, repeats a window, or is too long, or if no allowed
+            member is at or above the source cadence when a window needs
+            the snap.
 
     """
     _require_sequence(windows, label="list of window durations")
