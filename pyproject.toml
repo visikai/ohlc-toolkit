@@ -17,10 +17,8 @@ keywords = [
 dependencies = [
     "loguru>=0.7.3,<0.8.0",
     "orjson>=3.10.15,<4.0.0",
-    "pandas>=2.3.0,<3.0.0",
     "polars>=1.35.0,<2.0.0",
     "requests>=2.32.3,<3.0.0",
-    "tqdm>=4.66.4,<5.0.0",
 ]
 
 [project.urls]
@@ -83,16 +81,6 @@ required-version = ">=0.12.4,<0.13"
 
 [tool.mypy]
 check_untyped_defs = true
-
-# The two modules below are the only imports without types: both belong
-# to the retiring pandas-era surface and are deleted at 1.0. Naming them
-# here -- instead of a global --ignore-missing-imports -- means every
-# OTHER unresolved import is an error again, so a typing regression in a
-# first-party or maintained third-party import surfaces instead of being
-# waved through.
-[[tool.mypy.overrides]]
-module = ["pandas.*", "tqdm.*"]
-ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ohlc_toolkit"]
