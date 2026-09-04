@@ -119,8 +119,8 @@ from ohlc_toolkit.temporal import (
 logger = get_logger(__name__)
 
 # The only columns this step reads, and therefore the only ones it
-# requires. Requiring them up front -- present, and `coverage_seconds`
-# as Int64 specifically -- rather than letting a missing column surface
+# requires. Requiring them up front -- present, and both as Int64
+# specifically -- rather than letting a missing column surface
 # later as a bare polars ColumnNotFoundError or a narrow integer width
 # as a bare OverflowError, keeps the failure at this module's own
 # boundary and in this module's own words.
@@ -452,10 +452,16 @@ def _require_quality_columns(frame: pl.DataFrame) -> None:
     other width here keeps both failures at this module's boundary and
     in this module's words.
 
+    ``close_time`` is held to the same word. The report names the first
+    offending row by reading this column with ``int(...)``: a Float64
+    close time would be silently truncated into a name that is not a row
+    in the frame, and a String or Datetime one would surface as a
+    foreign TypeError only when an offender exists -- so a clean frame
+    with the wrong kind would pass while a dirty one crashed elsewhere.
+
     Raises:
         ConfigError: If ``close_time`` or ``coverage_seconds`` is absent
-            from ``frame``, or if ``coverage_seconds`` is not an
-            ``Int64`` column.
+            from ``frame``, or if either is not an ``Int64`` column.
 
     """
     missing = [name for name in _REQUIRED_COLUMNS if name not in frame.columns]
@@ -473,6 +479,15 @@ def _require_quality_columns(frame: pl.DataFrame) -> None:
             "coverage_seconds must be an Int64 count of whole seconds, got "
             f"{coverage_dtype}; apply this policy to an engine-produced window "
             "frame."
+        )
+
+    close_time_dtype = frame.schema["close_time"]
+    if close_time_dtype != pl.Int64:
+        logger.warning("Rejecting non-Int64 close_time: {}", close_time_dtype)
+        raise ConfigError(
+            "close_time must be an Int64 Unix second, got "
+            f"{close_time_dtype}; apply this policy to an engine-produced "
+            "window frame."
         )
 
 
@@ -611,7 +626,7 @@ def apply_quality_policy(
 
     Raises:
         ConfigError: If ``frame`` is missing a required column, if
-            ``coverage_seconds`` is not an ``Int64`` column, or if
+            either required column is not ``Int64``, or if
             ``window`` cannot be coerced to a
             :class:`~ohlc_toolkit.temporal.Duration` or coerces to the
             zero duration. A zero window is refused for the same reason

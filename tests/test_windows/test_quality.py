@@ -128,7 +128,12 @@ def _quality_frame_from_coverages(coverages: Sequence[int]) -> pl.DataFrame:
             "src_count": [c // 10 for c in coverages],
             "coverage_seconds": coverages,
         }
-    ).with_columns(pl.col("coverage_seconds").cast(pl.Int64))
+    ).with_columns(
+        # Both casts matter for the empty frame: a [] column infers Null,
+        # and the engine emits Int64 for these columns even at height 0.
+        pl.col("close_time").cast(pl.Int64),
+        pl.col("coverage_seconds").cast(pl.Int64),
+    )
 
 
 class TestWindowQualityPolicyIdentity:
