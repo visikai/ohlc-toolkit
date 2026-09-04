@@ -1,7 +1,7 @@
 [project]
 name = "ohlc-toolkit"
-version = "0.4.0"
-description = "A flexible toolkit for working with OHLC data and generating custom timeframes from minute data."
+version = "1.0.0"
+description = "A Polars-native toolkit for reading, validating, and aggregating OHLC market data."
 authors = [{ name = "Mourits de Beer", email = "ff137@proton.me" }]
 license = "Apache-2.0"
 readme = "README.md"
@@ -13,6 +13,7 @@ keywords = [
     "financial",
     "market-data",
     "time-series",
+    "polars",
 ]
 dependencies = [
     "loguru>=0.7.3,<0.8.0",
