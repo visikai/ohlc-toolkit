@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import orjson
+import polars as pl
 
 from ohlc_toolkit.snapshot.errors import SnapshotIntegrityError
 from ohlc_toolkit.snapshot.manifest import MANIFEST_ASSET_NAME
@@ -43,6 +44,14 @@ PARQUET_ASSET = "example_1min.parquet"
 PROVENANCE_ASSET = "example_1min_provenance.csv"
 
 _CSV_HEADER = "timestamp,open,high,low,close,volume"
+_CSV_DTYPES: dict[str, Any] = {
+    "timestamp": pl.Int64,
+    "open": pl.Float64,
+    "high": pl.Float64,
+    "low": pl.Float64,
+    "close": pl.Float64,
+    "volume": pl.Float64,
+}
 
 
 def sha256_hex(payload: bytes) -> str:
@@ -92,6 +101,23 @@ def build_history_csv(timestamps: Sequence[int]) -> bytes:
         price = 100.0 + index
         lines.append(f"{timestamp},{price},{price},{price},{price},1.0")
     return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def build_history_frame(timestamps: Sequence[int]) -> pl.DataFrame:
+    """Read a rendered history CSV back into a frame.
+
+    Going through the same bytes the asset publishes means a frame and
+    the asset describing it cannot disagree by accident: a test that
+    wants them to disagree has to say so.
+
+    Args:
+        timestamps: One Unix-second interval open per row.
+
+    Returns:
+        The frame, with dtypes pinned the way the source reader pins them.
+
+    """
+    return pl.read_csv(build_history_csv(timestamps), schema_overrides=_CSV_DTYPES)
 
 
 def gzip_bytes(payload: bytes) -> bytes:
