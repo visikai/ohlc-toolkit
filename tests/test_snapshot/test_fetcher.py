@@ -77,6 +77,35 @@ def test_every_declared_asset_lands_with_the_bytes_the_manifest_declared(
         assert asset.was_downloaded is True
 
 
+def test_the_fetch_result_records_the_manifest_digest(tmp_path: Path) -> None:
+    """The snapshot's identity is the SHA-256 over the manifest bytes.
+
+    The manifest carries no digest of itself, so the consumer computes
+    one: this is the single value that changes if the manifest -- and
+    with it the whole self-consistent asset set it describes -- is
+    swapped wholesale. Per-asset digests cannot see that swap, because a
+    swapped manifest describes the swapped assets correctly.
+    """
+    fixture = build_release_fixture()
+
+    result, _ = _fetch(fixture, tmp_path)
+
+    assert result.manifest_sha256 == sha256_hex(fixture.manifest_bytes)
+
+
+def test_a_mismatched_expected_manifest_digest_is_refused(tmp_path: Path) -> None:
+    """A caller who knows the snapshot identity can demand exactly it."""
+    fixture = build_release_fixture()
+
+    with pytest.raises(SnapshotIntegrityError, match="manifest"):
+        fetch_snapshot(
+            fixture.release,
+            tmp_path,
+            transport=fixture.transport(),
+            expected_manifest_sha256="0" * 64,
+        )
+
+
 def test_the_manifest_is_written_beside_the_assets(tmp_path: Path) -> None:
     """The statement the assets were checked against is kept with them."""
     fixture = build_release_fixture()

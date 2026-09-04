@@ -260,6 +260,32 @@ def test_reading_a_fetched_history_returns_the_verified_frame(
     assert frame.get_column(_TIMESTAMP_COLUMN)[0] == FIXTURE_START
 
 
+def test_rows_beyond_the_declared_count_are_never_parsed(tmp_path: Path) -> None:
+    """The read is bounded by the manifest's own row count, plus one.
+
+    A file longer than its manifest declares must be refused by THIS
+    package's seam check after reading one row too many -- not parsed to
+    the end first. The tail of this fixture is garbage that cannot parse
+    as the schema at all: if the reader ran past the bound it would
+    surface a foreign parse error instead of the refusal below, and an
+    adversarial or buggy publish could occupy unbounded memory before
+    the row count was ever compared.
+    """
+    long_history = build_history_csv(history_timestamps(rows=FIXTURE_ROWS + 1))
+    garbage_tail = b"not,a,row,at,all,x\n" * 3
+    assets = build_default_assets()
+    assets[HISTORY_ASSET] = gzip_bytes(long_history + garbage_tail)
+    result = _fetch(assets, tmp_path)
+
+    with pytest.raises(SnapshotContinuityError) as caught:
+        read_snapshot_frame(result, asset_name=HISTORY_ASSET)
+
+    assert any(
+        mismatch.kind is SeamKind.ROW_COUNT
+        for mismatch in caught.value.report.seam_mismatches
+    )
+
+
 def test_reading_a_gapped_fetched_history_is_refused(tmp_path: Path) -> None:
     """Bytes can pass their digest and still not be the described history."""
     assets = build_default_assets()

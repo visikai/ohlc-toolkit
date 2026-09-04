@@ -283,6 +283,31 @@ def test_an_asset_entry_that_is_not_an_object_is_refused() -> None:
         _parse(payload)
 
 
+def test_an_asset_size_above_the_host_ceiling_is_refused() -> None:
+    """The declared size is the download cap, so it must itself be capped.
+
+    Without a ceiling, a forged manifest declaring a petabyte parses
+    cleanly and hands the transport a petabyte budget: the bound meant
+    to stop unbounded downloads would be attacker-supplied. The release
+    host refuses files above 2 GiB, so an honest manifest can never
+    declare more.
+    """
+    payload = _payload()
+    payload["assets"][HISTORY_ASSET]["bytes"] = 3 * 2**30
+
+    with pytest.raises(SnapshotManifestError, match="at most"):
+        _parse(payload)
+
+
+def test_an_asset_size_at_the_host_ceiling_is_accepted() -> None:
+    """Exactly the host's per-file ceiling is a size a real asset can have."""
+    payload = _payload()
+    payload["assets"][HISTORY_ASSET]["bytes"] = 2 * 2**30
+
+    parsed = _parse(payload)
+    assert parsed.assets[HISTORY_ASSET].size_bytes == 2 * 2**30
+
+
 @pytest.mark.parametrize(
     "name",
     [
