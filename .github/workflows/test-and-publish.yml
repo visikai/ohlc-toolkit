@@ -1,4 +1,4 @@
-name: Test and Publish
+name: Test and Package
 
 on:
   push:
@@ -84,15 +84,13 @@ jobs:
           TEST_MATRIX_RESULT: ${{ needs.test-matrix.result }}
         run: test "$TEST_MATRIX_RESULT" = "success"
 
+  # Packaging validation only -- nothing here uploads anywhere. Releases
+  # upload via publish-on-release.yml alone. The job keeps the name
+  # "publish" because that exact string is a required status check on
+  # main; renaming it takes a branch-protection update, after which this
+  # job should be called "build".
   publish:
     runs-on: ubuntu-latest
-    needs: [test]
-    if: github.event_name == 'pull_request' # Only run on PRs
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/project/ohlc-toolkit
-    permissions:
-      id-token: write # Note: this permission is mandatory for trusted publishing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -107,8 +105,5 @@ jobs:
       - name: Build package
         run: uv build
 
-      - name: Publish package distributions to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
+      - name: Check package metadata
+        run: uvx twine check --strict dist/*
