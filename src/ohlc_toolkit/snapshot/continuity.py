@@ -47,7 +47,6 @@ from enum import Enum, unique
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.snapshot.errors import bounded_echo
 from ohlc_toolkit.snapshot.fetcher import SnapshotFetchResult
 from ohlc_toolkit.snapshot.manifest import SnapshotManifest
 from ohlc_toolkit.snapshot.release import BITSTAMP_HISTORY_CSV_ASSET
@@ -59,7 +58,7 @@ from ohlc_toolkit.source import (
     read_source_csv,
     validate_source_frame,
 )
-from ohlc_toolkit.temporal import ConfigError, DataValidationError
+from ohlc_toolkit.temporal import ConfigError, DataValidationError, bounded_echo
 
 logger = get_logger(__name__)
 

@@ -35,7 +35,6 @@ from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.snapshot.errors import (
     SnapshotIntegrityError,
     SnapshotManifestError,
-    bounded_echo,
 )
 from ohlc_toolkit.snapshot.manifest import (
     MANIFEST_ASSET_NAME,
@@ -46,7 +45,7 @@ from ohlc_toolkit.snapshot.manifest import (
 )
 from ohlc_toolkit.snapshot.release import SnapshotRelease
 from ohlc_toolkit.snapshot.transport import AssetTransport, HttpAssetTransport
-from ohlc_toolkit.temporal import ConfigError
+from ohlc_toolkit.temporal import ConfigError, bounded_echo
 
 logger = get_logger(__name__)
 

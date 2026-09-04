@@ -26,8 +26,9 @@ from typing import Any
 import orjson
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.snapshot.errors import SnapshotManifestError, bounded_echo
+from ohlc_toolkit.snapshot.errors import SnapshotManifestError
 from ohlc_toolkit.snapshot.release import is_plain_asset_name
+from ohlc_toolkit.temporal import bounded_echo
 
 logger = get_logger(__name__)
 

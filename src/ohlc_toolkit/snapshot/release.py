@@ -15,8 +15,7 @@ import re
 from dataclasses import dataclass
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.snapshot.errors import bounded_echo
-from ohlc_toolkit.temporal import ConfigError
+from ohlc_toolkit.temporal import ConfigError, bounded_echo
 
 logger = get_logger(__name__)
 

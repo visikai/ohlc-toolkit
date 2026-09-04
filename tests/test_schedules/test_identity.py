@@ -21,6 +21,7 @@ from ohlc_toolkit.schedules import (
     log_spaced,
     metallic_recurrence,
 )
+from ohlc_toolkit.schedules.identity import enum_from_payload
 from ohlc_toolkit.temporal import ConfigError, Duration
 
 _COEFFICIENT = math.sqrt(math.e + math.sqrt(5))
@@ -467,3 +468,21 @@ class TestResolvedListInvariants:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_a_huge_non_string_enum_payload_is_echoed_bounded() -> None:
+    """The non-string refusal echoes through the bounded helper.
+
+    This branch previously interpolated the raw value unbounded, so a
+    500-element list would have produced a multi-kilobyte refusal; the
+    consolidation routed it through the shared bounded echo, and this
+    pins that improvement as deliberate.
+    """
+    # Generous ceiling: the bounded echo caps the interpolated value at 80
+    # visible characters, so the whole refusal stays well under this while
+    # the unbounded form measured multiple kilobytes.
+    bounded_message_ceiling = 300
+
+    with pytest.raises(ConfigError) as caught:
+        enum_from_payload(RoundingRule, ["garbage"] * 500, label="rounding")
+    assert len(str(caught.value)) < bounded_message_ceiling

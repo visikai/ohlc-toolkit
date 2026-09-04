@@ -78,6 +78,7 @@ from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.temporal import (
     ConfigError,
     Duration,
+    bounded_echo,
     validate_cadence,
     validate_horizon_duration,
 )
@@ -108,32 +109,9 @@ _REQUIRED_DTYPES: dict[str, pl.DataType] = {
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
-# Rejected input is echoed into logs and error messages; cap how much, so
-# one pathological dtype -- a struct with a thousand fields renders as a
-# thousand field names -- cannot produce an unbounded log line. Eighty
-# characters is enough to name any ordinary dtype while keeping one log
-# line readable.
-_MAX_ECHOED_CHARS = 80
-
 # Column names used only inside the counterpart join, never returned.
 _COUNTERPART_KEY = "__counterpart_close_time"
 _COUNTERPART_CLOSE = "__counterpart_close"
-
-
-def _bounded(value: object) -> str:
-    """Render a value for a message, truncated with a note when oversized.
-
-    Args:
-        value: The rejected input to echo back.
-
-    Returns:
-        A representation never longer than the cap plus a length note.
-
-    """
-    text = str(value)
-    if len(text) <= _MAX_ECHOED_CHARS:
-        return text
-    return f"{text[:_MAX_ECHOED_CHARS]}... ({len(text)} chars total)"
 
 
 def resolve_horizon(horizon: Duration | str, cadence: Duration | str) -> Duration:
@@ -202,11 +180,11 @@ def _require_columns(frame: pl.DataFrame) -> None:
             logger.warning(
                 "Rejecting {} of dtype {}; {} is required.",
                 name,
-                _bounded(actual),
+                bounded_echo(actual),
                 required,
             )
             raise ConfigError(
-                f"{name} must be a {required} column, got {_bounded(actual)}; "
+                f"{name} must be a {required} column, got {bounded_echo(actual)}; "
                 "apply return primitives to an engine-produced window frame."
             )
 
