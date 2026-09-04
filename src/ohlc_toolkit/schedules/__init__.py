@@ -1,7 +1,9 @@
 """Window-scale schedules and emit-cadence rules, with recorded identity.
 
-This namespace is not re-exported from the top-level ``ohlc_toolkit``
-package; import from ``ohlc_toolkit.schedules`` directly.
+The top-level package imports this one, so ``ohlc_toolkit.schedules`` is
+reachable from a bare ``import ohlc_toolkit``. The names below are NOT
+flattened into that namespace: spell them ``ohlc_toolkit.schedules.X``, or
+import them from here.
 
 Everything here is a mechanism. The package ships no default schedule,
 no default coefficient, no default bounds, and no default emit divisor:

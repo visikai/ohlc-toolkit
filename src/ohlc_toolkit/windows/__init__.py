@@ -1,7 +1,9 @@
 """Windowed candle aggregation: one contract, two implementations.
 
-This namespace is not re-exported from the top-level ``ohlc_toolkit``
-package; import from ``ohlc_toolkit.windows`` directly.
+The top-level package imports this one, so ``ohlc_toolkit.windows`` is
+reachable from a bare ``import ohlc_toolkit``. The names below are NOT
+flattened into that namespace: spell them ``ohlc_toolkit.windows.X``, or
+import them from here.
 
 :func:`~ohlc_toolkit.windows.engine.compute_windows` is the one to call.
 It is Polars-native and linear in rows plus emit ticks.
