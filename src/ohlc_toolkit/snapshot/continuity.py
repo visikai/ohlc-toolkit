@@ -21,12 +21,24 @@ held to exactly the standard a local file is, by exactly the same code.
 Scope, stated plainly: only the six-column history CSV is opened and
 checked this deeply. The Parquet and provenance assets in the same
 release are fetched and digest-verified alongside it, and then handed
-over on that alone. The Parquet is a re-encoding of the same rows, so
-deep-checking it would mean decoding a second copy of the whole history
-to re-derive facts already established; the provenance CSV is a sparse
-outage table with an entirely different schema, which no source profile
-in this package describes. Neither omission is an oversight, and neither
-is hidden: a caller reading them reads unvalidated structure.
+over on that alone. Neither omission is an oversight, and neither is
+hidden -- a caller reading either one reads unvalidated structure -- but
+they are omitted for different reasons.
+
+The Parquet carries the same rows over the same timestamps as the CSV,
+but it is not a drop-in twin: as published, only its ``timestamp`` column
+is an integer, and open/high/low/close/volume are UTF-8 strings holding
+the CSV's decimal text verbatim. ``BITSTAMP_BTCUSD_1M`` declares those
+five columns :attr:`~ohlc_toolkit.source.profile.ColumnKind.FLOATING`, so
+running the same validation over the Parquet would fail on schema before
+it reached a single row. Checking it properly means either a second
+profile describing the string encoding or a cast this package would then
+have to justify, and either is a larger decision than this fetcher should
+be making on its own.
+
+The provenance CSV is a sparse outage table -- start, end, duration,
+flag, price jump, reference -- on an entirely different schema, which no
+source profile here describes at all.
 """
 
 from dataclasses import dataclass

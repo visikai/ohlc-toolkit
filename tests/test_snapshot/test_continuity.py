@@ -300,6 +300,9 @@ def test_the_default_asset_is_the_published_bitstamp_history(
     The Parquet and provenance assets are fetched and digest-verified
     alongside the history, but nothing here opens them: only the
     six-column CSV has a profile describing what a valid grid looks like.
+    The published Parquet is not even dtype-compatible with that profile
+    (its price and volume columns are strings), so this is a real gap,
+    not a redundant check skipped for speed.
     """
     result = _fetch(build_default_assets(), tmp_path)
 
