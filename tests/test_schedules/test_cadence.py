@@ -21,6 +21,8 @@ from ohlc_toolkit.schedules import (
     w_over_k,
 )
 from ohlc_toolkit.temporal import ConfigError, Duration
+from ohlc_toolkit.windows.resolution import resolve_schedule
+from tests.test_windows.factories import profile_for
 
 # A plausible allowed set for a minute-cadence source: the cadences an
 # operator is willing to emit on, written out of order and with a
@@ -181,23 +183,78 @@ class TestWOverK:
         assert rule.pairs[0].window == Duration.parse("1m")
         assert rule.pairs[0].emit_every == Duration.parse(_SOURCE_CADENCE)
 
-    def test_an_allowed_set_entirely_above_the_ratio_clamps_to_the_source(
+    def test_an_allowed_set_entirely_above_the_ratio_snaps_to_a_member(
         self,
     ) -> None:
-        """Nothing at or below W/K resolves to the source-cadence floor.
+        """Nothing at or below W/K snaps UP to the smallest usable member.
 
-        The quantized cadence would lie below every member, hence below
-        anything the floor could have admitted, so the floor answers --
-        the same answer a too-fine member gets, not a refusal. The
-        result is deliberately finer than every allowed member; the
-        allowed set expresses preference, the source cadence expresses
-        possibility.
+        The quantized cadence would lie below every member and below the
+        source cadence's reach, so the rule answers with the smallest
+        allowed member at or above the source cadence -- here ``1h`` --
+        rather than with the source cadence itself. A resolved cadence
+        outside the recorded allowed set would let a persisted rule
+        claim a set it did not emit on, so every answer is a member.
         """
         rule = w_over_k(
             ["1h"], divisor=4, allowed=["1h", "4h"], source_cadence=_SOURCE_CADENCE
         )
 
-        assert _texts(rule) == [("1h", "1m")]
+        assert _texts(rule) == [("1h", "1h")]
+
+    def test_a_source_cadence_outside_the_set_snaps_up_to_a_member(self) -> None:
+        """The snap target is a member at or above d, never d itself.
+
+        W/K here is 2m5s, so quantize-down takes the 1m member -- below
+        the 5m source cadence. The old answer would have been 5m, which
+        is not in the allowed set; the rule instead snaps up to 10m, the
+        smallest member at or above the source cadence.
+        """
+        rule = w_over_k(
+            ["1h40m"], divisor=48, allowed=["1m", "10m"], source_cadence="5m"
+        )
+
+        assert _texts(rule) == [("1h40m", "10m")]
+
+    def test_the_snap_target_over_the_metallic_set_is_its_next_member(self) -> None:
+        """A 5m source against the canonical list snaps to the 8m member.
+
+        The rule level has no opinion about divisibility -- that check
+        belongs where a schedule meets a source -- so the snap itself
+        succeeds here even though 5m does not divide 8m; the companion
+        test below pins where that refusal actually fires.
+        """
+        minutes = [1, 3, 8, 21, 56, 146, 380, 993, 2590, 6758, 17632]
+        windows = [f"{m}m" for m in minutes]
+
+        rule = w_over_k(windows, divisor=48, allowed=windows, source_cadence="5m")
+
+        assert rule.pairs[0].emit_every == Duration.parse("8m")
+        assert rule.pairs[6].window == Duration.parse("380m")
+        assert rule.pairs[6].emit_every == Duration.parse("8m")
+
+    def test_a_snapped_cadence_the_source_cannot_carry_is_refused_downstream(
+        self,
+    ) -> None:
+        """5m does not divide 8m, and the schedule resolver says so.
+
+        The snapped pair resolves at the rule level; feeding it to the
+        window-schedule resolver against a 5m-cadence source is what
+        refuses it, in that module's own words, because emit ticks must
+        land on source close times. Pinned here so the snap rule's
+        docstring claim about where divisibility lives stays true.
+        """
+        minutes = [1, 3, 8, 21, 56, 146, 380, 993, 2590, 6758, 17632]
+        windows = [f"{m}m" for m in minutes]
+        rule = w_over_k(windows, divisor=48, allowed=windows, source_cadence="5m")
+        pair = rule.pairs[6]
+
+        with pytest.raises(ConfigError, match="whole multiple"):
+            resolve_schedule(
+                profile_for(300),
+                window=pair.window,
+                emit_every=pair.emit_every,
+                anchor="0s",
+            )
 
     def test_quantized_and_clamped_windows_resolve_side_by_side(self) -> None:
         """One rule can quantize one window and clamp its neighbour.
@@ -259,6 +316,58 @@ class TestWOverK:
 
 class TestWOverKRefusals:
     """A cadence that cannot be resolved is refused, never approximated."""
+
+    def test_no_member_at_or_above_the_source_cadence_is_refused(self) -> None:
+        """A set the source cadence outruns entirely has no snap target.
+
+        The quantized cadence here is the 30s member, below the 1m
+        source cadence -- and the set holds nothing at or above 1m to
+        snap up to. Answering with the source cadence itself would emit
+        outside the recorded set, so the rule refuses instead of
+        inventing a member.
+        """
+        with pytest.raises(ConfigError, match="allowed"):
+            w_over_k(["1h"], divisor=4, allowed=["30s"], source_cadence="1m")
+
+    def test_no_snap_target_is_refused_on_the_empty_candidates_branch_too(
+        self,
+    ) -> None:
+        """The refusal covers both routes into the snap.
+
+        Here nothing is at or below W/K at all (1m/48 undercuts the 30s
+        member), which is the other branch that used to answer with the
+        source cadence; with no member at or above 1m it must refuse the
+        same way.
+        """
+        with pytest.raises(ConfigError, match="allowed"):
+            w_over_k(["1m"], divisor=48, allowed=["30s"], source_cadence="1m")
+
+    def test_a_directly_built_rule_with_a_non_member_cadence_is_refused(
+        self,
+    ) -> None:
+        """The membership invariant holds however the rule was assembled.
+
+        ``w_over_k`` snaps into the set by construction and ``from_dict``
+        is protected by the recorded id, but the dataclass itself is
+        public: a hand-assembled or ``replace``-built rule could pair a
+        window with a cadence its own parameters never allowed, and the
+        persisted rule would then claim a set it did not emit on.
+        """
+        spec = WOverKSpec(
+            divisor=4,
+            allowed=(Duration.parse("15m"), Duration.parse("1h")),
+            source_cadence=Duration.parse("1m"),
+        )
+        with pytest.raises(ConfigError, match="allowed"):
+            CadenceRule(
+                spec=spec,
+                pairs=(
+                    WindowEmitPair(
+                        window=Duration.parse("1h"),
+                        emit_every=Duration.parse("7m"),
+                    ),
+                ),
+            )
 
     @pytest.mark.parametrize(
         "divisor", [0, -1, -4], ids=["zero", "minus_one", "minus_four"]
