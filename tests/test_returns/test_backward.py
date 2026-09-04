@@ -317,9 +317,11 @@ class TestBackwardLogReturns:
     def test_the_two_formulas_are_each_others_log_and_exp(self) -> None:
         """``log_return == ln(1 + simple_return)`` on every defined row.
 
-        This is the cross-check between the two methods: they are
-        computed by different expressions from the same two closes, and
-        the relation between them is stated here rather than assumed.
+        Since the log return became literally ``log1p`` of the simple
+        one, this is no longer a check between independent expressions.
+        What it still checks is real: polars' ``log1p`` against Python's
+        ``math.log1p`` on every defined row of real data -- two libm
+        bindings agreeing about the relation the module documents.
         """
         frame = gap_free_frame()
         simple = add_backward_returns(

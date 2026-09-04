@@ -111,8 +111,8 @@ _INT64_MAX = 2**63 - 1
 # Rejected input is echoed into logs and error messages; cap how much, so
 # one pathological dtype -- a struct with a thousand fields renders as a
 # thousand field names -- cannot produce an unbounded log line. Eighty
-# characters, matching the cap every other bounded echo in this package
-# uses.
+# characters is enough to name any ordinary dtype while keeping one log
+# line readable.
 _MAX_ECHOED_CHARS = 80
 
 # Column names used only inside the counterpart join, never returned.

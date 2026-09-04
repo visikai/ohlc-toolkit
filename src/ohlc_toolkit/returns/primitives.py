@@ -69,15 +69,19 @@ The spelling matters most where returns are smallest, which is most of
 the time. Two closes one cadence apart are usually nearly equal, so
 their difference is EXACT (the subtraction of two doubles within a
 factor of two of each other is itself a double), and the quotient then
-carries about half an ulp. Every spelling that rounds the RATIO first --
-``a / b - 1``, ``ln(a / b)``, or ``ln(a) - ln(b)`` -- parks a half-ulp
-of error next to ``1``, and for a return of size ``x`` the subtraction
-or the logarithm amplifies that error by ``1 / x``: about six
-significant digits gone at ``x`` near ``1e-6``, measured at roughly
-``1.7e-11`` relative error against a 60-digit reference where
-``log1p((a - b) / b)`` measures near ``1e-17``. The tests pin the
-emitted value to within ``1e-15`` of such a reference, which only the
-difference-quotient spelling achieves.
+carries about half an ulp. A spelling that rounds the RATIO first --
+``a / b - 1`` or ``ln(a / b)`` -- parks a half-ulp of error next to
+``1``, and for a return of size ``x`` the subtraction or the logarithm
+amplifies that error by ``1 / x``: about five significant digits gone
+(5.2 measured) at ``x`` near ``1e-6``, roughly ``1.7e-11`` relative
+error against a 60-digit reference on the probed pairs, where
+``log1p((a - b) / b)`` measures near ``1e-17`` on the same pairs.
+``ln(a) - ln(b)`` errs differently -- two separately rounded logarithms
+rather than a rounded ratio -- and its error varies by operand, from
+comparable to the shipped form at some pairs to far worse at others.
+The tests pin the emitted value to within ``1e-15`` of the 60-digit
+reference on those probed pairs, which only the difference-quotient
+spelling achieves.
 
 Every emitted value is a finite float or null
 ---------------------------------------------
@@ -99,14 +103,20 @@ list of special cases to keep in step:
 - a null close on either side, which polars already propagates as null;
 - a quotient that overflows to infinity, which two closes far enough
   apart in magnitude will do;
-- a simple return at or below ``-1`` under ``LOG`` -- a non-positive
-  price ratio, stated the other way -- where ``log1p(-1)`` is ``-inf``
-  and anything below it is not real at all, so ``NaN``.
+- a simple return at or below ``-1`` under ``LOG``, where ``log1p(-1)``
+  is ``-inf`` and anything below it is not real at all, so ``NaN``. This
+  band is wider than "a non-positive price ratio": every strictly
+  POSITIVE ratio at or below ``2**-54`` lands in it too, because the
+  difference quotient rounds to exactly ``-1.0`` there (``2**-54`` is
+  half an ulp of ``1``, and ties round to even), so a price collapse of
+  that magnitude within one horizon is stated as null rather than as
+  the true value of about ``-37.43`` the formula can no longer resolve.
 
 What is NOT nulled is anything the formula produced that happens to be a
 real number. A close that fell to zero has a simple return of exactly
 ``-1``. A close so dwarfed by its counterpart that the quotient rounds
-to ``-1`` has the same. A simple return
+to ``-1`` has the same under ``SIMPLE`` -- while ``LOG`` nulls that very
+row, per the band above. A simple return
 over a NEGATIVE denominator is finite too, and is reported: this step has
 no opinion about the sign of a price, and forming one belongs upstream in
 :func:`~ohlc_toolkit.source.validation.validate_source_frame`, where a
