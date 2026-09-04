@@ -31,6 +31,13 @@ _MAX_PAIR_GAP_LINES = 2
 # validation and schedules (offline, with pasted output), and the
 # bare-expression Duration block. Parser rot fails this count.
 _EXPECTED_TOTAL, _EXPECTED_OFFLINE = 4, 2
+# The Duration block carries exactly two bare comparisons; a reformat
+# that removes or demotes one must fail loud, never pass vacuously.
+_EXPECTED_BARE_CLAIMS = 2
+# The one snippet that fetches the released dataset lives under this
+# heading. Routing is by SECTION — a structural signal a code edit
+# cannot move — never by matching the snippet's text.
+_NETWORK_SECTIONS = frozenset({"Quickstart"})
 
 
 @dataclass(frozen=True)
@@ -38,25 +45,31 @@ class Fence:
     """One fenced code block, located by its opening line in README.md."""
 
     lang: str
+    section: str
     start_line: int
     end_line: int
     code: str
 
 
 def _fences(text: str) -> list[Fence]:
-    """Return every fenced block in document order."""
+    """Return every fenced block in document order, tagged by its section."""
     fences: list[Fence] = []
     lang: str | None = None
+    section = ""
     start = 0
     body: list[str] = []
     for number, line in enumerate(text.splitlines(), start=1):
+        if lang is None and line.startswith("## "):
+            section = line.removeprefix("## ").strip()
         if line.startswith("```"):
             if lang is None:
                 lang = line[3:].strip()
                 start = number
                 body = []
             else:
-                fences.append(Fence(lang, start, number, "\n".join(body) + "\n"))
+                fences.append(
+                    Fence(lang, section, start, number, "\n".join(body) + "\n")
+                )
                 lang = None
         elif lang is not None:
             body.append(line)
@@ -102,13 +115,13 @@ _PAIRS = _snippets()
 _OFFLINE = [
     (fence, expected)
     for fence, expected in _PAIRS
-    if expected is not None and "fetch_snapshot(" not in fence.code
+    if expected is not None and fence.section not in _NETWORK_SECTIONS
 ]
 _BARE = [fence for fence, expected in _PAIRS if expected is None]
 _NETWORK = [
     (fence, expected)
     for fence, expected in _PAIRS
-    if expected is not None and "fetch_snapshot(" in fence.code
+    if expected is not None and fence.section in _NETWORK_SECTIONS
 ]
 
 
@@ -126,29 +139,43 @@ def test_the_parser_finds_the_documented_snippets() -> None:
     ids=[f"line{fence.start_line}" for fence, _ in _OFFLINE],
 )
 def test_offline_snippets_reproduce_their_pasted_output(
-    fence: Fence, expected: str
+    fence: Fence, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each offline snippet's stdout equals its pasted block exactly."""
+    """Each offline snippet's stdout equals its pasted block exactly.
+
+    Run from a temporary directory so a misrouted snippet that writes
+    files can never pollute the checkout.
+    """
+    monkeypatch.chdir(tmp_path)
     assert _run(fence) == expected
 
 
 def test_bare_expression_snippets_hold() -> None:
-    """A block with no pasted output is a claim: each expression must hold."""
+    """A block with no pasted output is a claim: each comparison must hold.
+
+    Every claim must be a genuine comparison, and the claim count is
+    pinned — so demoting one to a comment, an assignment, or a bare
+    value fails loud instead of leaving zero assertions.
+    """
     assert _BARE != []
+    claims = 0
     for fence in _BARE:
         namespace: dict[str, object] = {}
         for node in ast.parse(fence.code).body:
             if isinstance(node, ast.Expr):
+                assert isinstance(node.value, ast.Compare), ast.unparse(node)
                 expression = compile(
                     ast.Expression(node.value), f"README.md:{fence.start_line}", "eval"
                 )
                 assert eval(expression, namespace), ast.unparse(node)
+                claims += 1
             else:
                 statement = ast.Module(body=[node], type_ignores=[])
                 exec(
                     compile(statement, f"README.md:{fence.start_line}", "exec"),
                     namespace,
                 )
+    assert claims == _EXPECTED_BARE_CLAIMS
 
 
 @pytest.mark.network
