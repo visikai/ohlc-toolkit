@@ -52,7 +52,7 @@ jobs:
           uv run ruff check .
 
       - name: MyPy check
-        run: uv run mypy . --ignore-missing-imports --check-untyped-defs
+        run: uv run mypy .
 
       - name: Run tests with pytest
         run: uv run pytest --cov-report=xml

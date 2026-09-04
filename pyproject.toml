@@ -81,6 +81,19 @@ show_missing = true
 exclude-newer = "7 days"
 required-version = ">=0.12.4,<0.13"
 
+[tool.mypy]
+check_untyped_defs = true
+
+# The two modules below are the only imports without types: both belong
+# to the retiring pandas-era surface and are deleted at 1.0. Naming them
+# here -- instead of a global --ignore-missing-imports -- means every
+# OTHER unresolved import is an error again, so a typing regression in a
+# first-party or maintained third-party import surfaces instead of being
+# waved through.
+[[tool.mypy.overrides]]
+module = ["pandas.*", "tqdm.*"]
+ignore_missing_imports = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/ohlc_toolkit"]
 
