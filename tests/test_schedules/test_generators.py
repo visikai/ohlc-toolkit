@@ -266,8 +266,16 @@ class TestMetallicRecurrence:
         assert _minutes(schedule.windows) == expected
 
     def test_bounds_that_exclude_every_value_are_refused(self) -> None:
-        """A schedule naming no window at all is a configuration error."""
-        with pytest.raises(ConfigError, match="no windows"):
+        """A schedule naming no window at all is a configuration error.
+
+        The match pins the DIAGNOSTIC refusal -- the one that says how
+        many generated values the bounds excluded and what the bounds
+        were -- not merely any "no windows" message. A later, generic
+        refusal also fires on an empty list, so a looser match would
+        keep passing with the explanatory block deleted, and the caller
+        would lose the message that tells them which knob to turn.
+        """
+        with pytest.raises(ConfigError, match="fall outside"):
             metallic_recurrence(
                 coefficient=_COEFFICIENT,
                 seed="1m",
@@ -435,6 +443,22 @@ class TestMetallicRefusals:
         with pytest.raises(ConfigError, match="coefficient"):
             metallic_recurrence(
                 coefficient=1.35e154, seed="1m", grain="1m", maximum="2w"
+            )
+
+    def test_one_ulp_above_the_coefficient_bound_is_refused(self) -> None:
+        """The refusal boundary is pinned to the float, not the neighbourhood.
+
+        The other refusal test uses 1.35e154, about 0.7 percent above
+        the bound, so a bound quietly moved up by one float would still
+        pass it. This one refuses the exact next float, holding the
+        constant in place to the ulp.
+        """
+        with pytest.raises(ConfigError, match="coefficient"):
+            metallic_recurrence(
+                coefficient=math.nextafter(math.sqrt(sys.float_info.max), math.inf),
+                seed="1m",
+                grain="1m",
+                maximum="2w",
             )
 
     def test_the_largest_squarable_coefficient_still_serializes(self) -> None:
@@ -668,6 +692,36 @@ class TestLogSpacedRefusals:
         """No schedule may name more windows than the package's one cap."""
         with pytest.raises(ConfigError, match="512"):
             log_spaced(count=513, minimum="1m", maximum="2w", grain="1s")
+
+    def test_a_ratio_too_large_for_a_float_is_refused(self) -> None:
+        """Bounds so far apart that the implied ratio overflows are refused.
+
+        The same defect class the recurrence coefficient bound closes:
+        without this refusal the schedule constructs and resolves, and
+        then cannot state its own identity -- ``to_dict()`` and the
+        content hash raise a foreign not-JSON-compliant ``ValueError``
+        over ``inf`` at serialization time. Reaching it takes a maximum
+        of about ``10**309`` seconds, so this is armour consistency
+        rather than a plausible input, and it is refused at construction
+        in this module's own words.
+        """
+        with pytest.raises(ConfigError, match="ratio"):
+            log_spaced(count=2, minimum="1s", maximum=Duration(10**309), grain="1s")
+
+    def test_the_largest_float_second_maximum_still_serializes(self) -> None:
+        """The refusal does not overreach: float-max seconds stays finite."""
+        schedule = log_spaced(
+            count=2,
+            minimum="1s",
+            maximum=Duration(int(sys.float_info.max)),
+            grain="1s",
+        )
+        assert isinstance(schedule.spec, LogSpacedSpec)
+        assert math.isfinite(schedule.spec.limiting_ratio)
+        assert (
+            schedule.schedule_id
+            == type(schedule).from_dict(schedule.to_dict()).schedule_id
+        )
 
     def test_a_count_of_exactly_the_cap_is_accepted(self) -> None:
         """The cap is inclusive: exactly 512 points is a valid ladder.
