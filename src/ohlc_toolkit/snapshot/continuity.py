@@ -41,6 +41,7 @@ flag, price jump, reference -- on an entirely different schema, which no
 source profile here describes at all.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
 
@@ -171,6 +172,22 @@ def verify_snapshot_continuity(
     return report
 
 
+# How many asset names a refusal quotes back. The bound here is on the
+# COUNT rather than on each name's length: a manifest may declare any
+# number of assets and nothing caps that, so bounding each name would
+# leave a crowded release echoing just as much.
+_MAX_ECHOED_ASSET_NAMES = 20
+
+
+def _echo_asset_names(names: Sequence[str]) -> str:
+    """Render what a release holds, bounded in number and in length."""
+    total = len(names)
+    shown = ", ".join(bounded_echo(name) for name in names[:_MAX_ECHOED_ASSET_NAMES])
+    if total <= _MAX_ECHOED_ASSET_NAMES:
+        return f"{total} asset(s): [{shown}]"
+    return f"{total} asset(s), the first {_MAX_ECHOED_ASSET_NAMES}: [{shown}]"
+
+
 def read_snapshot_frame(
     result: SnapshotFetchResult,
     *,
@@ -200,16 +217,16 @@ def read_snapshot_frame(
     """
     asset = result.assets.get(asset_name)
     if asset is None:
+        held = _echo_asset_names(sorted(result.assets))
         logger.error(
             "Asset {} is absent from the fetched release {!r}; it holds {}.",
             bounded_echo(asset_name),
             result.release.tag,
-            sorted(result.assets),
+            held,
         )
         raise ConfigError(
             f"Asset {bounded_echo(asset_name)} is absent from the fetched "
-            f"release {result.release.tag!r}, which holds "
-            f"{sorted(result.assets)}."
+            f"release {result.release.tag!r}, which holds {held}."
         )
 
     # One row past the declaration: a longer file then yields exactly one

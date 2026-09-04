@@ -12,12 +12,15 @@ of the package reads Bitstamp minute data with, so a snapshot is held to
 exactly the standard a local file is.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import polars as pl
 import pytest
 
+from ohlc_toolkit.snapshot import continuity
 from ohlc_toolkit.snapshot.continuity import (
+    _MAX_ECHOED_ASSET_NAMES,
     ContinuityReport,
     SeamKind,
     SeamMismatch,
@@ -29,7 +32,7 @@ from ohlc_toolkit.snapshot.fetcher import SnapshotFetchResult, fetch_snapshot
 from ohlc_toolkit.snapshot.manifest import SnapshotManifest, parse_manifest
 from ohlc_toolkit.snapshot.release import BITSTAMP_HISTORY_CSV_ASSET
 from ohlc_toolkit.source import FindingKind
-from ohlc_toolkit.temporal import ConfigError, DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, DataValidationError
 from tests.test_snapshot.factories import (
     CADENCE_SECONDS,
     FIXTURE_ROWS,
@@ -262,6 +265,18 @@ def test_continuity_failures_are_data_validation_errors() -> None:
         )
 
 
+# Two crowds, both far larger than any real release declares, both with
+# four-digit sizes so their refusals differ by no digit of the stated
+# total, and both with deliberately short names -- bounding each name's
+# LENGTH would change nothing here, which is the point.
+_SMALL_CROWD = 1000
+_LARGE_CROWD = 4000
+# Room for the capped number of names at the echo bound, plus prose. This
+# is a sanity ceiling only; the assertion that actually bites is that the
+# refusal does not GROW with the crowd.
+_MAX_REFUSAL_CHARS = 2 * _MAX_ECHOED_ASSET_NAMES * MAX_ECHO_CHARS
+
+
 def _fetch(fixture_assets: dict[str, bytes], directory: Path) -> SnapshotFetchResult:
     """Fetch a fixture release built over the given asset bytes."""
     fixture = build_release_fixture(assets=fixture_assets)
@@ -337,6 +352,61 @@ def test_reading_an_asset_the_release_does_not_declare_is_refused(
 
     with pytest.raises(ConfigError, match="absent"):
         read_snapshot_frame(result, asset_name="not_in_this_release.csv.gz")
+
+
+def _refuse_with_crowd(result: SnapshotFetchResult, size: int) -> tuple[str, list[str]]:
+    """Refuse a missing asset against a release holding ``size`` assets.
+
+    Returns the raised message and every ERROR line the refusal logged.
+    """
+    one = next(iter(result.assets.values()))
+    crowded = replace(
+        result,
+        assets={
+            f"a{index:05d}.csv.gz": replace(one, name=f"a{index:05d}.csv.gz")
+            for index in range(size)
+        },
+    )
+
+    logged: list[str] = []
+    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
+    try:
+        with pytest.raises(ConfigError, match="absent") as raised:
+            read_snapshot_frame(crowded, asset_name="not_in_this_release.csv.gz")
+    finally:
+        continuity.logger.remove(sink_id)
+    return str(raised.value), logged
+
+
+def test_an_absent_asset_refusal_does_not_grow_with_the_release(
+    tmp_path: Path,
+) -> None:
+    """A refusal must cost the same whether a release holds a thousand or four.
+
+    This is the assertion that bites, and it is deliberately not "the
+    message is under N characters": a ceiling derived from the cap under
+    test moves when that cap moves, so raising the cap would leave such a
+    test green while the defect returned. Scale-invariance cannot be
+    satisfied that way -- quoting more names makes the larger crowd's
+    refusal longer, whatever the ceiling says.
+
+    Every name is short, so no per-name length bound is doing any work
+    here; what is capped is how MANY are echoed.
+    """
+    result = _fetch(build_default_assets(), tmp_path)
+
+    small_message, small_logged = _refuse_with_crowd(result, _SMALL_CROWD)
+    large_message, large_logged = _refuse_with_crowd(result, _LARGE_CROWD)
+
+    assert len(small_message) == len(large_message)
+    assert len(small_message) < _MAX_REFUSAL_CHARS
+
+    assert small_logged and large_logged
+    assert len(small_logged[0]) == len(large_logged[0])
+    assert len(large_logged[0]) < _MAX_REFUSAL_CHARS
+
+    # Bounded, but the reader is still told how many there really were.
+    assert str(_LARGE_CROWD) in large_message
 
 
 def test_the_default_asset_is_the_published_bitstamp_history(
