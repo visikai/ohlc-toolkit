@@ -12,12 +12,15 @@ of the package reads Bitstamp minute data with, so a snapshot is held to
 exactly the standard a local file is.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import polars as pl
 import pytest
 
+from ohlc_toolkit.snapshot import continuity
 from ohlc_toolkit.snapshot.continuity import (
+    _MAX_ECHOED_ASSET_NAMES,
     ContinuityReport,
     SeamKind,
     SeamMismatch,
@@ -29,7 +32,7 @@ from ohlc_toolkit.snapshot.fetcher import SnapshotFetchResult, fetch_snapshot
 from ohlc_toolkit.snapshot.manifest import SnapshotManifest, parse_manifest
 from ohlc_toolkit.snapshot.release import BITSTAMP_HISTORY_CSV_ASSET
 from ohlc_toolkit.source import FindingKind
-from ohlc_toolkit.temporal import ConfigError, DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, DataValidationError
 from tests.test_snapshot.factories import (
     CADENCE_SECONDS,
     FIXTURE_ROWS,
@@ -262,6 +265,13 @@ def test_continuity_failures_are_data_validation_errors() -> None:
         )
 
 
+# Far more assets than any real release declares, with deliberately short
+# names so that bounding each name's length would change nothing here.
+_CROWDED_ASSET_COUNT = 4000
+# Room for the capped number of names, each at the echo bound, plus prose.
+_MAX_REFUSAL_CHARS = 2 * _MAX_ECHOED_ASSET_NAMES * MAX_ECHO_CHARS
+
+
 def _fetch(fixture_assets: dict[str, bytes], directory: Path) -> SnapshotFetchResult:
     """Fetch a fixture release built over the given asset bytes."""
     fixture = build_release_fixture(assets=fixture_assets)
@@ -337,6 +347,44 @@ def test_reading_an_asset_the_release_does_not_declare_is_refused(
 
     with pytest.raises(ConfigError, match="absent"):
         read_snapshot_frame(result, asset_name="not_in_this_release.csv.gz")
+
+
+def test_an_absent_asset_does_not_quote_back_every_name_the_release_holds(
+    tmp_path: Path,
+) -> None:
+    """A release declaring many assets must not echo all of them.
+
+    Every name here is SHORT, which is the point: what is unbounded is
+    how many assets a manifest may declare, and nothing caps that. A
+    per-name length bound would leave this exactly as it was, so the
+    cap has to be on the count.
+    """
+    result = _fetch(build_default_assets(), tmp_path)
+    one = next(iter(result.assets.values()))
+    crowded = replace(
+        result,
+        assets={
+            f"a{index:05d}.csv.gz": replace(one, name=f"a{index:05d}.csv.gz")
+            for index in range(_CROWDED_ASSET_COUNT)
+        },
+    )
+
+    logged: list[str] = []
+    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
+    try:
+        with pytest.raises(ConfigError, match="absent") as raised:
+            read_snapshot_frame(crowded, asset_name="not_in_this_release.csv.gz")
+    finally:
+        continuity.logger.remove(sink_id)
+
+    message = str(raised.value)
+    assert len(message) < _MAX_REFUSAL_CHARS
+    # Bounded, but the reader is still told how many there really were.
+    assert str(_CROWDED_ASSET_COUNT) in message
+
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    for line in logged:
+        assert len(line) < _MAX_REFUSAL_CHARS
 
 
 def test_the_default_asset_is_the_published_bitstamp_history(
