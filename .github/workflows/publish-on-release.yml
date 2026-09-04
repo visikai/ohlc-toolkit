@@ -50,6 +50,20 @@ jobs:
           python-version: "3.14.7"
       - name: Build package
         run: uv build
+      # uv build reads the version from pyproject.toml and ignores the
+      # tag, so a tag that does not match the tree would publish a
+      # version matching no tag. Fail before anything is uploaded.
+      - name: Require the tag to match the built version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          for artifact in "dist/ohlc_toolkit-${TAG}.tar.gz" "dist/ohlc_toolkit-${TAG}-py3-none-any.whl"; do
+            if [ ! -f "$artifact" ]; then
+              echo "tag '${TAG}' does not match the built artifacts:" >&2
+              ls dist >&2
+              exit 1
+            fi
+          done
       # Fail the release before anything is uploaded: the publish
       # action's own metadata check is non-strict.
       - name: Check package metadata
