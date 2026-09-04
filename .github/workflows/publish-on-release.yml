@@ -83,7 +83,19 @@ jobs:
       #
       # To upgrade: read the newest release tag, dereference it to its
       # commit, confirm ghcr.io publishes that commit SHA as a tag, then
-      # move the SHA and the version comment together. Dependabot does this
-      # for a SHA pin and cannot do it for a branch ref.
+      # move the SHA and the version comment together. Dependabot raises
+      # that bump for a SHA pin and cannot for a branch ref, but it moves
+      # the SHA and the comment only -- the ghcr check is still yours.
+      #
+      # This pin also decays, which is the unusual part. ghcr keeps
+      # commit-SHA tags for only the last few releases: measured against
+      # the registry, v1.12.4 and newer resolve while v1.11.0 and older
+      # 404. A pin left un-bumped past that window stops being runnable
+      # at all, and it fails on the release path -- the only place this
+      # workflow runs, and only after the tag and GitHub release already
+      # exist. A branch ref could never 404. So Dependabot's bump has to
+      # be MERGED, not merely raised. The network-marked test in
+      # tests/test_workflow_pins.py checks the pinned image is still
+      # published, and this workflow runs that lane before it deploys.
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
