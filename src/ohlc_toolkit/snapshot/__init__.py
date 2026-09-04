@@ -4,6 +4,14 @@ This namespace is not re-exported from the top-level ``ohlc_toolkit``
 package; import from ``ohlc_toolkit.snapshot`` directly.
 """
 
+from ohlc_toolkit.snapshot.continuity import (
+    ContinuityReport,
+    SeamKind,
+    SeamMismatch,
+    SnapshotContinuityError,
+    read_snapshot_frame,
+    verify_snapshot_continuity,
+)
 from ohlc_toolkit.snapshot.errors import (
     SnapshotIntegrityError,
     SnapshotManifestError,
@@ -47,9 +55,13 @@ __all__ = [
     "SUPPORTED_SCHEMA_VERSION",
     "AssetRecord",
     "AssetTransport",
+    "ContinuityReport",
     "ExistingAssetPolicy",
     "FetchedAsset",
     "HttpAssetTransport",
+    "SeamKind",
+    "SeamMismatch",
+    "SnapshotContinuityError",
     "SnapshotFetchResult",
     "SnapshotIntegrityError",
     "SnapshotManifest",
@@ -58,4 +70,6 @@ __all__ = [
     "fetch_snapshot",
     "is_plain_asset_name",
     "parse_manifest",
+    "read_snapshot_frame",
+    "verify_snapshot_continuity",
 ]
