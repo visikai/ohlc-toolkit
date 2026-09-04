@@ -213,7 +213,15 @@ def read_snapshot_frame(
             f"{sorted(result.assets)}."
         )
 
-    read = read_source_csv(asset.path, profile, mode=ValidationMode.REPORT)
+    # One row past the declaration: a longer file then yields exactly one
+    # extra row for the seam check below to refuse, without the file --
+    # or an adversarially compressed one -- ever being fully resident.
+    read = read_source_csv(
+        asset.path,
+        profile,
+        mode=ValidationMode.REPORT,
+        max_rows=result.manifest.row_count + 1,
+    )
     report = _build_report(read.frame, read.report, result.manifest, profile)
     _enforce(report, result.manifest)
     logger.info(

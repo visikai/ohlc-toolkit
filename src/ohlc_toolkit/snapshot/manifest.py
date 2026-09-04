@@ -6,10 +6,14 @@ lenient: a manifest that is short one key, one schema version ahead, or
 one character wrong in a digest is refused outright rather than partially
 believed. There is no repair path and no default value.
 
-The manifest carries no digest of itself -- nothing could compute one
-over bytes that would then have to contain it -- so a successful strict
-parse is the whole of its verification, and a manifest that declares
-itself as an asset is refused for the same reason.
+The manifest carries no EMBEDDED digest of itself -- bytes cannot contain
+their own hash -- so a successful strict parse is the gate for accepting
+bytes as a manifest, and a manifest that declares itself as an asset is
+refused for the same reason. The snapshot's identity is still computable:
+it is the SHA-256 a CONSUMER takes over the manifest bytes, which the
+fetcher records on its result, and it is the one value that changes when
+the manifest -- and the self-consistent asset set it describes -- is
+swapped wholesale.
 """
 
 import re
@@ -38,6 +42,13 @@ SUPPORTED_SCHEMA_VERSION = 1
 # The published manifest is 739 bytes; a mebibyte leaves several orders of
 # magnitude of headroom while still bounding the download.
 MAX_MANIFEST_BYTES = 1 << 20
+
+# The ceiling on a size an asset may declare. The declared size doubles as
+# the transport's download cap, so without a ceiling that cap would be
+# whatever the manifest says -- a forged petabyte would parse cleanly and
+# become the budget. The release host refuses files above 2 GiB, so an
+# honest manifest can never declare more.
+MAX_ASSET_BYTES = 2 << 30
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
@@ -107,6 +118,19 @@ class AssetRecord:
             )
             raise SnapshotManifestError(
                 f"Asset {self.name!r} declares a non-positive size: {self.size_bytes}."
+            )
+        if self.size_bytes > MAX_ASSET_BYTES:
+            logger.error(
+                "Rejecting asset {!r}: declared size {} exceeds the {}-byte ceiling.",
+                self.name,
+                self.size_bytes,
+                MAX_ASSET_BYTES,
+            )
+            raise SnapshotManifestError(
+                f"Asset {self.name!r} declares {self.size_bytes} bytes; an asset "
+                f"can be at most {MAX_ASSET_BYTES} bytes. The release host "
+                "refuses larger files, and this declared size is the download "
+                "cap, so a larger declaration cannot be honest."
             )
         if not isinstance(self.sha256, str) or not _SHA256_PATTERN.fullmatch(
             self.sha256

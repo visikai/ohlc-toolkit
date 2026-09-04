@@ -260,30 +260,36 @@ def test_reading_a_fetched_history_returns_the_verified_frame(
     assert frame.get_column(_TIMESTAMP_COLUMN)[0] == FIXTURE_START
 
 
-def test_rows_beyond_the_declared_count_are_never_parsed(tmp_path: Path) -> None:
-    """The read is bounded by the manifest's own row count, plus one.
+def test_rows_beyond_the_declared_count_are_never_materialized(
+    tmp_path: Path,
+) -> None:
+    """The read materializes at most the declared row count, plus one.
 
-    A file longer than its manifest declares must be refused by THIS
-    package's seam check after reading one row too many -- not parsed to
-    the end first. The tail of this fixture is garbage that cannot parse
-    as the schema at all: if the reader ran past the bound it would
-    surface a foreign parse error instead of the refusal below, and an
-    adversarial or buggy publish could occupy unbounded memory before
-    the row count was ever compared.
+    A file fifty rows longer than its manifest declares must be refused
+    with an observed count of declared-plus-ONE: one extra row is enough
+    to prove the file too long, and stopping there is what keeps a
+    longer -- or adversarially compressed -- publish from occupying
+    memory in proportion to ITS size rather than the manifest's. An
+    observed count of declared-plus-fifty would mean the whole file was
+    read first and compared after. (The bound is on materialization:
+    polars still scans the remaining bytes, so this caps memory, not
+    parse work.)
     """
-    long_history = build_history_csv(history_timestamps(rows=FIXTURE_ROWS + 1))
-    garbage_tail = b"not,a,row,at,all,x\n" * 3
+    long_history = build_history_csv(history_timestamps(rows=FIXTURE_ROWS + 50))
     assets = build_default_assets()
-    assets[HISTORY_ASSET] = gzip_bytes(long_history + garbage_tail)
+    assets[HISTORY_ASSET] = gzip_bytes(long_history)
     result = _fetch(assets, tmp_path)
 
     with pytest.raises(SnapshotContinuityError) as caught:
         read_snapshot_frame(result, asset_name=HISTORY_ASSET)
 
-    assert any(
-        mismatch.kind is SeamKind.ROW_COUNT
+    row_count_mismatches = [
+        mismatch
         for mismatch in caught.value.report.seam_mismatches
-    )
+        if mismatch.kind is SeamKind.ROW_COUNT
+    ]
+    assert len(row_count_mismatches) == 1
+    assert row_count_mismatches[0].observed == FIXTURE_ROWS + 1
 
 
 def test_reading_a_gapped_fetched_history_is_refused(tmp_path: Path) -> None:

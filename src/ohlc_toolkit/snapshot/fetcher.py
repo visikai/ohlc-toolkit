@@ -104,6 +104,11 @@ class SnapshotFetchResult:
         directory: The directory the caller named, now holding the assets.
         manifest: The parsed manifest every asset was verified against.
         manifest_path: Where that manifest's bytes were written.
+        manifest_sha256: The snapshot identity -- the SHA-256 over the
+            manifest bytes exactly as fetched. Per-asset digests cannot
+            reveal a wholesale swap of the manifest and its assets
+            together, because a swapped manifest describes its swapped
+            assets correctly; this one value changes.
         assets: Asset name to its verified record. Stored as a read-only
             mapping; because this field is a mapping, instances of this
             class are not hashable.
@@ -114,6 +119,7 @@ class SnapshotFetchResult:
     directory: Path
     manifest: SnapshotManifest
     manifest_path: Path
+    manifest_sha256: str
     assets: Mapping[str, FetchedAsset]
 
     def __post_init__(self) -> None:
@@ -127,6 +133,7 @@ def fetch_snapshot(
     *,
     transport: AssetTransport | None = None,
     existing: ExistingAssetPolicy = ExistingAssetPolicy.REFUSE,
+    expected_manifest_sha256: str | None = None,
 ) -> SnapshotFetchResult:
     """Fetch every asset a release declares, verifying each before it lands.
 
@@ -140,6 +147,11 @@ def fetch_snapshot(
             substitute one to fetch from somewhere else.
         existing: What to do with an already-present file whose digest
             does not match. Defaults to refusing.
+        expected_manifest_sha256: If given, the snapshot identity the
+            fetched manifest must have -- the SHA-256 over its bytes. A
+            caller holding the identity of the snapshot it means can
+            demand exactly that one, which refuses both a wholesale
+            manifest swap and a release re-cut under the same tag.
 
     Returns:
         The fetch result, including the parsed manifest and one record
@@ -153,13 +165,30 @@ def fetch_snapshot(
             a different release than the one asked for.
         SnapshotIntegrityError: If any asset cannot be fetched, is not
             the size its manifest declared, or fails its declared
-            SHA-256.
+            SHA-256 -- or if ``expected_manifest_sha256`` is given and
+            the fetched manifest's identity is not it.
 
     """
     resolved = _prepare_directory(directory)
     active = HttpAssetTransport() if transport is None else transport
     manifest_path = resolved / MANIFEST_ASSET_NAME
-    manifest = _fetch_manifest(release, active, manifest_path)
+    manifest, manifest_sha256 = _fetch_manifest(release, active, manifest_path)
+    if (
+        expected_manifest_sha256 is not None
+        and manifest_sha256 != expected_manifest_sha256
+    ):
+        logger.error(
+            "Refusing snapshot {!r}: manifest identity is {}, expected {}.",
+            release.tag,
+            manifest_sha256,
+            bounded_echo(expected_manifest_sha256),
+        )
+        raise SnapshotIntegrityError(
+            f"The fetched manifest for {release.tag!r} has identity "
+            f"{manifest_sha256}, not the expected "
+            f"{bounded_echo(expected_manifest_sha256)}. Either the caller's "
+            "record is stale or the published release changed under its tag."
+        )
 
     assets = {
         record.name: _resolve_asset(release, active, resolved, record, existing)
@@ -176,6 +205,7 @@ def fetch_snapshot(
         release=release,
         directory=resolved,
         manifest=manifest,
+        manifest_sha256=manifest_sha256,
         manifest_path=manifest_path,
         assets=assets,
     )
@@ -197,18 +227,20 @@ def _prepare_directory(directory: str | os.PathLike[str]) -> Path:
 
 def _fetch_manifest(
     release: SnapshotRelease, transport: AssetTransport, manifest_path: Path
-) -> SnapshotManifest:
-    """Fetch, parse, and place the manifest, in that order.
+) -> tuple[SnapshotManifest, str]:
+    """Fetch, parse, and place the manifest, returning it with its identity.
 
     The bytes are only moved to ``manifest_path`` after they parse and
     after they turn out to describe this release, so a manifest on disk
-    is always one this package could read.
+    is always one this package could read. The returned identity is the
+    SHA-256 over exactly the bytes that were parsed and placed.
     """
     url = release.asset_url(MANIFEST_ASSET_NAME)
     temp_path = _make_temp_path(manifest_path)
     try:
         transport.download(url, temp_path, max_bytes=MAX_MANIFEST_BYTES)
-        manifest = parse_manifest(temp_path.read_bytes())
+        raw = temp_path.read_bytes()
+        manifest = parse_manifest(raw)
         if manifest.tag != release.tag:
             logger.error(
                 "Refusing the manifest at {}: it declares tag {}, not {!r}.",
@@ -223,7 +255,7 @@ def _fetch_manifest(
         os.replace(temp_path, manifest_path)
     finally:
         temp_path.unlink(missing_ok=True)
-    return manifest
+    return manifest, hashlib.sha256(raw).hexdigest()
 
 
 def _resolve_asset(
