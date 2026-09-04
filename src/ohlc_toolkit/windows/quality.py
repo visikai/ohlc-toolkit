@@ -113,6 +113,7 @@ from ohlc_toolkit.temporal import (
     ConfigError,
     CoverageError,
     Duration,
+    bounded_echo,
     validate_window_duration,
 )
 
@@ -133,6 +134,13 @@ logger = get_logger(__name__)
 # times the cadence -- and this step has no cadence with which to read
 # it back the other way, so there is nothing it could add to a report.
 _REQUIRED_COLUMNS = ("close_time", "coverage_seconds")
+
+# What an Int64 means in each column, so refusing one by loop still says
+# the specific thing a hand-written guard per column used to say.
+_INT64_COLUMN_MEANINGS = {
+    "close_time": "an Int64 Unix second",
+    "coverage_seconds": "an Int64 count of whole seconds",
+}
 
 
 @unique
@@ -472,23 +480,21 @@ def _require_quality_columns(frame: pl.DataFrame) -> None:
             "to an engine-produced window frame."
         )
 
-    coverage_dtype = frame.schema["coverage_seconds"]
-    if coverage_dtype != pl.Int64:
-        logger.warning("Rejecting non-Int64 coverage_seconds: {}", coverage_dtype)
-        raise ConfigError(
-            "coverage_seconds must be an Int64 count of whole seconds, got "
-            f"{coverage_dtype}; apply this policy to an engine-produced window "
-            "frame."
-        )
-
-    close_time_dtype = frame.schema["close_time"]
-    if close_time_dtype != pl.Int64:
-        logger.warning("Rejecting non-Int64 close_time: {}", close_time_dtype)
-        raise ConfigError(
-            "close_time must be an Int64 Unix second, got "
-            f"{close_time_dtype}; apply this policy to an engine-produced "
-            "window frame."
-        )
+    # One loop over the required columns rather than a guard apiece, so the
+    # bound below is structural: a column added to _REQUIRED_COLUMNS gets it
+    # by construction instead of by whoever copies the block remembering to.
+    # Each dtype is read off the caller's frame, so how large it renders is
+    # the caller's choice -- a wide struct reaches thousands of characters in
+    # the raised message and the warning line alike.
+    for name in _REQUIRED_COLUMNS:
+        dtype = frame.schema[name]
+        if dtype != pl.Int64:
+            logger.warning("Rejecting non-Int64 {}: {}", name, bounded_echo(dtype))
+            raise ConfigError(
+                f"{name} must be {_INT64_COLUMN_MEANINGS[name]}, got "
+                f"{bounded_echo(dtype)}; apply this policy to an "
+                "engine-produced window frame."
+            )
 
 
 def _threshold_seconds(min_coverage: float, window_seconds: int) -> Fraction:

@@ -18,8 +18,9 @@ from hypothesis import strategies as st
 from polars.testing import assert_frame_equal
 
 from ohlc_toolkit import windows as windows_namespace
-from ohlc_toolkit.temporal import ConfigError, CoverageError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, CoverageError
 from ohlc_toolkit.windows import ExplicitRange, compute_windows
+from ohlc_toolkit.windows import quality as quality_module
 from ohlc_toolkit.windows.quality import (
     GateMode,
     QualityMode,
@@ -48,6 +49,13 @@ _EMIT_EVERY = "10s"
 # close_time is named" then means what it says, instead of passing
 # because "0" happens to occur inside "100.0".
 _TIME_BASE = 1_700_000_000
+
+# A dtype wide enough that echoing it whole would swamp the message.
+_PATHOLOGICAL_STRUCT_FIELDS = 1000
+# A refusal is fixed prose plus ONE bounded echo, so the ceiling is derived
+# from the echo cap rather than written as a round number: if that cap ever
+# rises, this rises with it instead of quietly going slack.
+_MAX_REFUSAL_MESSAGE_CHARS = 4 * MAX_ECHO_CHARS
 
 
 def _rows(*open_times: int) -> tuple[SourceRow, ...]:
@@ -871,6 +879,53 @@ class TestBoundaryConditions:
                 WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
                 window=_WINDOW,
             )
+
+    @pytest.mark.parametrize(
+        "column", ["close_time", "coverage_seconds"], ids=["close_time", "coverage"]
+    )
+    def test_a_pathological_dtype_is_echoed_bounded(self, column: str) -> None:
+        """Refusing a column must not quote its whole dtype back.
+
+        The dtype is read off the caller's frame, so its size is theirs
+        to choose rather than ours; a thousand-field struct renders to
+        roughly fifteen thousand characters. Both columns are checked
+        because they are the same guard twice, and BOTH the raised
+        message and the warning line are checked because they are the
+        same fix twice -- bounding only what the exception says leaves
+        the log free to carry the whole shape.
+        """
+        fields = range(_PATHOLOGICAL_STRUCT_FIELDS)
+        wide = pl.Struct({f"f{index}": pl.Int64 for index in fields})
+        frame = _full_grid_frame().with_columns(
+            pl.lit({f"f{index}": 1 for index in fields}, dtype=wide).alias(column)
+        )
+        widest_field = f"f{_PATHOLOGICAL_STRUCT_FIELDS - 1}"
+
+        # This package keeps its own logger registry, so loguru's module
+        # logger is not the one that writes here; attach to the instance
+        # the module actually holds.
+        logged: list[str] = []
+        sink_id = quality_module.logger.add(
+            logged.append, level="WARNING", format="{message}"
+        )
+        try:
+            with pytest.raises(ConfigError) as raised:
+                apply_quality_policy(
+                    frame,
+                    WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+                    window=_WINDOW,
+                )
+        finally:
+            quality_module.logger.remove(sink_id)
+
+        message = str(raised.value)
+        assert len(message) < _MAX_REFUSAL_MESSAGE_CHARS
+        assert widest_field not in message
+
+        assert logged, "the refusal warns before it raises; nothing was captured"
+        for line in logged:
+            assert len(line) < _MAX_REFUSAL_MESSAGE_CHARS
+            assert widest_field not in line
 
     def test_the_engines_own_int64_close_time_is_accepted(self) -> None:
         """Int64 is what the engine emits for close_time, and it passes."""

@@ -14,7 +14,7 @@ from ohlc_toolkit.source.validation import (
     ValidationReport,
     validate_source_frame,
 )
-from ohlc_toolkit.temporal import DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, DataValidationError
 from tests.test_source.factories import build_clean_frame
 
 _PROFILE = SourceProfile.create(
@@ -33,6 +33,12 @@ _PROFILE = SourceProfile.create(
 )
 
 _CADENCE_SECONDS = 60
+
+# A dtype wide enough that echoing it whole would swamp the finding, and a
+# ceiling derived from the echo cap rather than written as a round number,
+# so raising that cap cannot leave this assertion slack.
+_PATHOLOGICAL_STRUCT_FIELDS = 1000
+_MAX_FINDING_MESSAGE_CHARS = 4 * MAX_ECHO_CHARS
 
 
 def _set_timestamps(frame: pl.DataFrame, timestamps: list[int | None]) -> pl.DataFrame:
@@ -183,6 +189,40 @@ class TestSchemaValidationBothModes(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("...", findings[0].message)
         self.assertNotIn(long_name, findings[0].message)
+
+    def test_a_pathological_dtype_is_echoed_bounded(self):
+        """A wide struct dtype must not put its whole shape in the message.
+
+        The echoed dtype is read off the INPUT frame, so its size is the
+        caller's to choose rather than ours. A thousand-field struct
+        renders to roughly fifteen thousand characters unbounded.
+        """
+        fields = range(_PATHOLOGICAL_STRUCT_FIELDS)
+        wide = pl.Struct({f"f{index}": pl.Int64 for index in fields})
+        frame = pl.DataFrame(
+            {"timestamp": pl.Series([{f"f{i}": 1 for i in fields}], dtype=wide)}
+        )
+
+        report = validate_source_frame(frame, _PROFILE, mode=ValidationMode.REPORT)
+
+        findings = _find(report, FindingKind.SCHEMA)
+        self.assertEqual(len(findings), 1)
+        message = findings[0].message
+        self.assertLess(len(message), _MAX_FINDING_MESSAGE_CHARS)
+        self.assertNotIn(f"f{_PATHOLOGICAL_STRUCT_FIELDS - 1}", message)
+
+    def test_an_ordinary_dtype_is_echoed_in_full(self):
+        """Bounding the pathological case must not reword the ordinary one."""
+        corrupted = self.frame.with_columns(pl.col("open").cast(pl.Utf8))
+
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+
+        findings = _find(report, FindingKind.SCHEMA)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(
+            findings[0].message,
+            "wrong-kind columns: ['open (expected floating, got String)']",
+        )
 
 
 class TestMonotonicityBothModes(unittest.TestCase):
