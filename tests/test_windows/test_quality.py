@@ -128,7 +128,12 @@ def _quality_frame_from_coverages(coverages: Sequence[int]) -> pl.DataFrame:
             "src_count": [c // 10 for c in coverages],
             "coverage_seconds": coverages,
         }
-    ).with_columns(pl.col("coverage_seconds").cast(pl.Int64))
+    ).with_columns(
+        # Both casts matter for the empty frame: a [] column infers Null,
+        # and the engine emits Int64 for these columns even at height 0.
+        pl.col("close_time").cast(pl.Int64),
+        pl.col("coverage_seconds").cast(pl.Int64),
+    )
 
 
 class TestWindowQualityPolicyIdentity:
@@ -841,6 +846,43 @@ class TestBoundaryConditions:
         )
         assert isinstance(result, QualityPolicyResult)
         assert result.frame.height == frame.height
+
+    @pytest.mark.parametrize(
+        "dtype",
+        [pl.Float64, pl.String, pl.Datetime("us"), pl.UInt32],
+        ids=["Float64", "String", "Datetime", "UInt32"],
+    )
+    def test_a_non_int64_close_time_column_is_refused(self, dtype: pl.DataType) -> None:
+        """``close_time`` is held to the same word as its sibling.
+
+        ``coverage_seconds`` is required to be Int64 while ``close_time``
+        was merely required to exist -- yet the report reads it with
+        ``int(...)``, so a Float64 close time is silently truncated into
+        an offender name that is NOT A ROW IN THE FRAME, and a String or
+        Datetime one surfaces as a foreign TypeError only on the
+        offending path, letting a clean frame with the same wrong dtype
+        pass. Refusing every non-Int64 kind up front keeps both failures
+        at this module's boundary, in its words.
+        """
+        frame = _full_grid_frame().with_columns(pl.col("close_time").cast(dtype))
+        with pytest.raises(ConfigError, match="Int64"):
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+                window=_WINDOW,
+            )
+
+    def test_the_engines_own_int64_close_time_is_accepted(self) -> None:
+        """Int64 is what the engine emits for close_time, and it passes."""
+        frame = _full_grid_frame()
+        assert frame.schema["close_time"] == pl.Int64
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=1.0),
+            window=_WINDOW,
+        )
+        assert isinstance(result, QualityPolicyResult)
 
     @pytest.mark.parametrize(
         "dtype",
