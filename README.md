@@ -317,7 +317,7 @@ uv run mypy .
 uv run ruff check .
 ```
 
-`pytest` deselects the network-marked test by default; run it with
+`pytest` deselects the network-marked tests by default; run them with
 `uv run pytest -m network` to fetch and verify the real published
 release. `benchmarks/window_engine.py` measures the window engine over a
 full minute history against independently computed references.
