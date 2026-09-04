@@ -221,8 +221,8 @@ def enum_from_payload(
     Raises:
         ConfigError: If ``value`` names no member. The message lists the
             members that do exist, and echoes the offending value
-            through :func:`~ohlc_toolkit.windows.resolution.quote_bounded`
-            so an oversized string cannot produce an oversized message.
+            through :func:`~ohlc_toolkit.temporal.bounded_echo` so an
+            oversized string cannot produce an oversized message.
 
     """
     try:
