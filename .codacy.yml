@@ -1,5 +1,8 @@
 ---
-engines:
-  bandit:
-    exclude_paths:
-      - "tests/**"
+# Test code deliberately does unsafe-looking things (dynamic imports and
+# subprocess runs fed from tuples of string literals), which taint
+# analysers flag as findings they cannot trace. Bandit was already
+# excluded from tests for exactly this class of reason; this widens the
+# same exclusion to the whole analysis.
+exclude_paths:
+  - "tests/**"

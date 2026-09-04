@@ -1,11 +1,11 @@
 """A polars-native CSV reader for raw source frames.
 
-This reader is the Polars-native counterpart to the legacy pandas
-:func:`ohlc_toolkit.csv_reader.read_ohlc_csv`, which silently sorts its
-input. This reader never sorts, fills, drops, or de-duplicates rows: what
-is on disk is what comes back, so validation (see
+This reader never sorts, fills, drops, or de-duplicates rows: what is on
+disk is what comes back, so validation (see
 :mod:`ohlc_toolkit.source.validation`) sees the data exactly as the
-provider published it.
+provider published it. A reader that tidies its input first cannot report
+that the input needed tidying, which is the whole point of reading it
+here rather than anywhere else.
 """
 
 import os

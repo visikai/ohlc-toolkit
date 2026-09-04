@@ -1,7 +1,9 @@
 """Fetching and verifying a published monthly full-history snapshot.
 
-This namespace is not re-exported from the top-level ``ohlc_toolkit``
-package; import from ``ohlc_toolkit.snapshot`` directly.
+The top-level package imports this one, so ``ohlc_toolkit.snapshot`` is
+reachable from a bare ``import ohlc_toolkit``. The names below are NOT
+flattened into that namespace: spell them ``ohlc_toolkit.snapshot.X``, or
+import them from here.
 """
 
 from ohlc_toolkit.snapshot.continuity import (

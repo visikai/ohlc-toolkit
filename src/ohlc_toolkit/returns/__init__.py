@@ -1,7 +1,9 @@
 """Return primitives over window frames.
 
-This namespace is not re-exported from the top-level ``ohlc_toolkit``
-package; import from ``ohlc_toolkit.returns`` directly.
+The top-level package imports this one, so ``ohlc_toolkit.returns`` is
+reachable from a bare ``import ohlc_toolkit``. The names below are NOT
+flattened into that namespace: spell them ``ohlc_toolkit.returns.X``, or
+import them from here.
 
 :func:`~ohlc_toolkit.returns.primitives.add_backward_returns` and
 :func:`~ohlc_toolkit.returns.primitives.add_forward_returns` compose

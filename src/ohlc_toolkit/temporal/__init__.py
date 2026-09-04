@@ -1,7 +1,9 @@
 """Temporal primitives: Duration, the exception taxonomy, and the bounded echo.
 
-This namespace is not re-exported from the top-level ``ohlc_toolkit``
-package; import from ``ohlc_toolkit.temporal`` directly.
+The top-level package imports this one, so ``ohlc_toolkit.temporal`` is
+reachable from a bare ``import ohlc_toolkit``. The names below are NOT
+flattened into that namespace: spell them ``ohlc_toolkit.temporal.X``, or
+import them from here.
 """
 
 from ohlc_toolkit.temporal.duration import (

@@ -38,10 +38,9 @@ trust your types. Do not re-validate deep in pure helpers.
 ### Make invalid states unrepresentable
 
 - Prefer enums and union types over flag soup.
-- New public APIs should use unit-bearing durations such as `"1s"` or `"1m"`,
-  not a bare integer whose unit is implied.
-- Existing `transform_ohlc(..., timeframe=5)` minute integers are legacy.
-  Do not extend that pattern; do not silently change it either.
+- Durations are a `Duration` or a compact string such as `"1s"` or `"1m"`,
+  never a bare integer whose unit is implied. `coerce_duration` accepts
+  either spelling at a boundary; past it, the value is a `Duration`.
 
 ### No unbounded growth
 
@@ -66,9 +65,9 @@ Do not bump `requires-python` as a drive-by change.
 - `SCREAMING_SNAKE_CASE` for module-level constants.
 - Full words over abbreviations. Exceptions: `id`, `url`, `ohlc`, `csv`,
   `http`.
-- Append units: `timeout_seconds`, `step_size_minutes`.
+- Append units: `timeout_seconds`, `total_seconds`, `max_bytes`.
 - Booleans read as assertions: `is_valid`, `has_gap`, `should_retry`.
-- Functions are verb phrases: `read_ohlc_csv`, `transform_ohlc`.
+- Functions are verb phrases: `read_source_csv`, `compute_windows`.
 
 ## Type hints
 
@@ -83,15 +82,22 @@ Google style, enforced by Ruff `D`. One-line summary in active voice, blank
 line, then `Args:` / `Returns:` / `Raises:` when the signature warrants it.
 
 ```python
-def parse_timeframe(timeframe: str, *, to_minutes: bool = False) -> int:
-    """Parse a unit-bearing timeframe string into seconds or minutes.
+@classmethod
+def parse(cls, text: str) -> Self:
+    """Parse a compact duration string into a Duration.
 
     Args:
-        timeframe: A string such as ``1h15m``.
-        to_minutes: When True, return whole minutes instead of seconds.
+        text: One or more ``<digits><unit>`` components with units
+            strictly descending in the order w > d > h > m > s, each
+            unit used at most once, and no separators, signs,
+            decimals, or whitespace.
 
     Returns:
-        The duration as an integer in the requested unit.
+        The parsed Duration.
+
+    Raises:
+        ConfigError: If ``text`` is not a ``str``, does not match the
+            grammar, or repeats/misorders a unit.
     """
 ```
 
@@ -114,24 +120,31 @@ logger.info(f"Read {len(frame)} rows from {path}")  # Bad
 
 ## DataFrames
 
-`main` is the 1.0 development line, and **polars** is the DataFrame
-library for its new API surface. The pandas-only rule applies to the
-frozen 0.4.x line: existing pandas-based public functions stay on
-pandas. Do not introduce a DataFrame library beyond these two.
+**polars**, and only polars. pandas left with the 0.4 surface at 1.0, and
+nothing depends on it any more. Do not add a second DataFrame library.
 
 ## Public API
 
-Exported names live in `ohlc_toolkit.__all__`:
+`ohlc_toolkit.__all__` is six subpackages, and nothing else:
 
-- `DatasetDownloader`
-- `read_ohlc_csv`
-- `transform_ohlc`
-- `parse_timeframe`, `format_timeframe`
-- `validate_timeframe`, `validate_timeframe_format`
+- `temporal` — `Duration`, its grammar, and the error taxonomy
+- `source` — profiles, validation, and the raw-frame reader
+- `windows` — the aggregation engine, its oracle, and the quality policy
+- `schedules` — scale schedules and emit-cadence rules
+- `returns` — backward and forward returns
+- `snapshot` — fetching and verifying a published release
 
-Update in-repo call sites rather than adding `_old_name = new_name` aliases
-for code only this repository consumes. Breaking changes to exported names,
-defaults, or on-disk CSV behaviour belong in a documented major version.
+The top-level package imports all six, so `import ohlc_toolkit` reaches
+every one of them. Names are **not** flattened into the top level:
+`ohlc_toolkit.Duration` does not exist, and adding it would give up the
+subpackage qualifier that says which stage a name belongs to.
+
+A new public name goes in the subpackage that owns it and in that
+subpackage's `__all__`. Update call sites rather than adding
+`_old_name = new_name` aliases. Breaking changes to exported names,
+defaults, or on-disk behaviour belong in a documented major version —
+which is what 1.0 is, and why it carries no shims for anything 0.4
+exported.
 
 ## Tooling
 
