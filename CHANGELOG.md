@@ -69,9 +69,10 @@ package but not flattened into it:
 
 - `pandas` and `tqdm` are no longer dependencies. The runtime
   dependencies are `polars`, `requests`, `loguru` and `orjson`.
+- The Python floor rises: 0.4.0 allowed Python 3.10 (`^3.10`); 1.0
+  requires `>=3.11`, tested on 3.11 through 3.14.
 - The project description no longer advertises timeframe transformation.
 
 ### Unchanged
 
-- `requires-python = ">=3.11"`, tested on 3.11 through 3.14.
 - Apache-2.0 licensed.
