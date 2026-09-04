@@ -229,7 +229,10 @@ def test_a_rejected_rule_name_is_echoed_back_bounded() -> None:
 
     message = str(caught.value)
     assert oversized not in message
-    assert "500 chars total" in message
+    # The length note counts the echoed REPRESENTATION -- the 500-char
+    # input plus its two repr quotes -- so the reader of a truncated
+    # echo knows the size of exactly what was truncated.
+    assert "502 chars total" in message
 
 
 def test_a_materialization_of_an_unsupported_type_is_refused_identically() -> None:

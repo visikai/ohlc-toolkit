@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Self
 
 from ohlc_toolkit.config.logging import get_logger
+from ohlc_toolkit.temporal.echo import bounded_echo
 from ohlc_toolkit.temporal.errors import ConfigError
 
 logger = get_logger(__name__)
@@ -121,7 +122,7 @@ class Duration:
             raise ConfigError(f"Duration text must be a str, got {type(text).__name__}")
 
         if not _GRAMMAR_PATTERN.fullmatch(text):
-            quoted = _quote_bounded(text)
+            quoted = bounded_echo(text)
             logger.warning("Rejecting malformed duration string: {}", quoted)
             raise ConfigError(f"Invalid duration string: {quoted}")
 
@@ -130,7 +131,7 @@ class Duration:
         for amount, unit in _COMPONENT_PATTERN.findall(text):
             rank = _UNIT_RANK[unit]
             if rank <= previous_rank:
-                quoted = _quote_bounded(text)
+                quoted = bounded_echo(text)
                 logger.warning(
                     "Rejecting out-of-order or duplicate duration unit in: {}",
                     quoted,
@@ -143,19 +144,6 @@ class Duration:
             total_seconds += int(amount) * _UNIT_SECONDS[unit]
 
         return cls(total_seconds)
-
-
-# Rejected input is echoed back in logs and error messages; cap how much,
-# so a malformed megabyte-sized string cannot produce a megabyte-sized
-# log line or exception message.
-_MAX_QUOTED_INPUT_CHARS = 80
-
-
-def _quote_bounded(text: str) -> str:
-    """Return ``repr(text)``, truncated with a length note when oversized."""
-    if len(text) <= _MAX_QUOTED_INPUT_CHARS:
-        return repr(text)
-    return f"{text[:_MAX_QUOTED_INPUT_CHARS]!r}... ({len(text)} chars total)"
 
 
 def _format_seconds(total_seconds: int) -> str:

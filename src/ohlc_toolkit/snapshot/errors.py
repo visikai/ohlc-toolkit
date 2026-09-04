@@ -22,10 +22,6 @@ refusal into an unbounded log line.
 
 from ohlc_toolkit.temporal import DataValidationError
 
-# Long enough to identify the offending value, short enough that a
-# manifest full of megabyte-long strings cannot flood a log.
-MAX_ECHO_CHARS = 80
-
 
 class SnapshotManifestError(DataValidationError):
     """A release manifest could not be parsed, or contradicts itself.
@@ -44,21 +40,3 @@ class SnapshotIntegrityError(DataValidationError):
     SHA-256 does not match. In every case the asset never reaches its
     final path.
     """
-
-
-def bounded_echo(value: object) -> str:
-    """Render a value for a log line or error message, with a length cap.
-
-    Args:
-        value: Any value, typically one read straight out of an untrusted
-            manifest.
-
-    Returns:
-        ``repr(value)``, truncated with an ellipsis once it exceeds
-        :data:`MAX_ECHO_CHARS` characters.
-
-    """
-    text = repr(value)
-    if len(text) <= MAX_ECHO_CHARS:
-        return text
-    return f"{text[:MAX_ECHO_CHARS]}..."

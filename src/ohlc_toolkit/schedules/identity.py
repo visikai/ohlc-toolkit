@@ -32,8 +32,7 @@ from enum import Enum
 from typing import TypeVar
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.temporal import ConfigError, Duration
-from ohlc_toolkit.windows.resolution import quote_bounded
+from ohlc_toolkit.temporal import ConfigError, Duration, bounded_echo
 
 logger = get_logger(__name__)
 
@@ -229,7 +228,7 @@ def enum_from_payload(  # noqa: UP047 - PEP 695 generics need 3.12; this package
     try:
         return enum_type(value)
     except ValueError as error:
-        quoted = quote_bounded(value) if isinstance(value, str) else repr(value)
+        quoted = bounded_echo(value)
         logger.warning("Rejecting an unknown {}: {}", label, quoted)
         raise ConfigError(
             f"Unknown {label}: {quoted}. Supported: "
@@ -267,6 +266,6 @@ def require_recorded_id(recorded: object, derived: str, *, label: str) -> None:
         )
         raise ConfigError(
             f"The recorded {label} does not match the payload it names: stored "
-            f"{quote_bounded(str(recorded))}, derived {derived!r}. The payload was "
+            f"{bounded_echo(str(recorded))}, derived {derived!r}. The payload was "
             "edited without re-deriving its id."
         )

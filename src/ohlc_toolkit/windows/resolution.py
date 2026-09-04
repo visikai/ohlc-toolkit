@@ -38,6 +38,7 @@ from ohlc_toolkit.source.profile import SourceProfile
 from ohlc_toolkit.temporal import (
     ConfigError,
     Duration,
+    bounded_echo,
     coerce_duration,
     validate_cadence,
     validate_window_duration,
@@ -49,10 +50,6 @@ logger = get_logger(__name__)
 # A profile declares which raw columns exist and what kind they are; the
 # role each one plays is fixed by this convention.
 OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
-
-# Rejected input is echoed into logs and error messages; cap how much, so
-# a pathological value cannot produce an unbounded log line.
-_MAX_QUOTED_INPUT_CHARS = 80
 
 
 @unique
@@ -316,21 +313,6 @@ def require_source_columns(frame: pl.DataFrame, profile: SourceProfile) -> None:
         )
 
 
-def quote_bounded(text: str) -> str:
-    """Return ``repr(text)``, truncated with a length note when oversized.
-
-    Args:
-        text: The rejected input to echo back.
-
-    Returns:
-        A representation that is never longer than the cap plus a note.
-
-    """
-    if len(text) <= _MAX_QUOTED_INPUT_CHARS:
-        return repr(text)
-    return f"{text[:_MAX_QUOTED_INPUT_CHARS]!r}... ({len(text)} chars total)"
-
-
 def coerce_materialization(
     value: Materialization,
 ) -> ExplicitRange | MaterializationRule:
@@ -355,7 +337,7 @@ def coerce_materialization(
         try:
             return MaterializationRule(value)
         except ValueError as error:
-            quoted = quote_bounded(value)
+            quoted = bounded_echo(value)
             logger.warning("Rejecting unknown materialization rule name: {}", quoted)
             raise ConfigError(
                 f"Unknown materialization rule {quoted}. Supported: "

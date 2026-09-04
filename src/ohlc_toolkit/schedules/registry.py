@@ -15,8 +15,7 @@ generator changed, which is the opposite of what a registration is for.
 
 from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.schedules.generators import WindowSchedule, explicit
-from ohlc_toolkit.temporal import ConfigError
-from ohlc_toolkit.windows.resolution import quote_bounded
+from ohlc_toolkit.temporal import ConfigError, bounded_echo
 
 logger = get_logger(__name__)
 
@@ -86,7 +85,7 @@ def named_schedule(name: str) -> WindowSchedule:
 
     schedule = _NAMED_SCHEDULES.get(name)
     if schedule is None:
-        quoted = quote_bounded(name)
+        quoted = bounded_echo(name)
         logger.warning("Rejecting an unknown schedule name: {}", quoted)
         raise ConfigError(
             f"Unknown schedule name {quoted}. Registered: "

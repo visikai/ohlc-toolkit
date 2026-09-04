@@ -11,6 +11,7 @@ from ohlc_toolkit.temporal.duration import (
     validate_horizon_duration,
     validate_window_duration,
 )
+from ohlc_toolkit.temporal.echo import MAX_ECHO_CHARS, bounded_echo
 from ohlc_toolkit.temporal.errors import (
     ConfigError,
     CoverageError,
@@ -18,10 +19,12 @@ from ohlc_toolkit.temporal.errors import (
 )
 
 __all__ = [
+    "MAX_ECHO_CHARS",
     "ConfigError",
     "CoverageError",
     "DataValidationError",
     "Duration",
+    "bounded_echo",
     "coerce_duration",
     "validate_cadence",
     "validate_horizon_duration",
