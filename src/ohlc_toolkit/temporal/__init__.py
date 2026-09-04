@@ -8,6 +8,7 @@ from ohlc_toolkit.temporal.duration import (
     Duration,
     coerce_duration,
     validate_cadence,
+    validate_horizon_duration,
     validate_window_duration,
 )
 from ohlc_toolkit.temporal.errors import (
@@ -23,5 +24,6 @@ __all__ = [
     "Duration",
     "coerce_duration",
     "validate_cadence",
+    "validate_horizon_duration",
     "validate_window_duration",
 ]

@@ -252,6 +252,28 @@ def validate_window_duration(value: Duration | str) -> Duration:
     return _validate_strictly_positive(value, label="Window duration")
 
 
+def validate_horizon_duration(value: Duration | str) -> Duration:
+    """Coerce and validate a return horizon.
+
+    Horizons are strictly positive: a zero horizon relates every close to
+    itself, which is a constant rather than a return. Zero remains
+    representable in general (for example, as an anchor offset
+    elsewhere); it is only rejected here, at this use site.
+
+    Args:
+        value: A Duration, or a compact duration string.
+
+    Returns:
+        The validated, strictly positive Duration.
+
+    Raises:
+        ConfigError: If ``value`` cannot be coerced to a Duration, or
+            coerces to the zero duration.
+
+    """
+    return _validate_strictly_positive(value, label="Horizon duration")
+
+
 def validate_cadence(value: Duration | str) -> Duration:
     """Coerce and validate a cadence.
 
