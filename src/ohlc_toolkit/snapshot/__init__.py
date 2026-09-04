@@ -8,6 +8,12 @@ from ohlc_toolkit.snapshot.errors import (
     SnapshotIntegrityError,
     SnapshotManifestError,
 )
+from ohlc_toolkit.snapshot.fetcher import (
+    ExistingAssetPolicy,
+    FetchedAsset,
+    SnapshotFetchResult,
+    fetch_snapshot,
+)
 from ohlc_toolkit.snapshot.manifest import (
     MANIFEST_ASSET_NAME,
     MAX_MANIFEST_BYTES,
@@ -23,19 +29,33 @@ from ohlc_toolkit.snapshot.release import (
     SnapshotRelease,
     is_plain_asset_name,
 )
+from ohlc_toolkit.snapshot.transport import (
+    DEFAULT_CHUNK_BYTES,
+    DEFAULT_TIMEOUT_SECONDS,
+    AssetTransport,
+    HttpAssetTransport,
+)
 
 __all__ = [
     "BITSTAMP_BTCUSD_1M_REPOSITORY",
     "BITSTAMP_HISTORY_CSV_ASSET",
+    "DEFAULT_CHUNK_BYTES",
     "DEFAULT_RELEASE_HOST",
+    "DEFAULT_TIMEOUT_SECONDS",
     "MANIFEST_ASSET_NAME",
     "MAX_MANIFEST_BYTES",
     "SUPPORTED_SCHEMA_VERSION",
     "AssetRecord",
+    "AssetTransport",
+    "ExistingAssetPolicy",
+    "FetchedAsset",
+    "HttpAssetTransport",
+    "SnapshotFetchResult",
     "SnapshotIntegrityError",
     "SnapshotManifest",
     "SnapshotManifestError",
     "SnapshotRelease",
+    "fetch_snapshot",
     "is_plain_asset_name",
     "parse_manifest",
 ]
