@@ -28,15 +28,11 @@ it.
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from enum import Enum
-from typing import TypeVar
 
 from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.temporal import ConfigError, Duration, bounded_echo
 
 logger = get_logger(__name__)
-
-_EnumMember = TypeVar("_EnumMember", bound=Enum)
 
 
 def canonical_json(payload: Mapping[str, object]) -> str:
@@ -203,37 +199,6 @@ def optional_text_from_payload(value: object, *, label: str) -> str | None:
         return value
     logger.warning("Rejecting a non-string {}: {!r}", label, value)
     raise ConfigError(f"The {label} must be a string, got {type(value).__name__}")
-
-
-def enum_from_payload(
-    enum_type: type[_EnumMember], value: object, *, label: str
-) -> _EnumMember:
-    """Read an enum member out of a payload by its stored value.
-
-    Args:
-        enum_type: The enum the stored value must name a member of.
-        value: The stored value, of any type.
-        label: What the member is, for the message.
-
-    Returns:
-        The named member.
-
-    Raises:
-        ConfigError: If ``value`` names no member. The message lists the
-            members that do exist, and echoes the offending value
-            through :func:`~ohlc_toolkit.temporal.bounded_echo` so an
-            oversized string cannot produce an oversized message.
-
-    """
-    try:
-        return enum_type(value)
-    except ValueError as error:
-        quoted = bounded_echo(value)
-        logger.warning("Rejecting an unknown {}: {}", label, quoted)
-        raise ConfigError(
-            f"Unknown {label}: {quoted}. Supported: "
-            f"{[member.value for member in enum_type]}."
-        ) from error
 
 
 def require_recorded_id(recorded: object, derived: str, *, label: str) -> None:

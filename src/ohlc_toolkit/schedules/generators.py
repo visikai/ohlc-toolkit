@@ -95,7 +95,6 @@ from ohlc_toolkit.schedules.identity import (
     content_hash,
     duration_from_payload,
     durations_from_payload,
-    enum_from_payload,
     mapping_from_payload,
     optional_duration_from_payload,
     optional_text_from_payload,
@@ -108,6 +107,7 @@ from ohlc_toolkit.temporal import (
     validate_cadence,
     validate_window_duration,
 )
+from ohlc_toolkit.temporal.echo import enum_from_payload
 
 logger = get_logger(__name__)
 

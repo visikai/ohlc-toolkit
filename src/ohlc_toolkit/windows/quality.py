@@ -116,6 +116,7 @@ from ohlc_toolkit.temporal import (
     bounded_echo,
     validate_window_duration,
 )
+from ohlc_toolkit.temporal.echo import enum_from_payload
 
 logger = get_logger(__name__)
 
@@ -288,17 +289,13 @@ class WindowQualityPolicy:
             logger.warning("Rejecting policy dict missing key(s): {}", missing)
             raise ConfigError(f"Policy dict is missing key(s): {missing}")
 
-        try:
-            mode = QualityMode(data["mode"])
-        except ValueError as error:
-            logger.warning("Rejecting unknown quality mode: {!r}", data["mode"])
-            raise ConfigError(f"Unknown quality mode: {data['mode']!r}") from error
-
-        try:
-            gate_mode = GateMode(data["gate_mode"])
-        except ValueError as error:
-            logger.warning("Rejecting unknown gate_mode: {!r}", data["gate_mode"])
-            raise ConfigError(f"Unknown gate_mode: {data['gate_mode']!r}") from error
+        # Through the shared helper rather than a local try/except: the
+        # values here come from serialized input, so their size is the
+        # caller's to choose, and that helper is the one place that
+        # bounds an echoed payload value in the message and the log
+        # alike.
+        mode = enum_from_payload(QualityMode, data["mode"], label="quality mode")
+        gate_mode = enum_from_payload(GateMode, data["gate_mode"], label="gate_mode")
 
         min_coverage = _validated_min_coverage(data["min_coverage"])
         return cls(mode=mode, min_coverage=min_coverage, gate_mode=gate_mode)
