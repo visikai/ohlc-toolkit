@@ -501,8 +501,10 @@ class LogSpacedSpec:
             ConfigError: If the count is not an int in
                 ``[2, MAX_RESOLVED_WINDOWS]``, if a bound or the grain is
                 not a strictly positive duration, if the minimum exceeds
-                the maximum, or if ``rounding``/``dedup`` are not enum
-                members.
+                the maximum, if ``rounding``/``dedup`` are not enum
+                members, or if the implied ratio overflows a float --
+                an identity that cannot be serialized is refused here
+                rather than failing at serialization time.
 
         """
         object.__setattr__(self, "count", _validated_count(self.count))
@@ -511,6 +513,20 @@ class LogSpacedSpec:
         object.__setattr__(self, "grain", validate_cadence(self.grain))
         _require_ordered_bounds(self.minimum, self.maximum)
         _require_rules(self.rounding, self.dedup)
+        if not math.isfinite(self.limiting_ratio):
+            logger.warning(
+                "Rejecting log-spaced bounds [{}, {}]: the implied ratio "
+                "overflows a float.",
+                self.minimum,
+                self.maximum,
+            )
+            raise ConfigError(
+                f"The ratio implied by count={self.count} over "
+                f"[{self.minimum}, {self.maximum}] is too large for a float; "
+                "an identity that cannot be serialized is refused at "
+                "construction, the same way an unsquarable recurrence "
+                "coefficient is."
+            )
 
     @property
     def limiting_ratio(self) -> float:
