@@ -1,0 +1,33 @@
+name: Network lane
+
+# The network-marked tests fetch and verify the real published dataset
+# release and run the README quickstart against it. The release assets
+# are immutable, so drift comes from dependencies and infrastructure —
+# a weekly run catches it without putting a 260 MB fetch in every PR.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  network:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          prune-cache: false
+          cache-python: true
+          python-version: "3.14.7"
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Run the network-marked tests
+        run: uv run pytest -m network

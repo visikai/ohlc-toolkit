@@ -30,6 +30,11 @@ jobs:
         run: uv run mypy .
       - name: Run tests with pytest
         run: uv run pytest
+      # The network lane fetches the real published dataset and runs the
+      # README quickstart against it; a release must not ship while
+      # either is broken.
+      - name: Run the network-marked tests
+        run: uv run pytest -m network
 
   deploy:
     runs-on: ubuntu-latest
