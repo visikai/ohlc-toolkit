@@ -18,10 +18,18 @@ pip install ohlc-toolkit
 
 ## Features
 
-- Download BTCUSD 1-minute candle data in one line (using data from [ff137/bitstamp-btcusd-minute-data](https://github.com/ff137/bitstamp-btcusd-minute-data)):
+- Fetch the published BTCUSD 1-minute history, verifying every byte
+  against the release's own manifest (data from
+  [ff137/bitstamp-btcusd-minute-data](https://github.com/ff137/bitstamp-btcusd-minute-data)):
 
   ```py
-    df_1min = DatasetDownloader().download_bitstamp_btcusd_minute_data(bulk=True)
+    result = fetch_snapshot(
+        SnapshotRelease(
+            repository=BITSTAMP_BTCUSD_1M_REPOSITORY,
+            tag="bitstamp-btcusd-1m-2026-08",
+        ),
+        "data/",
+    )
   ```
 
 - Parse and format compact duration strings:

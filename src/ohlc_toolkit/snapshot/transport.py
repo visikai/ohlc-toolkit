@@ -11,9 +11,9 @@ under an explicit byte cap, and raises this package's own error on any
 failure. Deciding the path, checking the digest, and renaming into place
 belong to :mod:`ohlc_toolkit.snapshot.fetcher`.
 
-``requests`` is used because the package already depends on it (see
-:mod:`ohlc_toolkit.bitstamp_dataset_downloader`); no dependency is added
-for this.
+``requests`` is this module's dependency and nothing else's: it is the
+only import of it left in the package, so the cost of the dependency is
+paid for exactly this transport.
 
 This module reads no credential and echoes none into any log or message
 -- but ``requests`` at module level means ambient environment
