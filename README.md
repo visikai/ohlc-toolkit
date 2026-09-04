@@ -18,12 +18,6 @@ pip install ohlc-toolkit
 
 ## Features
 
-- Read OHLC data from CSV files into pandas DataFrames, with built-in data quality checks:
-
-  ```py
-    df = read_ohlc_csv(csv_file_path, timeframe="1d")
-  ```
-
 - Download BTCUSD 1-minute candle data in one line (using data from [ff137/bitstamp-btcusd-minute-data](https://github.com/ff137/bitstamp-btcusd-minute-data)):
 
   ```py

@@ -18,6 +18,6 @@ enough to pass strict source validation.
 
 This file is deliberately included in source distributions.
 
-## `test_bad_data.csv`, `test_csv_no_header.csv`, `test_csv_w_header.csv`
-
-Tiny hand-written CSVs for the reader's parsing and failure paths.
+It is the only committed fixture here. Every other CSV the suite reads is
+written by the test that reads it, into a temporary directory, so the
+bytes under test are visible in the test that depends on them.
