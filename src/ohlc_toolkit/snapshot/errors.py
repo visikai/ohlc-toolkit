@@ -13,11 +13,6 @@ carries, following the same placement as
 :class:`ohlc_toolkit.source.validation.SourceValidationError`. Defining it
 here would mean this module importing the report and the report module
 importing this one.
-
-:func:`bounded_echo` lives here because every one of its uses is in an
-error message or in the log line that precedes the raise: keeping it with
-the exceptions is what stops a pathological manifest from turning one
-refusal into an unbounded log line.
 """
 
 from ohlc_toolkit.temporal import DataValidationError
