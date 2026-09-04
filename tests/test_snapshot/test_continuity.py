@@ -149,6 +149,26 @@ def test_a_manifest_that_contradicts_itself_is_reported() -> None:
     assert SeamKind.MANIFEST_SPAN in _kinds(report)
 
 
+def test_a_manifest_span_not_divisible_by_the_cadence_is_refused() -> None:
+    """A span that does not divide by the cadence fits NO row count.
+
+    The test above perturbs the row count, which the implied-count
+    comparison alone would catch; here the count matches the floor of
+    the implied count exactly, so ONLY the divisibility half of the
+    check can object. Half a minute past the last full candle is not a
+    place a 60-second grid can end.
+    """
+    payload = build_manifest_payload(
+        assets=build_default_assets(), timestamps=history_timestamps()
+    )
+    payload["last_timestamp"] = payload["last_timestamp"] + CADENCE_SECONDS // 2
+    manifest = parse_manifest(encode_manifest(payload))
+
+    report = _raised(build_history_frame(history_timestamps()), manifest)
+
+    assert SeamKind.MANIFEST_SPAN in _kinds(report)
+
+
 def test_a_gap_in_the_grid_is_refused() -> None:
     """A missing minute is the failure the whole check exists for."""
     gapped = history_timestamps(omit=[_GAP_AT])

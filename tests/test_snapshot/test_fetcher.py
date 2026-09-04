@@ -128,6 +128,35 @@ def test_no_temporary_files_survive_a_successful_fetch(tmp_path: Path) -> None:
     assert _leftovers(tmp_path) == []
 
 
+def test_no_temporary_file_survives_an_interrupt_mid_download(
+    tmp_path: Path,
+) -> None:
+    """Cleanup is a ``finally``, so even Ctrl-C leaves no partial body.
+
+    The failure-path tests all raise ordinary exceptions, which an
+    ``except Exception`` would also clean up after -- so they cannot
+    tell a ``finally`` from the weaker shape. ``KeyboardInterrupt`` is
+    not an ``Exception``, and a partly-written body left behind by an
+    interrupted fetch is exactly the file a later reader must never
+    find.
+    """
+    fixture = build_release_fixture()
+    transport = fixture.transport()
+    original_download = transport.download
+
+    def interrupted_download(url: str, destination: Path, *, max_bytes: int) -> None:
+        original_download(url, destination, max_bytes=max_bytes)
+        if url.endswith(HISTORY_ASSET):
+            raise KeyboardInterrupt
+
+    transport.download = interrupted_download  # type: ignore[method-assign]
+
+    with pytest.raises(KeyboardInterrupt):
+        fetch_snapshot(fixture.release, tmp_path, transport=transport)
+
+    assert _leftovers(tmp_path) == []
+
+
 def test_a_missing_directory_is_created(tmp_path: Path) -> None:
     """A caller names a directory; it does not have to exist yet."""
     directory = tmp_path / "nested" / "snapshot"

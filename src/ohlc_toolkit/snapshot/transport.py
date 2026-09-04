@@ -14,6 +14,16 @@ belong to :mod:`ohlc_toolkit.snapshot.fetcher`.
 ``requests`` is used because the package already depends on it (see
 :mod:`ohlc_toolkit.bitstamp_dataset_downloader`); no dependency is added
 for this.
+
+This module reads no credential and echoes none into any log or message
+-- but ``requests`` at module level means ambient environment
+configuration applies: an ``HTTP(S)_PROXY``, a ``REQUESTS_CA_BUNDLE``,
+and a ``~/.netrc`` entry for the release host WILL be honoured, netrc
+turning into an ``Authorization`` header on the wire. That is left on
+deliberately: the assets are public and need no auth, proxy support is
+what keeps this usable behind one, and requests drops authorization on a
+cross-host redirect. A deployment that must not send ambient credentials
+anywhere should provide its own :class:`AssetTransport`.
 """
 
 from dataclasses import dataclass
