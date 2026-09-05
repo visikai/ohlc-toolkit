@@ -21,13 +21,27 @@ Usage::
 
 import ast
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 # Helpers whose result is bounded whatever they are given.
 _BOUNDING_CALLS = frozenset({"bounded_echo", "len", "_echo_asset_names", "sha256_hex"})
 # Calls that are bounded exactly when every argument is.
 _TRANSPARENT_CALLS = frozenset(
-    {"join", "round", "sorted", "int", "float", "repr", "str", "sum", "min", "max", "abs"}
+    {
+        "join",
+        "round",
+        "sorted",
+        "int",
+        "float",
+        "repr",
+        "str",
+        "sum",
+        "min",
+        "max",
+        "abs",
+    }
 )
 # Attributes that render small whatever object they hang off.
 _SMALL_ATTRIBUTES = frozenset({"__name__", "value"})
@@ -53,27 +67,58 @@ def _call_is_bounded(node: ast.Call) -> bool:
     return False
 
 
+def _constant(node: ast.Constant) -> bool:
+    """Accept a literal: the package chose it."""
+    return True
+
+
+def _upper_name(node: ast.Name) -> bool:
+    """Accept an UPPER_CASE name: a module constant."""
+    return node.id.isupper()
+
+
+def _small_attribute(node: ast.Attribute) -> bool:
+    """Accept ``type(x).__name__`` and an enum's ``.value``."""
+    return node.attr in _SMALL_ATTRIBUTES
+
+
+def _both_sides(node: ast.BinOp) -> bool:
+    """Accept arithmetic over bounded operands."""
+    return _is_bounded(node.left) and _is_bounded(node.right)
+
+
+def _each_element(node: ast.ListComp | ast.GeneratorExp) -> bool:
+    """Accept a comprehension whose element is bounded."""
+    return _is_bounded(node.elt)
+
+
+def _each_interpolation(node: ast.JoinedStr) -> bool:
+    """Accept an f-string whose every interpolation is bounded."""
+    return all(
+        _is_bounded(value.value)
+        for value in node.values
+        if isinstance(value, ast.FormattedValue)
+    )
+
+
+# One decision per expression shape the rule accepts on sight; any other
+# shape is not visibly bounded and is listed.
+_DECISIONS: dict[type[ast.AST], Callable[[Any], bool]] = {
+    ast.Constant: _constant,
+    ast.Name: _upper_name,
+    ast.Call: _call_is_bounded,
+    ast.Attribute: _small_attribute,
+    ast.BinOp: _both_sides,
+    ast.ListComp: _each_element,
+    ast.GeneratorExp: _each_element,
+    ast.JoinedStr: _each_interpolation,
+}
+
+
 def _is_bounded(node: ast.AST) -> bool:
     """Decide whether an expression is one the echo rule accepts on sight."""
-    if isinstance(node, ast.Constant):
-        return True
-    if isinstance(node, ast.Name):
-        return node.id.isupper()
-    if isinstance(node, ast.Call):
-        return _call_is_bounded(node)
-    if isinstance(node, ast.Attribute):
-        return node.attr in _SMALL_ATTRIBUTES
-    if isinstance(node, ast.BinOp):
-        return _is_bounded(node.left) and _is_bounded(node.right)
-    if isinstance(node, ast.ListComp | ast.GeneratorExp):
-        return _is_bounded(node.elt)
-    if isinstance(node, ast.JoinedStr):
-        return all(
-            _is_bounded(value.value)
-            for value in node.values
-            if isinstance(value, ast.FormattedValue)
-        )
-    return False
+    decide = _DECISIONS.get(type(node))
+    return decide(node) if decide is not None else False
 
 
 def _is_logger_call(node: ast.AST) -> bool:
@@ -116,7 +161,9 @@ def main(argv: list[str]) -> int:
     ]
     for line in findings:
         print(line)
-    print(f"{len(findings)} echo(es) under {root} not visibly bounded; classify by hand.")
+    print(
+        f"{len(findings)} echo(es) under {root} not visibly bounded; classify by hand."
+    )
     return 0
 
 

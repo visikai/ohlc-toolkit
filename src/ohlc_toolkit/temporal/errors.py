@@ -11,8 +11,12 @@ the caller wrote the value, can read the message, and can fix the call. A
 missing file is preceded by ``logger.error``: something outside the call --
 a file, a download, a manifest, a sidecar, a source frame -- turned out not
 to be what it claimed, and that is worth an operator's attention even when
-the exception is caught. ``tests/test_refusal_levels.py`` holds every
-``raise`` in the package to this pairing.
+the exception is caught. A bare ``raise`` that hands a caught failure on
+unchanged sits on the error side too, and the file branch is ``OSError`` in
+full, so a permission or connection failure stands beside a missing file.
+A new exception class must be classified into one branch or the other before
+it is raised anywhere: ``tests/test_refusal_levels.py`` holds every ``raise``
+in the package to this pairing and fails a class on neither branch.
 """
 
 
@@ -22,7 +26,9 @@ class ConfigError(Exception):
     Raised at resolution time when a configuration value is malformed or
     violates an invariant (for example, a negative duration or a duration
     string outside the supported grammar). This is always an error, never
-    a warning: callers cannot proceed with an unresolved configuration.
+    merely warned about and continued: callers cannot proceed with an
+    unresolved configuration. The log line before it is nevertheless a
+    ``warning``, because the caller can fix the call.
     """
 
 

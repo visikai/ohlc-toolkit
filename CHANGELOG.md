@@ -30,8 +30,10 @@ against their tags, and are not restated here.
 - The log line before a raise follows the exception's branch: `warning`
   before a `ConfigError` (the caller's own argument is refused), `error`
   before a data, integrity, coverage or file error (input from outside the
-  call failed). Five sites moved to match; `tests/test_refusal_levels.py`
-  holds every raise in the package to the pairing.
+  call failed; the file branch is `OSError` in full) and before a bare
+  re-raise. Five sites moved to match; `tests/test_refusal_levels.py` holds
+  every raise in the package to the pairing, and a new exception class must
+  be classified into a branch before it is raised.
 
 ## 1.0.0
 

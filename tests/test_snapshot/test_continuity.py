@@ -360,7 +360,7 @@ def test_reading_an_asset_the_release_does_not_declare_is_refused(
 def _refuse_with_crowd(result: SnapshotFetchResult, size: int) -> tuple[str, list[str]]:
     """Refuse a missing asset against a release holding ``size`` assets.
 
-    Returns the raised message and every ERROR line the refusal logged.
+    Returns the raised message and every WARNING line the refusal logged.
     """
     one = next(iter(result.assets.values()))
     crowded = replace(

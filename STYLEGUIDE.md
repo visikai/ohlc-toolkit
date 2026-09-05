@@ -30,8 +30,10 @@ explicit error) deliberately. Specific exceptions first; broad `Exception` last.
 **Every `raise` is preceded by a log**, at the level the exception's branch
 fixes: `warning` before a `ConfigError` (the caller's own argument is refused
 and the caller can fix it); `error` before a data, integrity, coverage or
-file error (input from outside the call failed). `tests/test_refusal_levels.py`
-checks the pairing.
+file error (input from outside the call failed; the file branch is `OSError`
+in full) and before a bare re-raise. A new exception class must be classified
+into one branch before it is raised anywhere; `tests/test_refusal_levels.py`
+checks the pairing and fails a class on neither branch.
 
 ### Validate at boundaries, trust internal types
 
@@ -119,7 +121,8 @@ logger.info(f"Read {len(frame)} rows from {path}")  # Bad
 - `warning` for noteworthy-but-recoverable (including quality warnings that
   do not raise), and before every `ConfigError`.
 - `error` / `exception` for unexpected failure (`exception` inside `except:`),
-  and before every data, integrity, coverage or file error.
+  and before every data, integrity, coverage or file (`OSError`) error and
+  every bare re-raise.
 - Every `raise` preceded by a log, at the level its exception fixes (see
   "Handle every error explicitly").
 
