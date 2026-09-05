@@ -4,6 +4,22 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
+## Unreleased
+
+### Added
+
+- `windows.annotate_windows`, `windows.read_annotations` and
+  `windows.AnnotationColumns`: join a sparse half-open interval sidecar onto
+  a window frame as opaque flags with union overlap accounting, reading
+  only `open_time` and `close_time` and appending exactly two columns.
+
+### Changed
+
+- Every echo of a value the package did not choose -- a name, a tag, a
+  path, a URL, third-party error text -- now reaches a log line or an
+  error message only through `temporal.bounded_echo`; type refusals log
+  the offending type instead of the offending value.
+
 ## 1.0.0
 
 A breaking rewrite. Everything 0.4.0 exported is removed, and the

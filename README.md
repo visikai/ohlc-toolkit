@@ -245,6 +245,16 @@ inside it. `PASS_THROUGH` records a deliberate no-op, `FILTER` drops rows
 below a coverage threshold, `GATE` raises (or reports) without dropping.
 Its threshold is exact rational arithmetic, not a float product.
 
+`annotate_windows` is another later step: it joins a sparse sidecar of
+half-open `[start, end)` intervals -- an outage log, a maintenance
+calendar -- onto the output as two appended columns, the distinct flags
+overlapping each window and the seconds of the window inside the union of
+those intervals. Overlap is half-open on both sides, so an interval that
+ends exactly at a window's open touches nothing; flags are opaque strings
+the transform reports and never interprets; no OHLCV or coverage value is
+read or changed. `read_annotations` reads such a sidecar from CSV, typed
+and checked, with the Bitstamp provenance file's column names as defaults.
+
 ### `schedules` — schedules that record what they are
 
 Generators (`log_spaced`, `metallic_recurrence`, `explicit`) produce a
