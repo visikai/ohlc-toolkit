@@ -1,7 +1,9 @@
 """Tests for the polars-native source CSV reader."""
 
 import gzip
+import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -247,6 +249,9 @@ _ROW_CAP = 6
 # archive to keep so that opening it succeeds and reading it does not.
 _GZIP_MAGIC_ONLY = b"\x1f\x8b"
 _TRUNCATED_BYTES = 12
+# Long enough that a writer which never returns fails the test rather than
+# wedging the run.
+_WRITER_TIMEOUT_SECONDS = 20
 
 
 def _write_bytes(directory: Path, name: str, payload: bytes, *, gzipped: bool) -> Path:
@@ -391,7 +396,7 @@ def test_the_guard_leaves_an_unreadable_archive_to_the_read(
 def test_a_capped_read_of_a_real_file_is_untouched_by_the_guard(
     tmp_path: Path, gzipped: bool
 ) -> None:
-    """The guard reads one byte and gets out of the way."""
+    """The guard costs one buffer fill and gets out of the way."""
     rows = _clean_rows(start=0, length=_ROW_CAP + 4)
     path = _write_csv(tmp_path, "real", rows, gzipped=gzipped)
 
@@ -402,9 +407,10 @@ def test_a_capped_read_of_a_real_file_is_untouched_by_the_guard(
     assert result.frame.height == _ROW_CAP
 
 
+@pytest.mark.parametrize("max_rows", [None, _ROW_CAP], ids=["uncapped", "capped"])
 @pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
 def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
-    tmp_path: Path, gzipped: bool
+    tmp_path: Path, gzipped: bool, max_rows: int | None
 ) -> None:
     """An empty file is refused here, whatever polars would do with it.
 
@@ -412,7 +418,8 @@ def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
     same class unaided and the exception alone cannot say who refused. The
     log line can: it exists only if the guard ran. The guard covers both
     shapes because a reader cannot know which shapes a given polars version
-    aborts on, and the cost is one byte.
+    aborts on, and on a regular file the cost does not scale with the
+    file.
     """
     deep = tmp_path.joinpath(*["p" * _LONG_COMPONENT_CHARS] * _LONG_PATH_COMPONENTS)
     deep.mkdir(parents=True)
@@ -423,7 +430,7 @@ def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
     try:
         with pytest.raises(pl.exceptions.NoDataError) as raised:
             read_source_csv(
-                path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
+                path, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows
             )
     finally:
         reader_module.logger.remove(sink_id)
@@ -432,3 +439,49 @@ def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
     assert logged, "this package refuses the file itself, and says so before raising"
     assert logged[-1].startswith("Source file holds no data")
     assert len(logged[-1]) < _MAX_READER_LINE_CHARS
+
+
+def test_a_stream_is_read_rather_than_probed(tmp_path: Path) -> None:
+    """A named pipe carrying real data must survive the guard untouched.
+
+    The guard opens the path, reads and closes it, and the read that
+    follows opens it again. On a regular file that is free. On anything
+    that cannot be reopened it is destructive, and not by the two bytes
+    it asks for: a buffered read pulls 128 KiB from the operating system,
+    so a probe would swallow the whole stream and leave the read an empty
+    input, or block on a writer that has already gone. Only regular files
+    are probed, and this is the case that says so.
+    """
+    fifo = tmp_path / "stream.csv"
+    os.mkfifo(fifo)
+    payload = f"{_HEADER}\n{','.join(['1451606400'] + ['1.0'] * 5)}\n".encode()
+
+    def feed() -> None:
+        with fifo.open("wb") as handle:
+            handle.write(payload)
+
+    writer = threading.Thread(target=feed, daemon=True)
+    writer.start()
+    try:
+        result = read_source_csv(
+            fifo, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
+        )
+    finally:
+        writer.join(timeout=_WRITER_TIMEOUT_SECONDS)
+
+    assert result.frame.height == 1
+
+
+def test_the_guard_does_not_look_at_anything_but_a_regular_file(
+    tmp_path: Path,
+) -> None:
+    """Directly, so the reason survives a refactor of the reader around it."""
+    fifo = tmp_path / "pipe.csv"
+    os.mkfifo(fifo)
+    empty = tmp_path / "empty.csv"
+    empty.write_bytes(_EMPTY_PAYLOAD)
+
+    assert reader_module._holds_no_data(empty) is True
+    assert reader_module._holds_no_data(fifo) is False
+    assert reader_module._holds_no_data(tmp_path) is False
+    assert reader_module._holds_no_data(tmp_path / "absent.csv") is False

@@ -131,28 +131,37 @@ _GZIP_MAGIC = b"\x1f\x8b"
 
 
 def _holds_no_data(path: str | os.PathLike[str]) -> bool:
-    """Report whether a file decompresses to nothing at all.
+    """Report whether a REGULAR file decompresses to nothing at all.
 
-    Reads one byte, not the file: enough to tell an empty archive from a
-    real one, and it costs the same on a nine-hundred-megabyte history as
-    on an empty one. Emptiness is decided from the bytes actually read
-    rather than from the size on disk, so a pipe or a device carrying real
-    data is not mistaken for an empty file.
+    Only regular files are looked at, and the reason is not tidiness. This
+    opens the path, reads from it and closes it, and the read that follows
+    opens it again -- which is free on a file and destructive on anything
+    else. Asking for two bytes does not read two bytes: the buffered
+    reader asks the operating system for 128 KiB, so on a FIFO, a stream
+    or a character device the probe consumes the data and the real read
+    finds an empty input, or blocks waiting for a writer that has already
+    gone. Those inputs go straight to the read, exactly as they did before
+    this guard existed.
 
-    Says NO when it cannot tell. A missing file, a permission error, a
+    On a regular file the cost is one buffer fill however large the file
+    is, so it does not scale with a nine-hundred-megabyte history.
+
+    Says NO when it cannot tell. A missing path, a permission error, a
     truncated archive: every one of those is the read's to report, in the
     read's own class and words, at the point where this package already
-    logs and re-raises. A probe that refused on its own behalf would
-    change what callers catch -- and a probe deciding the class of a
-    failure it merely stumbled into is how a cap would start changing what
-    is raised, which is the very thing this guard exists to stop.
+    logs and re-raises. A probe deciding the class of a failure it merely
+    stumbled into is how a cap would start changing what is raised, which
+    is the very thing this guard exists to stop.
     """
+    resolved = Path(path)
     try:
-        with Path(path).open("rb") as handle:
+        if not resolved.is_file():
+            return False
+        with resolved.open("rb") as handle:
             head = handle.read(len(_GZIP_MAGIC))
             if head != _GZIP_MAGIC:
                 return not head
-        with gzip.open(path, "rb") as archive:
+        with gzip.open(resolved, "rb") as archive:
             return not archive.read(1)
     except (OSError, EOFError):
         return False
@@ -173,10 +182,10 @@ def _require_data(path: str | os.PathLike[str]) -> None:
 
     The guard runs on EVERY read, not only capped ones. Only the capped
     shape panics, so a capped-only guard would fix the abort -- and would
-    leave a file that reads as empty raising one class with a cap and
-    another without one, which is the same defect in a quieter form. A
-    character device that reads as empty did exactly that. Two bytes on
-    every read is a small price for a promise with no exceptions.
+    leave an empty file raising one class with a cap and another without
+    one, which is the same defect in a quieter form. One buffer fill per
+    read of a regular file is a small price for a promise with no
+    exceptions.
 
     Raises:
         NoDataError: If the file holds no data. The class is polars' own

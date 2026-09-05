@@ -39,9 +39,10 @@ against their tags, and are not restated here.
   history asset with a correct digest went straight past every documented
   refusal. A file that reads as empty is now refused with polars' own
   `NoDataError`, on capped and uncapped reads alike, so a cap changes what is
-  read and never what is raised. One case changes class on the uncapped path
-  as a result: a character device that reads as empty, such as `/dev/null`,
-  previously raised `OSError` and now says it holds no data.
+  read and never what is raised. Only regular files are checked this way: a
+  FIFO, a stream or a character device is read exactly as before, because the
+  check opens the path and the read opens it again, which is free on a file
+  and destructive on anything that cannot be reopened.
 
 ### Changed
 
