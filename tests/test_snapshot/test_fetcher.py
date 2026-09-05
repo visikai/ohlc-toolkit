@@ -533,7 +533,7 @@ def test_a_non_directory_destination_refusal_bounds_the_path_on_both_exits(
     occupied.write_text("")
     fixture = build_release_fixture()
     with (
-        _captured("ERROR") as logged,
+        _captured("WARNING") as logged,
         pytest.raises(ConfigError, match="directory") as raised,
     ):
         _fetch(fixture, occupied)
@@ -548,7 +548,7 @@ def test_an_asset_path_occupied_by_a_directory_bounds_the_path_on_both_exits(
     (directory / HISTORY_ASSET).mkdir(parents=True)
     fixture = build_release_fixture()
     with (
-        _captured("ERROR") as logged,
+        _captured("WARNING") as logged,
         pytest.raises(ConfigError, match="regular file") as raised,
     ):
         _fetch(fixture, directory)

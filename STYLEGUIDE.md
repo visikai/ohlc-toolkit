@@ -27,8 +27,11 @@ Design goals, in order:
 Never swallow an exception. Log the failure path, then raise (or return an
 explicit error) deliberately. Specific exceptions first; broad `Exception` last.
 
-**Every `raise` is preceded by a log.** Warning for noteworthy-but-non-critical;
-`error` or `exception` for unexpected or bad.
+**Every `raise` is preceded by a log**, at the level the exception's branch
+fixes: `warning` before a `ConfigError` (the caller's own argument is refused
+and the caller can fix it); `error` before a data, integrity, coverage or
+file error (input from outside the call failed). `tests/test_refusal_levels.py`
+checks the pairing.
 
 ### Validate at boundaries, trust internal types
 
@@ -114,9 +117,11 @@ logger.info(f"Read {len(frame)} rows from {path}")  # Bad
 - `debug` for important I/O and branch decisions.
 - `info` for significant state changes.
 - `warning` for noteworthy-but-recoverable (including quality warnings that
-  do not raise).
-- `error` / `exception` for unexpected failure (`exception` inside `except:`).
-- Every `raise` preceded by a log.
+  do not raise), and before every `ConfigError`.
+- `error` / `exception` for unexpected failure (`exception` inside `except:`),
+  and before every data, integrity, coverage or file error.
+- Every `raise` preceded by a log, at the level its exception fixes (see
+  "Handle every error explicitly").
 
 ## DataFrames
 

@@ -3,6 +3,16 @@
 The hierarchy is intentionally flat: every exception here inherits directly
 from ``Exception`` rather than from a shared base, so callers can catch each
 concern independently without accidentally widening a ``except`` clause.
+
+The log line before a raise follows the same split. A ``ConfigError`` (or
+any refusal of the caller's own argument) is preceded by ``logger.warning``:
+the caller wrote the value, can read the message, and can fix the call. A
+``DataValidationError``, a ``CoverageError``, an integrity failure or a
+missing file is preceded by ``logger.error``: something outside the call --
+a file, a download, a manifest, a sidecar, a source frame -- turned out not
+to be what it claimed, and that is worth an operator's attention even when
+the exception is caught. ``tests/test_refusal_levels.py`` holds every
+``raise`` in the package to this pairing.
 """
 
 

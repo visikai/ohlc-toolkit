@@ -218,7 +218,7 @@ def read_snapshot_frame(
     asset = result.assets.get(asset_name)
     if asset is None:
         held = _echo_asset_names(sorted(result.assets))
-        logger.error(
+        logger.warning(
             "Asset {} is absent from the fetched release {}; it holds {}.",
             bounded_echo(asset_name),
             bounded_echo(result.release.tag),

@@ -15,6 +15,7 @@ from ohlc_toolkit.windows import (
     MaterializationRule,
     compute_reference_windows,
 )
+from ohlc_toolkit.windows import reference as reference_module
 from tests.test_windows.factories import (
     SourceRow,
     frame_from_rows,
@@ -339,6 +340,54 @@ def test_resolution_runs_before_the_frame_is_read() -> None:
             emit_every="1m",
             materialization=_ANY_RANGE,
         )
+
+
+def _run_lowered(
+    monkeypatch: pytest.MonkeyPatch, cap_name: str, cap: int
+) -> tuple[pl.DataFrame, list[str]]:
+    """Run the oracle over the four-candle minute grid with one cost cap lowered.
+
+    The cap is lowered rather than the grid inflated: allocating a million
+    ticks to observe one log line would make the suite pay the very cost
+    the warning is about.
+    """
+    monkeypatch.setattr(reference_module, cap_name, cap)
+    logged: list[str] = []
+    sink_id = reference_module.logger.add(
+        logged.append, level="WARNING", format="{message}"
+    )
+    try:
+        result = compute_reference_windows(
+            frame_from_rows(_MINUTE_CANDLES),
+            profile_for(60),
+            window="1m",
+            emit_every="1m",
+            materialization=ExplicitRange(start=60, end=241),
+        )
+    finally:
+        reference_module.logger.remove(sink_id)
+    return result, logged
+
+
+def test_an_enormous_tick_grid_is_materialized_but_never_quietly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A huge emit grid is computed, and the caller is told what it will cost."""
+    result, logged = _run_lowered(monkeypatch, "_MAX_UNWARNED_TICKS", 2)
+
+    # Warned about, then computed anyway: the cap is a warning, not a refusal.
+    assert result.get_column("close_time").to_list() == [60, 120, 180, 240]
+    assert [message for message in logged if "emit ticks over" in message]
+
+
+def test_a_brute_force_run_over_many_pairs_is_warned_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The candles-times-ticks cost is logged before the oracle pays it."""
+    result, logged = _run_lowered(monkeypatch, "_MAX_UNWARNED_CANDLE_TICK_PAIRS", 10)
+
+    assert result.get_column("close_time").to_list() == [60, 120, 180, 240]
+    assert [message for message in logged if "membership test(s)" in message]
 
 
 if __name__ == "__main__":

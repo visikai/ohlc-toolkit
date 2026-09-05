@@ -16,6 +16,10 @@ against their tags, and are not restated here.
   optional row cap that refuses rather than truncates, and raises
   `AnnotationValidationError` (a `DataValidationError`) for a sidecar it
   cannot make intervals from, or one holding more rows than the cap.
+- `scripts/echo_sweep.py`: lists every `logger.*` argument and `raise`
+  interpolation in `src/` that the echo rule does not visibly bound, with a
+  count, so a sweep's figures can be reproduced by anyone. It reports; it
+  does not gate.
 
 ### Changed
 
@@ -23,6 +27,11 @@ against their tags, and are not restated here.
   path, a URL, third-party error text -- now reaches a log line or an
   error message only through `temporal.bounded_echo`; type refusals log
   the offending type instead of the offending value.
+- The log line before a raise follows the exception's branch: `warning`
+  before a `ConfigError` (the caller's own argument is refused), `error`
+  before a data, integrity, coverage or file error (input from outside the
+  call failed). Five sites moved to match; `tests/test_refusal_levels.py`
+  holds every raise in the package to the pairing.
 
 ## 1.0.0
 

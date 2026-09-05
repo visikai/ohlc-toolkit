@@ -372,7 +372,7 @@ def _refuse_with_crowd(result: SnapshotFetchResult, size: int) -> tuple[str, lis
     )
 
     logged: list[str] = []
-    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
+    sink_id = continuity.logger.add(logged.append, level="WARNING", format="{message}")
     try:
         with pytest.raises(ConfigError, match="absent") as raised:
             read_snapshot_frame(crowded, asset_name="not_in_this_release.csv.gz")
@@ -455,7 +455,7 @@ def test_an_absent_asset_refusal_bounds_the_release_tag_on_both_exits(
     )
 
     logged: list[str] = []
-    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
+    sink_id = continuity.logger.add(logged.append, level="WARNING", format="{message}")
     try:
         with pytest.raises(ConfigError, match="absent") as raised:
             read_snapshot_frame(loud, asset_name="not_in_this_release.csv.gz")
