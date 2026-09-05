@@ -243,6 +243,10 @@ def test_a_missing_file_with_a_long_path_is_logged_bounded(tmp_path: Path) -> No
 # used to abort the interpreter rather than refuse.
 _EMPTY_PAYLOAD = b""
 _ROW_CAP = 6
+# A file that says it is a gzip and then stops, and how much of a real
+# archive to keep so that opening it succeeds and reading it does not.
+_GZIP_MAGIC_ONLY = b"\x1f\x8b"
+_TRUNCATED_BYTES = 12
 
 
 def _write_bytes(directory: Path, name: str, payload: bytes, *, gzipped: bool) -> Path:
@@ -302,6 +306,85 @@ def test_a_header_without_rows_is_not_refused_as_empty(
 
     assert result.frame.height == 0
     assert result.frame.columns == _HEADER.split(",")
+
+
+def test_a_gzip_archive_is_recognised_by_its_bytes_not_its_name(
+    tmp_path: Path,
+) -> None:
+    """Compression is decided the way polars decides it: from the file itself.
+
+    A suffix check would pass every other test in this file, because each
+    of them writes gzip bytes to a `.gz` name. It would also let an empty
+    archive under a `.csv` name reach the capped read and abort the
+    interpreter again, which is the whole defect. This is the case that
+    tells the two rules apart.
+    """
+    path = tmp_path / "looks_plain.csv"
+    path.write_bytes(gzip.compress(_EMPTY_PAYLOAD, mtime=0))
+
+    with pytest.raises(pl.exceptions.NoDataError):
+        read_source_csv(path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP)
+
+
+def test_a_missing_file_is_logged_whether_or_not_a_cap_is_given(
+    tmp_path: Path,
+) -> None:
+    """The guard runs before the read, and must not swallow the read's own refusal.
+
+    A probe that opened the file itself could raise first and leave the
+    reader's log line unrun, so a capped read of a missing file would
+    refuse silently while an uncapped one announced itself.
+    """
+    missing = tmp_path / "absent.csv"
+
+    for max_rows in (None, _ROW_CAP):
+        logged: list[str] = []
+        sink_id = reader_module.logger.add(
+            logged.append, level="ERROR", format="{message}"
+        )
+        try:
+            with pytest.raises(FileNotFoundError):
+                read_source_csv(
+                    missing, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows
+                )
+        finally:
+            reader_module.logger.remove(sink_id)
+        assert logged, f"a missing file must be logged, max_rows={max_rows}"
+        assert logged[-1].startswith("Source file not found")
+
+
+@pytest.mark.parametrize(
+    ("name", "payload", "expected"),
+    [
+        pytest.param("magic.csv.gz", _GZIP_MAGIC_ONLY, 0, id="magic_bytes_only"),
+        pytest.param("truncated.csv.gz", None, None, id="truncated_archive"),
+    ],
+)
+def test_the_guard_leaves_an_unreadable_archive_to_the_read(
+    tmp_path: Path, name: str, payload: bytes | None, expected: int | None
+) -> None:
+    """A probe that cannot tell says nothing, so the read reports in its own words.
+
+    Deciding on behalf of a read it merely stumbled into is how a cap
+    would start changing what is raised. Both shapes below behave exactly
+    as they do with no cap at all.
+    """
+    if payload is None:
+        payload = gzip.compress(f"{_HEADER}\n".encode(), mtime=0)[:_TRUNCATED_BYTES]
+    path = tmp_path / name
+    path.write_bytes(payload)
+
+    def read(max_rows: int | None) -> object:
+        try:
+            return read_source_csv(
+                path, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows
+            ).frame.height
+        except Exception as error:
+            return type(error)
+
+    assert read(_ROW_CAP) == read(None)
+    if expected is not None:
+        assert read(_ROW_CAP) == expected
 
 
 @pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])

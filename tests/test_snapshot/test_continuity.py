@@ -351,7 +351,13 @@ def test_reading_a_gapped_fetched_history_is_refused(tmp_path: Path) -> None:
 def test_reading_an_asset_the_release_does_not_declare_is_refused(
     tmp_path: Path,
 ) -> None:
-    """Asking for a name that is not in the result is a caller mistake."""
+    """A release that does not carry the named asset has not delivered it.
+
+    The name may be the caller's or this package's own default, and the
+    refusal does not distinguish them: the fetcher raises this same class
+    for an asset a release does not serve, so one condition raises one
+    class.
+    """
     result = _fetch(build_default_assets(), tmp_path)
 
     with pytest.raises(SnapshotIntegrityError, match="absent"):

@@ -32,9 +32,10 @@ fixes: `warning` before a `ConfigError` (the caller's own argument is refused
 and the caller can fix it); `error` before a data, integrity, coverage or
 file error (input from outside the call failed; the file branch is `OSError`
 in full, and a `polars.exceptions.PolarsError` this package raises or re-raises
-is on the same side) and before a bare re-raise. A new exception class must be classified
-into one branch before it is raised anywhere; `tests/test_refusal_levels.py`
-checks the pairing and fails a class on neither branch.
+is on the same side) and before a bare re-raise. A new exception class must be
+classified into one branch before it is raised anywhere;
+`tests/test_refusal_levels.py` checks the pairing and fails a class on neither
+branch.
 
 ### Validate at boundaries, trust internal types
 

@@ -108,11 +108,12 @@ def _has_bounded_interpolations(node: ast.JoinedStr) -> bool:
 
 # One decision per expression shape the rule accepts on sight; any other
 # shape is not visibly bounded and is listed. Dispatch is by EXACT type
-# rather than by isinstance: every key below is a leaf of the ast grammar
-# with no subclass in the standard library, so exact matching costs nothing
-# and keeps the table's behaviour readable off the table itself. A future
-# ast node subclassing one of these would fall through to "not visibly
-# bounded", which is the safe direction: it reports rather than skips.
+# rather than by isinstance: no key below has a subclass the parser ever
+# constructs -- Python 3.11 still defines deprecated aliases of Constant,
+# but `ast.parse` never produces them -- so exact matching costs nothing and
+# keeps the table's behaviour readable off the table itself. A node type
+# this table does not name falls through to "not visibly bounded", which is
+# the safe direction: it reports rather than skips.
 _DECISIONS: dict[type[ast.AST], Callable[[Any], bool]] = {
     ast.Constant: _is_constant,
     ast.Name: _is_upper_name,

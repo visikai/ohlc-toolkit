@@ -35,16 +35,18 @@ against their tags, and are not restated here.
   included -- raises `pyo3_runtime.PanicException`, a `BaseException` that no
   caller's `except PolarsError`, or even `except Exception`, can catch. It was
   reachable from `snapshot.read_snapshot_frame`, which always caps its read at
-  the manifest's row count, so a published release carrying an empty history
-  asset with a correct digest went straight past every documented refusal. An
-  empty file is now refused with polars' own `NoDataError`, which is what the
-  same file raises when read without a cap: a cap changes what is read and
-  never what is raised.
+  the manifest's row count plus one, so a published release carrying an empty
+  history asset with a correct digest went straight past every documented
+  refusal. A file that reads as empty is now refused with polars' own
+  `NoDataError`, on capped and uncapped reads alike, so a cap changes what is
+  read and never what is raised. One case changes class on the uncapped path
+  as a result: a character device that reads as empty, such as `/dev/null`,
+  previously raised `OSError` and now says it holds no data.
 
 ### Changed
 
-- `snapshot.read_snapshot_frame` raises `SnapshotIntegrityError`, not
-  `ConfigError`, when the named asset is absent from a fetched release. That
+- **Breaking.** `snapshot.read_snapshot_frame` raises `SnapshotIntegrityError`,
+  not `ConfigError`, when the named asset is absent from a fetched release. That
   class already covers "an asset the release does not serve" and is what the
   fetcher raises for the same condition; the asset name also has a default, so
   the refusal fires on calls that configured nothing, where a release failing
@@ -77,7 +79,7 @@ against their tags, and are not restated here.
   re-raises is on the error side too. Five sites moved to match;
   `tests/test_refusal_levels.py` holds every raise in the package to the
   pairing, and a new exception class must be classified into a branch before
-  it is raised.
+  it is raised -- the test fails a class on neither branch.
 
 ## 1.0.0
 

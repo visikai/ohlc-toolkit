@@ -109,6 +109,7 @@ def read_source_csv(
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
+        NoDataError: If the file reads as empty, capped or not.
         SourceValidationError: In strict mode, when validation produces
             one or more findings.
 
@@ -134,14 +135,27 @@ def _holds_no_data(path: str | os.PathLike[str]) -> bool:
 
     Reads one byte, not the file: enough to tell an empty archive from a
     real one, and it costs the same on a nine-hundred-megabyte history as
-    on an empty one.
+    on an empty one. Emptiness is decided from the bytes actually read
+    rather than from the size on disk, so a pipe or a device carrying real
+    data is not mistaken for an empty file.
+
+    Says NO when it cannot tell. A missing file, a permission error, a
+    truncated archive: every one of those is the read's to report, in the
+    read's own class and words, at the point where this package already
+    logs and re-raises. A probe that refused on its own behalf would
+    change what callers catch -- and a probe deciding the class of a
+    failure it merely stumbled into is how a cap would start changing what
+    is raised, which is the very thing this guard exists to stop.
     """
-    resolved = Path(path)
-    with resolved.open("rb") as handle:
-        if handle.read(len(_GZIP_MAGIC)) != _GZIP_MAGIC:
-            return resolved.stat().st_size == 0
-    with gzip.open(resolved, "rb") as archive:
-        return not archive.read(1)
+    try:
+        with Path(path).open("rb") as handle:
+            head = handle.read(len(_GZIP_MAGIC))
+            if head != _GZIP_MAGIC:
+                return not head
+        with gzip.open(path, "rb") as archive:
+            return not archive.read(1)
+    except (OSError, EOFError):
+        return False
 
 
 def _require_data(path: str | os.PathLike[str]) -> None:
@@ -157,9 +171,12 @@ def _require_data(path: str | os.PathLike[str]) -> None:
     snapshot path, where the file arrives off the internet, so the case is
     not hypothetical.
 
-    The guard runs only when a cap is in play, because that is the only
-    shape that panics; uncapped, polars raises the catchable error itself
-    and this function would only duplicate it.
+    The guard runs on EVERY read, not only capped ones. Only the capped
+    shape panics, so a capped-only guard would fix the abort -- and would
+    leave a file that reads as empty raising one class with a cap and
+    another without one, which is the same defect in a quieter form. A
+    character device that reads as empty did exactly that. Two bytes on
+    every read is a small price for a promise with no exceptions.
 
     Raises:
         NoDataError: If the file holds no data. The class is polars' own
@@ -180,8 +197,7 @@ def _read_raw_frame(
     schema_overrides = {
         name: _COLUMN_KIND_DTYPES[kind] for name, kind in profile.raw_schema.items()
     }
-    if max_rows is not None:
-        _require_data(path)
+    _require_data(path)
     logger.debug(
         "Reading source frame {} for profile {}.",
         bounded_echo(path),

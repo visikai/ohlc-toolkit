@@ -218,6 +218,9 @@ def read_snapshot_frame(
             did. A release that lacks the asset this package asks for by
             default has failed, and a caller who named a missing one is
             told by the same class the fetch would have used.
+        NoDataError: If the published asset reads as empty. A correct
+            digest says the bytes are the bytes; it does not say there are
+            any.
         SnapshotContinuityError: If the history contradicts its manifest
             or is not a complete grid.
 
