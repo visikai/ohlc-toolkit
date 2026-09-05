@@ -29,6 +29,7 @@ accounting, and reads nothing but the two window bounds.
 
 from ohlc_toolkit.windows.annotations import (
     AnnotationColumns,
+    AnnotationValidationError,
     annotate_windows,
     read_annotations,
 )
@@ -51,6 +52,7 @@ from ohlc_toolkit.windows.resolution import (
 
 __all__ = [
     "AnnotationColumns",
+    "AnnotationValidationError",
     "ExplicitRange",
     "GateMode",
     "Materialization",

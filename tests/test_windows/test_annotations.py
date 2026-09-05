@@ -22,11 +22,12 @@ from ohlc_toolkit.snapshot.manifest import (
     parse_manifest,
 )
 from ohlc_toolkit.snapshot.transport import HttpAssetTransport
-from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, DataValidationError
 from ohlc_toolkit.windows import ExplicitRange, compute_windows
 from ohlc_toolkit.windows import annotations as annotations_module
 from ohlc_toolkit.windows.annotations import (
     AnnotationColumns,
+    AnnotationValidationError,
     annotate_windows,
     read_annotations,
 )
@@ -91,6 +92,12 @@ _PATHOLOGICAL_STRUCT_FIELDS = 1000
 _MAX_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
 _DEEP_PATH_COMPONENTS = 14
 _DEEP_COMPONENT_CHARS = 250
+
+# The Int64 bounds, where an ungated subtraction wraps instead of going
+# negative; and a small sidecar with a cap set just under and at its size.
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+_CAPPED_ROWS = 5
 
 
 def _rows(*open_times: int) -> tuple[SourceRow, ...]:
@@ -351,7 +358,7 @@ def test_a_null_interval_bound_is_refused() -> None:
             "flag": pl.String,
         },
     )
-    with pytest.raises(ConfigError, match="null"):
+    with pytest.raises(AnnotationValidationError, match="null"):
         annotate_windows(_windows(), sidecar)
 
 
@@ -360,7 +367,7 @@ def test_a_null_interval_bound_is_refused() -> None:
 )
 def test_an_interval_whose_end_does_not_exceed_its_start_is_refused(end: int) -> None:
     """A half-open interval with nothing in it cannot mean anything, so it is refused."""
-    with pytest.raises(ConfigError, match="start < end"):
+    with pytest.raises(AnnotationValidationError, match="start < end"):
         annotate_windows(_windows(), _annotations((_TIME_BASE, end, "x")))
 
 
@@ -376,14 +383,19 @@ def test_an_empty_column_name_is_refused() -> None:
         AnnotationColumns(start="")
 
 
-def _both_exits_bounded(trip: object, *, level: str = "WARNING") -> None:
-    """Run ``trip`` expecting ConfigError; hold the message and the log under the ceiling."""
+def _both_exits_bounded(
+    trip: object,
+    *,
+    level: str = "WARNING",
+    expected: type[Exception] = ConfigError,
+) -> None:
+    """Run ``trip`` expecting ``expected``; hold the message and the log under the ceiling."""
     logged: list[str] = []
     sink_id = annotations_module.logger.add(
         logged.append, level=level, format="{message}"
     )
     try:
-        with pytest.raises(ConfigError) as raised:
+        with pytest.raises(expected) as raised:
             trip()  # type: ignore[operator]
     finally:
         annotations_module.logger.remove(sink_id)
@@ -467,7 +479,11 @@ def test_reading_a_malformed_cell_is_refused_bounded_on_both_exits(
     path.write_text(
         f"start_timestamp,end_timestamp,flag\n{'x' * _ENORMOUS_NAME_CHARS},2,a\n"
     )
-    _both_exits_bounded(lambda: read_annotations(path), level="ERROR")
+    _both_exits_bounded(
+        lambda: read_annotations(path),
+        level="ERROR",
+        expected=AnnotationValidationError,
+    )
 
 
 def test_reading_a_file_without_a_named_column_is_refused(tmp_path: Path) -> None:
@@ -484,14 +500,105 @@ def test_reading_a_file_without_a_named_column_is_refused(tmp_path: Path) -> Non
     )
 
 
+def test_a_broken_sidecar_is_data_and_a_bad_call_is_configuration() -> None:
+    """The two refusal kinds sit on different branches, so a caller can tell them apart."""
+    assert issubclass(AnnotationValidationError, DataValidationError)
+    assert not issubclass(AnnotationValidationError, ConfigError)
+
+
+def test_the_reader_keeps_file_order(tmp_path: Path) -> None:
+    """Nothing sorts on ingest: rows come back exactly as the file holds them."""
+    path = tmp_path / "sidecar.csv"
+    path.write_text("start_timestamp,end_timestamp,flag\n300,400,b\n100,200,a\n")
+    sidecar = read_annotations(path)
+    assert sidecar.get_column("start_timestamp").to_list() == [300, 100]
+    assert sidecar.get_column("flag").to_list() == ["b", "a"]
+
+
+def test_the_transform_does_not_care_about_interval_order() -> None:
+    """Merging sorts for itself, so an unsorted sidecar annotates like a sorted one."""
+    open_time, close_time = _one_window(_windows())
+    earlier = (open_time - _ONE_MINUTE, open_time + _ONE_MINUTE, "a")
+    later = (close_time - _ONE_MINUTE, close_time + _ONE_MINUTE, "b")
+    assert_frame_equal(
+        annotate_windows(_windows(), _annotations(later, earlier)),
+        annotate_windows(_windows(), _annotations(earlier, later)),
+    )
+
+
+def test_a_disjoint_interval_at_the_int64_extremes_contributes_nothing() -> None:
+    """The seconds are gated on the flag predicate, so no subtraction runs where it wraps."""
+    windows = pl.DataFrame(
+        {"open_time": [_INT64_MIN], "close_time": [_INT64_MIN + _WINDOW_SECONDS]},
+        schema={"open_time": pl.Int64, "close_time": pl.Int64},
+    )
+    far = (_INT64_MAX - 2 * _ONE_MINUTE, _INT64_MAX - _ONE_MINUTE, "far")
+    near = (_INT64_MIN + _ONE_MINUTE, _INT64_MIN + 2 * _ONE_MINUTE, "near")
+
+    alone = annotate_windows(windows, _annotations(far))
+    assert alone.get_column("annotation_flags").to_list() == [[]]
+    assert alone.get_column("annotation_overlap_seconds").to_list() == [0]
+
+    beside = annotate_windows(windows, _annotations(far, near))
+    assert beside.get_column("annotation_flags").to_list() == [["near"]]
+    assert beside.get_column("annotation_overlap_seconds").to_list() == [_ONE_MINUTE]
+
+
+def _capped_sidecar(directory: Path) -> Path:
+    """Write a sidecar of exactly ``_CAPPED_ROWS`` back-to-back minute intervals."""
+    path = directory / "sidecar.csv"
+    rows = "".join(
+        f"{i * _ONE_MINUTE},{(i + 1) * _ONE_MINUTE},a\n" for i in range(_CAPPED_ROWS)
+    )
+    path.write_text(f"start_timestamp,end_timestamp,flag\n{rows}")
+    return path
+
+
+def test_a_sidecar_over_the_row_cap_is_refused_whole(tmp_path: Path) -> None:
+    """A cap refuses rather than truncates; at the cap the whole file comes back."""
+    path = _capped_sidecar(tmp_path)
+    assert read_annotations(path, max_rows=_CAPPED_ROWS).height == _CAPPED_ROWS
+    with pytest.raises(
+        AnnotationValidationError, match=f"more than {_CAPPED_ROWS - 1} row"
+    ):
+        read_annotations(path, max_rows=_CAPPED_ROWS - 1)
+
+
+def test_a_sidecar_over_the_row_cap_is_refused_bounded_on_both_exits(
+    tmp_path: Path,
+) -> None:
+    """The over-cap refusal echoes the path, and a very long one stays bounded."""
+    deep = tmp_path.joinpath(*["p" * _DEEP_COMPONENT_CHARS] * _DEEP_PATH_COMPONENTS)
+    deep.mkdir(parents=True)
+    path = _capped_sidecar(deep)
+    _both_exits_bounded(
+        lambda: read_annotations(path, max_rows=1),
+        level="ERROR",
+        expected=AnnotationValidationError,
+    )
+
+
+@pytest.mark.parametrize(
+    "max_rows", [0, -1, True, "5"], ids=["zero", "negative", "bool", "str"]
+)
+def test_a_row_cap_that_is_not_a_positive_int_is_refused(
+    tmp_path: Path, max_rows: object
+) -> None:
+    """The cap is the caller's own argument, so a bad one is configuration, checked first."""
+    with pytest.raises(ConfigError, match="max_rows"):
+        read_annotations(tmp_path / "absent.csv", max_rows=max_rows)  # type: ignore[arg-type]
+
+
 @pytest.mark.network
 def test_the_published_sidecar_reads_and_annotates_hour_windows(tmp_path: Path) -> None:
     """The real Bitstamp sidecar is read whole and lands where the fixture row did.
 
     Deselected by default like the rest of the network lane. The assertions
     about the file -- its columns, its row count, its flag vocabulary, that
-    its first interval is the one the fixture copies -- are about the
-    world, read off the published release rather than off this code.
+    its rows are in start order, that its first interval is the one the
+    fixture copies -- are about the world, read off the published release
+    rather than off this code; the reader keeps file order, so the sort
+    assertion is about the file, not about the reader.
     """
     release = SnapshotRelease(
         repository=BITSTAMP_BTCUSD_1M_REPOSITORY, tag=_PUBLISHED_TAG

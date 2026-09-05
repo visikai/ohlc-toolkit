@@ -253,7 +253,9 @@ those intervals. Overlap is half-open on both sides, so an interval that
 ends exactly at a window's open touches nothing; flags are opaque strings
 the transform reports and never interprets; no OHLCV or coverage value is
 read or changed. `read_annotations` reads such a sidecar from CSV, typed
-and checked, with the Bitstamp provenance file's column names as defaults.
+and checked, in file order and under an optional row cap, with the
+Bitstamp provenance file's column names as defaults; a broken sidecar
+raises `AnnotationValidationError`, a misconfigured call `ConfigError`.
 
 ### `schedules` — schedules that record what they are
 

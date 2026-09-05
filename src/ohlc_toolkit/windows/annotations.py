@@ -30,10 +30,14 @@ it says rather than judging it. Interpreting a flag -- masking, excluding,
 weighting -- is a downstream decision this module does not make.
 
 Cost is one vectorised expression per interval over the whole frame, so
-the work is proportional to windows times intervals. That is the right
-shape for what a sidecar is -- a sparse table of dozens to thousands of
-operational events beside millions of candles -- and the wrong shape for
-a dense per-row annotation, which is not what this step is for.
+the work is proportional to windows times intervals, and so is peak
+memory: the flags column is assembled as one list per window with a slot
+per interval before the misses are dropped, which at a million windows
+against a few dozen intervals is gigabytes, not megabytes. That is the
+right shape for what a sidecar is -- a sparse table of dozens to
+thousands of operational events beside millions of candles -- and the
+wrong shape for a dense per-row annotation, which is not what this step
+is for. Trim the frame or the sidecar before joining, not after.
 """
 
 import os
@@ -43,7 +47,7 @@ from pathlib import Path
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.temporal import ConfigError, bounded_echo
+from ohlc_toolkit.temporal import ConfigError, DataValidationError, bounded_echo
 
 logger = get_logger(__name__)
 
@@ -57,6 +61,20 @@ _OVERLAP_SUFFIX = "overlap_seconds"
 
 # The prefix the two appended columns carry unless a caller names another.
 DEFAULT_ANNOTATION_PREFIX = "annotation"
+
+
+class AnnotationValidationError(DataValidationError):
+    """An annotation sidecar holds a value no interval can be made from.
+
+    A null in a start, end or flag cell, an interval whose end does not
+    exceed its start, a cell the declared kind cannot parse, or more rows
+    than the caller's cap allows is a fact about the DATA, not about the
+    call -- the same branch of the taxonomy
+    :class:`~ohlc_toolkit.source.validation.SourceValidationError` sits
+    on -- so it is raised as one, and a caller can catch a broken sidecar
+    apart from a misconfigured call. Each refusal states the one fact
+    that failed in its message; there is no findings report to carry.
+    """
 
 
 @dataclass(frozen=True)
@@ -165,11 +183,13 @@ def annotate_windows(
     Raises:
         ConfigError: If ``frame`` is not a DataFrame or lacks an Int64
             ``open_time`` or ``close_time``; if ``annotations`` is not a
-            DataFrame, lacks a named column, holds a start or end that is
-            not Int64 or a flag that is not String, holds a null in any
-            of the three, or holds an interval whose end does not exceed
-            its start; if ``prefix`` is not a non-empty ``str``; or if
-            ``frame`` already carries either column this call would add.
+            DataFrame, lacks a named column, or holds a start or end that
+            is not Int64 or a flag that is not String; if ``prefix`` is
+            not a non-empty ``str``; or if ``frame`` already carries
+            either column this call would add.
+        AnnotationValidationError: If ``annotations`` holds a null in any
+            of the three columns, or an interval whose end does not
+            exceed its start.
 
     """
     _require_window_bounds(frame)
@@ -185,17 +205,23 @@ def annotate_windows(
 
     if rows:
         hits = [
-            pl.when((open_time < end) & (close_time > start))
-            .then(pl.lit(flag))
-            .otherwise(None)
+            pl.when(_touches(start, end)).then(pl.lit(flag)).otherwise(None)
             for start, end, flag in rows
         ]
         flags = pl.concat_list(hits).list.drop_nulls().list.unique().list.sort()
+        # The seconds are computed only where the same predicate that sets
+        # a flag holds. Without that gate the subtraction runs on disjoint
+        # pairs too, and at the Int64 extremes it wraps instead of going
+        # negative, so the clip would keep a wrapped positive.
         overlaps = [
-            (
-                pl.min_horizontal(close_time, pl.lit(end))
-                - pl.max_horizontal(open_time, pl.lit(start))
-            ).clip(lower_bound=0)
+            pl.when(_touches(start, end))
+            .then(
+                (
+                    pl.min_horizontal(close_time, pl.lit(end))
+                    - pl.max_horizontal(open_time, pl.lit(start))
+                ).clip(lower_bound=0)
+            )
+            .otherwise(0)
             for start, end in _merged(rows)
         ]
         overlap = pl.sum_horizontal(overlaps)
@@ -217,28 +243,43 @@ def read_annotations(
     path: str | os.PathLike[str],
     *,
     columns: AnnotationColumns = DEFAULT_ANNOTATION_COLUMNS,
+    max_rows: int | None = None,
 ) -> pl.DataFrame:
     """Read an interval sidecar CSV, typing and checking its three columns.
 
-    Every column the file carries is kept; the three ``columns`` names are
-    read as Int64, Int64 and String and held to the same rules
-    :func:`annotate_windows` applies, so a file this returns is one that
-    function accepts. Rows come back sorted by start.
+    Every column the file carries is kept, and every row, in the file's
+    own order: nothing is sorted, filled or dropped on the way in, exactly
+    as :func:`~ohlc_toolkit.source.reader.read_source_csv` promises of a
+    source file. The three ``columns`` names are read as Int64, Int64 and
+    String and held to the same rules :func:`annotate_windows` applies,
+    so a file this returns is one that function accepts.
 
     Args:
         path: The CSV file, with a header row.
         columns: Which columns hold the start, the end and the flag.
+        max_rows: Upper bound on rows the file may hold, or ``None`` for
+            no bound. The transform's cost in time and memory is windows
+            times intervals, so this is where a caller states how many
+            intervals it is prepared to join. A file over the bound is
+            refused whole rather than truncated, since a silently
+            shortened sidecar would be a silent drop on ingest; reading
+            stops one row past the bound, so an over-long file is never
+            fully resident.
 
     Returns:
-        The sidecar as a frame, sorted by its start column.
+        The sidecar as a frame, in file order.
 
     Raises:
         FileNotFoundError: If ``path`` is not an existing file.
-        ConfigError: If the file cannot be parsed into the declared
-            kinds, lacks a named column, or holds a null or an interval
-            whose end does not exceed its start.
+        ConfigError: If ``max_rows`` is neither ``None`` nor a positive
+            int, or if the file lacks a named column.
+        AnnotationValidationError: If the file holds more than
+            ``max_rows`` rows, cannot be parsed into the declared kinds,
+            or holds a null or an interval whose end does not exceed its
+            start.
 
     """
+    cap = _require_row_cap(max_rows)
     resolved = Path(path)
     if not resolved.is_file():
         logger.error("Annotation file {} does not exist.", bounded_echo(str(resolved)))
@@ -258,6 +299,7 @@ def read_annotations(
             schema_overrides={
                 name: kind for name, kind in declared.items() if name in header
             },
+            n_rows=None if cap is None else cap + 1,
         )
     except pl.exceptions.PolarsError as error:
         logger.error(
@@ -265,17 +307,50 @@ def read_annotations(
             bounded_echo(str(resolved)),
             bounded_echo(error),
         )
-        raise ConfigError(
+        raise AnnotationValidationError(
             f"Annotation file {bounded_echo(str(resolved))} could not be read "
             f"as the declared kinds: {bounded_echo(error)}"
         ) from error
+    if cap is not None and table.height > cap:
+        logger.error(
+            "Annotation file {} holds more than {} row(s); refusing it whole "
+            "rather than reading part of it.",
+            bounded_echo(str(resolved)),
+            cap,
+        )
+        raise AnnotationValidationError(
+            f"Annotation file {bounded_echo(str(resolved))} holds more than {cap} "
+            "row(s), the most this caller will join; none of it was kept."
+        )
     _require_annotations(table, columns)
     logger.info(
         "Read {} annotation interval(s) from {}.",
         table.height,
         bounded_echo(str(resolved)),
     )
-    return table.sort(columns.start)
+    return table
+
+
+def _require_row_cap(max_rows: object) -> int | None:
+    """Check that ``max_rows`` is ``None`` or a positive int, and return it.
+
+    Raises:
+        ConfigError: Otherwise, naming the type or the fault.
+
+    """
+    if max_rows is None:
+        return None
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int):
+        logger.warning("Rejecting a non-int max_rows: {}", type(max_rows).__name__)
+        raise ConfigError(
+            f"max_rows must be a positive int or None, got {type(max_rows).__name__}."
+        )
+    if max_rows < 1:
+        logger.warning("Rejecting a max_rows below 1.")
+        raise ConfigError(
+            "max_rows must be a positive int or None; got a value below 1."
+        )
+    return max_rows
 
 
 def _require_window_bounds(frame: object) -> None:
@@ -314,13 +389,14 @@ def _require_window_bounds(frame: object) -> None:
 def _require_annotations(
     annotations: object, columns: AnnotationColumns
 ) -> pl.DataFrame:
-    """Check an annotation frame and return its three columns, start-sorted.
+    """Check an annotation frame and return its three columns, in its order.
 
     Raises:
         ConfigError: If ``annotations`` is not a DataFrame, lacks a named
-            column, holds a start or end that is not Int64 or a flag that
-            is not String, holds a null in any of the three, or holds an
-            interval whose end does not exceed its start.
+            column, or holds a start or end that is not Int64 or a flag
+            that is not String.
+        AnnotationValidationError: If any of the three columns holds a
+            null, or any interval's end does not exceed its start.
 
     """
     if not isinstance(annotations, pl.DataFrame):
@@ -358,7 +434,7 @@ def _require_annotations(
         logger.warning(
             "Rejecting annotations with null(s): {} start, {} end, {} flag.", *nulls
         )
-        raise ConfigError(
+        raise AnnotationValidationError(
             f"Annotations must not hold nulls; found {nulls[0]} in the start "
             f"column, {nulls[1]} in the end column and {nulls[2]} in the flag "
             "column."
@@ -374,11 +450,11 @@ def _require_annotations(
             first_start,
             first_end,
         )
-        raise ConfigError(
+        raise AnnotationValidationError(
             f"Every annotation interval must satisfy start < end; {inverted.height} "
             f"do not, the first being [{first_start}, {first_end})."
         )
-    return selected.sort(columns.start)
+    return selected
 
 
 def _output_columns(prefix: object) -> tuple[str, str]:
@@ -418,6 +494,15 @@ def _require_absent_columns(frame: pl.DataFrame, names: tuple[str, str]) -> None
         )
 
 
+def _touches(start: int, end: int) -> pl.Expr:
+    """Hold where a window ``[open_time, close_time)`` overlaps ``[start, end)``.
+
+    Half-open on both sides: an interval ending exactly at the open, or
+    starting exactly at the close, touches nothing.
+    """
+    return (pl.col("open_time") < end) & (pl.col("close_time") > start)
+
+
 def _merged(rows: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
     """Merge ``[start, end)`` intervals into disjoint ones, in start order.
 
@@ -426,6 +511,10 @@ def _merged(rows: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
     Two intervals that merely touch (one's end equal to the next's
     start) are merged too; they cover a contiguous run of seconds, and
     summing them separately would give the same answer.
+
+    The ``sorted`` here is the only sort in this module, and it is
+    load-bearing: nothing upstream orders the intervals, since the reader
+    keeps file order, and merging needs them in start order.
     """
     merged: list[tuple[int, int]] = []
     for start, end, _ in sorted(rows):

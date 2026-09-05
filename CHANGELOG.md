@@ -8,10 +8,14 @@ against their tags, and are not restated here.
 
 ### Added
 
-- `windows.annotate_windows`, `windows.read_annotations` and
-  `windows.AnnotationColumns`: join a sparse half-open interval sidecar onto
-  a window frame as opaque flags with union overlap accounting, reading
-  only `open_time` and `close_time` and appending exactly two columns.
+- `windows.annotate_windows`, `windows.read_annotations`,
+  `windows.AnnotationColumns` and `windows.AnnotationValidationError`: join
+  a sparse half-open interval sidecar onto a window frame as opaque flags
+  with union overlap accounting, reading only `open_time` and `close_time`
+  and appending exactly two columns. The reader keeps file order, takes an
+  optional row cap that refuses rather than truncates, and raises
+  `AnnotationValidationError` (a `DataValidationError`) for a sidecar it
+  cannot make intervals from.
 
 ### Changed
 

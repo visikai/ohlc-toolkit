@@ -166,6 +166,11 @@ _SITES = (
         lambda: annotations.annotate_windows(_BOUNDS, _NO_INTERVALS, prefix=_LOUD),
         "annotation prefix",
     ),
+    Site(
+        annotations.logger,
+        lambda: annotations.read_annotations("unread.csv", max_rows=_LOUD),
+        "annotation row cap",
+    ),
 )
 
 
