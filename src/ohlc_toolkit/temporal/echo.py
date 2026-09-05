@@ -18,11 +18,19 @@ of a third-party error -- reaches a log line or an error message only
 through :func:`bounded_echo`. A refusal that is about the value's TYPE
 logs ``type(value).__name__`` instead, matching what its exception says,
 because the type name is the whole diagnostic and the value adds nothing
-a bound would then have to trim. First-party literals and counts need no
-bound. The rule is enforced at each site by that site's own test, never
-by a truncating backstop in the log sink: a sink that trimmed silently
-would hide exactly the defects those tests exist to catch, and would
-mangle legitimately long structured output while doing it.
+a bound would then have to trim. Three kinds of value need no bound, and
+they are the only ones echoed without one: first-party literals, keys
+and counts; numbers a guard has already checked the type of; and values
+bounded where they were made -- a manifest asset name the parser caps in
+length before a record can exist, or a column name this package composes
+from an enum member and a canonical duration label. The rule is enforced
+at each site by that site's own test, never by a truncating backstop in
+the log sink: a sink that trimmed silently would hide exactly the defects
+those tests exist to catch, and would mangle legitimately long structured
+output while doing it. The sink therefore bounds nothing itself; the text
+of an exception this package raises is bounded by the site that raised
+it, and a third-party exception crossing the sink carries whatever text
+its author gave it.
 """
 
 from enum import Enum
