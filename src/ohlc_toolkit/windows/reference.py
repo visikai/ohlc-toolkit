@@ -159,13 +159,30 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
     rows out of order, and a non-finite price. Each is aggregated as if it
     were ordinary data.
 
-    A NULL price is the exception, and not a happy one: this function
-    RAISES ``TypeError`` on it, out of comparing ``None`` with a float
-    while folding the maximum. That is neither a refusal in this package's
-    taxonomy nor a result, and the fast engine does not do it -- so on a
-    null the two are not interchangeable. It is recorded rather than
-    repaired: guarding one entry of the list above while the rest stay
-    unguarded would imply a protection that does not exist.
+    Not detecting them is not the same as agreeing with
+    :func:`~ohlc_toolkit.windows.engine.compute_windows` about them. On
+    TWO of those shapes the two are not interchangeable, and a caller
+    reading this as the normative contract needs both:
+
+    - A NULL price. This function RAISES ``TypeError`` on it, out of
+      comparing ``None`` with a float while folding the maximum -- neither
+      a refusal in this package's taxonomy nor a result -- and the engine
+      does not: it skips the null in ``high`` and ``low`` and carries it
+      into ``open`` and ``close``.
+    - A NaN price. Both proceed and return DIFFERENT answers, and neither
+      is correct. This function's ``max`` and ``min`` compare against the
+      NaN, every such comparison is False, so the accumulator survives and
+      an ordinary value is reported; the engine's polars aggregation
+      propagates the NaN instead. Infinities are NOT like this: on either
+      infinity the two agree exactly.
+
+    On every other shape above -- a gap, a duplicate, an off-phase
+    timestamp, rows out of order -- the two agree exactly, so this
+    function remains the specification there.
+
+    Both asymmetries are recorded rather than repaired: guarding one entry
+    of the list above while the rest stay unguarded would imply a
+    protection that does not exist.
 
     The frame is never mutated, never sorted, never de-duplicated, and
     never repaired.

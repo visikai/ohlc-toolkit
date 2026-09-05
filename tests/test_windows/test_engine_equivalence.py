@@ -39,6 +39,7 @@ outcomes, not just frames: either both implementations raise the same
 frames match.
 """
 
+import math
 from dataclasses import dataclass
 
 import polars as pl
@@ -475,6 +476,28 @@ _INVALID_SCHEMA = {
 }
 
 
+def _same_values(left: list[object], right: list[object]) -> bool:
+    """Compare two columns treating NaN as equal to itself.
+
+    A plain ``==`` reports the selections as differing on a NaN frame,
+    because a NaN never equals itself -- which would make this comparison
+    report a divergence that is not there, on the very columns it exists to
+    show agreeing.
+    """
+    if len(left) != len(right):
+        return False
+    return all(
+        (
+            isinstance(a, float)
+            and isinstance(b, float)
+            and math.isnan(a)
+            and math.isnan(b)
+        )
+        or a == b
+        for a, b in zip(left, right, strict=True)
+    )
+
+
 def _frame_with(price: float | None) -> pl.DataFrame:
     """Build a clean minute grid with one price replaced by ``price``."""
     prices: list[float | None] = [100.0 + index for index in range(_INVALID_ROWS)]
@@ -550,13 +573,24 @@ def test_a_non_finite_price_makes_the_two_disagree_and_neither_is_right() -> Non
     assert oracle.get_column("low").to_list() == pytest.approx(
         [100.0, 101.0, float("nan")], nan_ok=True
     )
-    # Everything that is a selection or an integer still agrees, so the
-    # divergence is exactly the two order statistics and not a wholesale
-    # difference of shape.
-    for column in ("open_time", "close_time", "src_count", "coverage_seconds"):
-        assert (
-            engine.get_column(column).to_list() == oracle.get_column(column).to_list()
-        )
+    # Everything that is a selection, a sum or an integer still agrees, so
+    # the divergence is exactly the two order statistics and not a
+    # wholesale difference of shape. Every one of those columns is checked,
+    # because the claim is about all of them: a change that spread the
+    # divergence into `open` and `close` passed a version of this test that
+    # looked only at the integers.
+    for column in (
+        "open_time",
+        "close_time",
+        "open",
+        "close",
+        "volume",
+        "src_count",
+        "coverage_seconds",
+    ):
+        assert _same_values(
+            engine.get_column(column).to_list(), oracle.get_column(column).to_list()
+        ), column
 
 
 def test_a_null_price_stops_the_oracle_but_not_the_engine() -> None:

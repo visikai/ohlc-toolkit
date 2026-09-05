@@ -234,8 +234,9 @@ coverage rather than silently changing what it spans. Nine columns come
 back: `open_time`, `close_time`, OHLCV, `src_count`, `coverage_seconds`.
 
 `compute_reference_windows` computes the same thing the plainest possible
-way — quadratic, on purpose. It is the specification; the engine is what
-you run. The suite holds the two to the same rows, in the same order,
+way — quadratic, on purpose. On valid input it is the specification and
+the engine is what you run; neither validates what it is handed, and on a
+NaN or a null price the two do not agree, which both docstrings state. The suite holds the two to the same rows, in the same order,
 with the same dtypes, across a synthetic matrix, property tests,
 committed goldens, and a real 14-day slice — exactly equal on every
 integer column and every selected price, and within a tolerance derived
