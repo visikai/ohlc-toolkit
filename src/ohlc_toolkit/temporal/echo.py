@@ -11,6 +11,18 @@ still learns how large the original was.
 Reading an enum member out of a payload lives here too, because the only
 reason that refusal is interesting is the echo it has to make: the value
 it rejects came from outside and is the caller's to size.
+
+The rule, package-wide: a value this package did not choose -- file
+content, a payload field, a dtype, a name, a tag, a path, a URL, the text
+of a third-party error -- reaches a log line or an error message only
+through :func:`bounded_echo`. A refusal that is about the value's TYPE
+logs ``type(value).__name__`` instead, matching what its exception says,
+because the type name is the whole diagnostic and the value adds nothing
+a bound would then have to trim. First-party literals and counts need no
+bound. The rule is enforced at each site by that site's own test, never
+by a truncating backstop in the log sink: a sink that trimmed silently
+would hide exactly the defects those tests exist to catch, and would
+mangle legitimately long structured output while doing it.
 """
 
 from enum import Enum
