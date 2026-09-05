@@ -469,39 +469,25 @@ def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
     assert len(logged[-1]) < _MAX_READER_LINE_CHARS
 
 
-def test_a_stream_is_read_rather_than_probed(tmp_path: Path) -> None:
-    """A named pipe carrying real data must survive the guard untouched.
-
-    The guard opens the path, reads and closes it, and the read that
-    follows opens it again. On a regular file that is free. On anything
-    that cannot be reopened it is destructive, and not by the two bytes
-    it asks for: a buffered read pulls 128 KiB from the operating system,
-    so a probe would swallow the whole stream and leave the read an empty
-    input, or block on a writer that has already gone. Only regular files
-    are probed, and this is the case that says so.
-    """
-    fifo = tmp_path / "stream.csv"
-    os.mkfifo(fifo)
-    payload = f"{_HEADER}\n{','.join(['1451606400'] + ['1.0'] * 5)}\n".encode()
-
-    def feed() -> None:
-        with fifo.open("wb") as handle:
-            handle.write(payload)
-
-    threading.Thread(target=feed, daemon=True).start()
-    result = _without_blocking(
-        lambda: read_source_csv(
-            fifo, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
-        )
-    )
-
-    assert result.frame.height == 1
-
-
 def test_the_guard_does_not_look_at_anything_but_a_regular_file(
     tmp_path: Path,
 ) -> None:
-    """Directly, so the reason survives a refactor of the reader around it."""
+    """Anything that cannot be reopened must reach the read untouched.
+
+    The guard opens the path, reads and closes it, and the read that
+    follows opens it again. On a regular file that is free. On a stream it
+    is destructive, and not by the two bytes it asks for: a buffered read
+    pulls 128 KiB from the operating system, so a probe would swallow the
+    input and leave the read an empty one, or block forever on a writer
+    that has already gone.
+
+    The guard is checked directly rather than through a read of a real
+    pipe. An end-to-end version cannot be bounded from inside this
+    process: the blocking read happens in polars, which holds the
+    interpreter lock while it waits, so a deadline on another thread never
+    runs and a wrong guard hangs the suite instead of failing it. Measured
+    the hard way -- the first version of this test did exactly that.
+    """
     fifo = tmp_path / "pipe.csv"
     os.mkfifo(fifo)
     empty = tmp_path / "empty.csv"
