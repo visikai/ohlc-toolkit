@@ -182,11 +182,16 @@ def annotate_windows(
         ``frame`` with ``<prefix>_flags`` (List of String: the distinct
         overlapping flags, sorted, empty when none) and
         ``<prefix>_overlap_seconds`` (Int64: seconds of the window inside
-        the union of all intervals) appended. The seconds are clamped at
-        zero, which matters only for a malformed frame: a window whose
-        ``close_time`` does not exceed its ``open_time`` has negative
-        length, and this step reports no overlap for it rather than a
-        negative one.
+        the union of all intervals) appended.
+
+        The SECONDS are clamped at zero, which matters only for a
+        malformed frame: a window whose ``close_time`` does not exceed its
+        ``open_time`` has negative length, and its overlap comes back as
+        zero rather than as a negative count. Its FLAGS are unaffected and
+        still name every interval the half-open test says it touches, so
+        such a window is reported as touched and as overlapping for no
+        seconds. Nothing here refuses a window whose bounds are out of
+        order; the bounds guard checks presence and dtype only.
 
     Raises:
         ConfigError: If ``frame`` is not a DataFrame or lacks an Int64
@@ -477,6 +482,12 @@ def _require_annotations(
             f"column, {nulls[1]} in the end column and {nulls[2]} in the flag "
             "column."
         )
+    # An inverted INTERVAL is refused here while an inverted WINDOW is
+    # clamped in `annotate_windows`. The asymmetry is deliberate: a sidecar
+    # is this function's own input to validate, and an interval with
+    # nothing in it cannot mean anything; a window frame arrives from the
+    # aggregator, and adding a refusal to it would make this join reject
+    # frames every other window step accepts.
     inverted = selected.filter(pl.col(columns.end) <= pl.col(columns.start))
     if inverted.height:
         first_start = int(inverted.get_column(columns.start)[0])

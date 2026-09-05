@@ -711,3 +711,32 @@ def test_a_repeated_header_resolves_to_the_first_column(tmp_path: Path) -> None:
     assert any(
         name.startswith("start_timestamp_duplicated") for name in sidecar.columns
     )
+
+
+def test_a_directory_is_named_bounded_on_both_exits(tmp_path: Path) -> None:
+    """The log is the exit an operator reads, and it must say the same thing.
+
+    The raise is pinned by its message; without this the log line could
+    drift back to "does not exist" for a directory and nothing would fail,
+    leaving the two exits contradicting each other.
+    """
+    deep = tmp_path.joinpath(*["p" * _DEEP_COMPONENT_CHARS] * _DEEP_PATH_COMPONENTS)
+    deep.mkdir(parents=True)
+    directory = deep / "sidecar.csv"
+    directory.mkdir()
+
+    logged: list[str] = []
+    sink_id = annotations_module.logger.add(
+        logged.append, level="ERROR", format="{message}"
+    )
+    try:
+        with pytest.raises(FileNotFoundError) as raised:
+            read_annotations(directory)
+    finally:
+        annotations_module.logger.remove(sink_id)
+
+    assert "is not a regular file" in str(raised.value)
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert "is not a regular file" in logged[-1]
+    assert len(str(raised.value)) < _MAX_REFUSAL_CHARS
+    assert len(logged[-1]) < _MAX_REFUSAL_CHARS
