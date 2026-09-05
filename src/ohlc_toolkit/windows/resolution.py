@@ -344,7 +344,9 @@ def coerce_materialization(
                 f"{[rule.value for rule in MaterializationRule]}."
             ) from error
 
-    logger.warning("Rejecting materialization of unsupported type: {!r}", value)
+    logger.warning(
+        "Rejecting materialization of unsupported type: {}", type(value).__name__
+    )
     raise ConfigError(
         f"Expected an ExplicitRange, a MaterializationRule, or a rule name, "
         f"got {type(value).__name__}."

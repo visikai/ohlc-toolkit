@@ -80,7 +80,7 @@ def named_schedule(name: str) -> WindowSchedule:
 
     """
     if not isinstance(name, str):
-        logger.warning("Rejecting a non-string schedule name: {!r}", name)
+        logger.warning("Rejecting a non-string schedule name: {}", type(name).__name__)
         raise ConfigError(f"A schedule name must be a str, got {type(name).__name__}")
 
     schedule = _NAMED_SCHEDULES.get(name)

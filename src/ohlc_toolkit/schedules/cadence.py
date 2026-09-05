@@ -147,7 +147,7 @@ def _validated_divisor(value: object) -> int:
 
     """
     if isinstance(value, bool) or not isinstance(value, int):
-        logger.warning("Rejecting a non-integer emit divisor: {!r}", value)
+        logger.warning("Rejecting a non-integer emit divisor: {}", type(value).__name__)
         raise ConfigError(f"divisor must be an int, got {type(value).__name__}")
     if value <= 0:
         logger.warning("Rejecting a non-positive emit divisor: {}", value)
@@ -172,7 +172,9 @@ def _normalized_allowed(allowed: Sequence[Duration | str]) -> tuple[Duration, ..
 
     """
     if isinstance(allowed, str) or not isinstance(allowed, Sequence):
-        logger.warning("Rejecting an allowed set that is not a list: {!r}", allowed)
+        logger.warning(
+            "Rejecting an allowed set that is not a list: {}", type(allowed).__name__
+        )
         raise ConfigError(
             f"The allowed cadence set must be a list of durations, got "
             f"{type(allowed).__name__}"
@@ -562,7 +564,9 @@ def _require_sequence(value: object, *, label: str) -> None:
 
     """
     if isinstance(value, str) or not isinstance(value, Sequence):
-        logger.warning("Rejecting an argument that is not a list: {!r}", value)
+        logger.warning(
+            "Rejecting an argument that is not a list: {}", type(value).__name__
+        )
         raise ConfigError(f"A cadence rule takes a {label}, got {type(value).__name__}")
 
 
@@ -660,7 +664,9 @@ def _coerced_pair(entry: Sequence[Duration | str]) -> WindowEmitPair:
         or not isinstance(entry, Sequence)
         or len(entry) != _PAIR_LENGTH
     ):
-        logger.warning("Rejecting a cadence entry that is not a pair: {!r}", entry)
+        logger.warning(
+            "Rejecting a cadence entry that is not a pair: {}", type(entry).__name__
+        )
         raise ConfigError(
             "Each entry must be a (window, emit_every) pair of durations."
         )

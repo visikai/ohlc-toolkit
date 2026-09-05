@@ -221,7 +221,9 @@ def _validated_coefficient(value: object) -> float:
 
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
-        logger.warning("Rejecting non-numeric recurrence coefficient: {!r}", value)
+        logger.warning(
+            "Rejecting non-numeric recurrence coefficient: {}", type(value).__name__
+        )
         raise ConfigError(
             f"coefficient must be an int or float, got {type(value).__name__}"
         )
@@ -283,7 +285,7 @@ def _validated_count(value: object) -> int:
 
     """
     if isinstance(value, bool) or not isinstance(value, int):
-        logger.warning("Rejecting non-integer point count: {!r}", value)
+        logger.warning("Rejecting non-integer point count: {}", type(value).__name__)
         raise ConfigError(f"count must be an int, got {type(value).__name__}")
     if value < 2:  # noqa: PLR2004 - the two endpoints, named in the docstring
         logger.warning("Rejecting a point count below two: {}", value)
@@ -313,12 +315,14 @@ def _require_rules(rounding: RoundingRule, dedup: DedupRule) -> None:
 
     """
     if not isinstance(rounding, RoundingRule):
-        logger.warning("Rejecting non-RoundingRule rounding: {!r}", rounding)
+        logger.warning(
+            "Rejecting non-RoundingRule rounding: {}", type(rounding).__name__
+        )
         raise ConfigError(
             f"rounding must be a RoundingRule, got {type(rounding).__name__}"
         )
     if not isinstance(dedup, DedupRule):
-        logger.warning("Rejecting non-DedupRule dedup: {!r}", dedup)
+        logger.warning("Rejecting non-DedupRule dedup: {}", type(dedup).__name__)
         raise ConfigError(f"dedup must be a DedupRule, got {type(dedup).__name__}")
 
 
@@ -829,7 +833,9 @@ def require_resolved_windows(windows: tuple[Duration, ...]) -> None:
     seen: set[Duration] = set()
     for window in windows:
         if not isinstance(window, Duration):
-            logger.warning("Rejecting non-Duration schedule window: {!r}", window)
+            logger.warning(
+                "Rejecting non-Duration schedule window: {}", type(window).__name__
+            )
             raise ConfigError(
                 f"Schedule windows must be Durations, got {type(window).__name__}"
             )

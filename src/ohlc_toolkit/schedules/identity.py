@@ -106,7 +106,7 @@ def mapping_from_payload(value: object, *, label: str) -> Mapping[str, object]:
 
     """
     if not isinstance(value, Mapping):
-        logger.warning("Rejecting a non-mapping {}: {!r}", label, value)
+        logger.warning("Rejecting a non-mapping {}: {}", label, type(value).__name__)
         raise ConfigError(f"The {label} must be an object, got {type(value).__name__}")
     return value
 
@@ -127,7 +127,9 @@ def duration_from_payload(value: object, *, label: str) -> Duration:
 
     """
     if not isinstance(value, str):
-        logger.warning("Rejecting a non-string {} duration: {!r}", label, value)
+        logger.warning(
+            "Rejecting a non-string {} duration: {}", label, type(value).__name__
+        )
         raise ConfigError(
             f"The {label} must be a compact duration string, got {type(value).__name__}"
         )
@@ -173,7 +175,9 @@ def durations_from_payload(value: object, *, label: str) -> tuple[Duration, ...]
 
     """
     if not isinstance(value, list | tuple):
-        logger.warning("Rejecting a {} that is not a list: {!r}", label, value)
+        logger.warning(
+            "Rejecting a {} that is not a list: {}", label, type(value).__name__
+        )
         raise ConfigError(
             f"The {label} must be a list of compact duration strings, got "
             f"{type(value).__name__}"
@@ -197,7 +201,7 @@ def optional_text_from_payload(value: object, *, label: str) -> str | None:
     """
     if value is None or isinstance(value, str):
         return value
-    logger.warning("Rejecting a non-string {}: {!r}", label, value)
+    logger.warning("Rejecting a non-string {}: {}", label, type(value).__name__)
     raise ConfigError(f"The {label} must be a string, got {type(value).__name__}")
 
 

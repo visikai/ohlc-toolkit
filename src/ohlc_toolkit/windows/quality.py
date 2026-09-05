@@ -233,12 +233,16 @@ class WindowQualityPolicy:
 
         """
         if not isinstance(self.mode, QualityMode):
-            logger.warning("Rejecting non-QualityMode mode: {!r}", self.mode)
+            logger.warning(
+                "Rejecting non-QualityMode mode: {}", type(self.mode).__name__
+            )
             raise ConfigError(
                 f"mode must be a QualityMode, got {type(self.mode).__name__}"
             )
         if not isinstance(self.gate_mode, GateMode):
-            logger.warning("Rejecting non-GateMode gate_mode: {!r}", self.gate_mode)
+            logger.warning(
+                "Rejecting non-GateMode gate_mode: {}", type(self.gate_mode).__name__
+            )
             raise ConfigError(
                 f"gate_mode must be a GateMode, got {type(self.gate_mode).__name__}"
             )
@@ -324,7 +328,7 @@ def _validated_min_coverage(value: object) -> float:
 
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
-        logger.warning("Rejecting non-numeric min_coverage: {!r}", value)
+        logger.warning("Rejecting non-numeric min_coverage: {}", type(value).__name__)
         raise ConfigError(
             f"min_coverage must be an int or float, got {type(value).__name__}"
         )
