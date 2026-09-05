@@ -8,8 +8,10 @@ that the input needed tidying, which is the whole point of reading it
 here rather than anywhere else.
 """
 
+import gzip
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, overload
 
 import polars as pl
@@ -121,6 +123,56 @@ def read_source_csv(
     return SourceReadResult(frame=frame, report=report)
 
 
+# The first two bytes of a gzip member, which is how the file itself says
+# it is compressed -- the same way the reader lets polars decide, rather
+# than by trusting a suffix.
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _holds_no_data(path: str | os.PathLike[str]) -> bool:
+    """Report whether a file decompresses to nothing at all.
+
+    Reads one byte, not the file: enough to tell an empty archive from a
+    real one, and it costs the same on a nine-hundred-megabyte history as
+    on an empty one.
+    """
+    resolved = Path(path)
+    with resolved.open("rb") as handle:
+        if handle.read(len(_GZIP_MAGIC)) != _GZIP_MAGIC:
+            return resolved.stat().st_size == 0
+    with gzip.open(resolved, "rb") as archive:
+        return not archive.read(1)
+
+
+def _require_data(path: str | os.PathLike[str]) -> None:
+    """Refuse a file with no data before a capped read can panic on it.
+
+    polars raises ``NoDataError`` for an empty file, which a caller can
+    catch -- but not when a row cap is in play. Measured at polars 1.44.1:
+    an empty gzip archive read with any ``n_rows``, zero included, aborts
+    with a ``pyo3_runtime.PanicException``. That is a ``BaseException``
+    and not an ``Exception``, so no caller's ``except PolarsError``, and
+    not even ``except Exception``, can catch it: it escapes every refusal
+    this package documents. This reader is reached with a cap from the
+    snapshot path, where the file arrives off the internet, so the case is
+    not hypothetical.
+
+    The guard runs only when a cap is in play, because that is the only
+    shape that panics; uncapped, polars raises the catchable error itself
+    and this function would only duplicate it.
+
+    Raises:
+        NoDataError: If the file holds no data. The class is polars' own
+            and is exactly what the uncapped read raises for the same
+            file, so a cap changes what is read and never what is raised.
+
+    """
+    if not _holds_no_data(path):
+        return
+    logger.error("Source file holds no data: {}", bounded_echo(path))
+    raise pl.exceptions.NoDataError(f"Source file {bounded_echo(path)} holds no data.")
+
+
 def _read_raw_frame(
     path: str | os.PathLike[str], profile: SourceProfile, max_rows: int | None
 ) -> pl.DataFrame:
@@ -128,6 +180,8 @@ def _read_raw_frame(
     schema_overrides = {
         name: _COLUMN_KIND_DTYPES[kind] for name, kind in profile.raw_schema.items()
     }
+    if max_rows is not None:
+        _require_data(path)
     logger.debug(
         "Reading source frame {} for profile {}.",
         bounded_echo(path),

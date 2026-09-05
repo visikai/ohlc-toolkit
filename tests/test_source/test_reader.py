@@ -237,3 +237,104 @@ def test_a_missing_file_with_a_long_path_is_logged_bounded(tmp_path: Path) -> No
     assert len(logged) >= _EXPECTED_READER_LINES, logged
     for line in logged:
         assert len(line) < _MAX_READER_LINE_CHARS
+
+
+# The three shapes a file can take when it holds no rows, and the one that
+# used to abort the interpreter rather than refuse.
+_EMPTY_PAYLOAD = b""
+_ROW_CAP = 6
+
+
+def _write_bytes(directory: Path, name: str, payload: bytes, *, gzipped: bool) -> Path:
+    """Write exactly these bytes, gzipped or not, and return the path."""
+    path = directory / (f"{name}.csv.gz" if gzipped else f"{name}.csv")
+    path.write_bytes(gzip.compress(payload, mtime=0) if gzipped else payload)
+    return path
+
+
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+@pytest.mark.parametrize("max_rows", [None, _ROW_CAP], ids=["uncapped", "capped"])
+def test_a_file_holding_no_data_is_refused_in_one_catchable_class(
+    tmp_path: Path, gzipped: bool, max_rows: int | None
+) -> None:
+    """A row cap must change what is read, never what is raised.
+
+    Measured at polars 1.44.1: an empty gzip archive read with any
+    `n_rows`, zero included, aborted with a `pyo3_runtime.PanicException`.
+    That is a `BaseException` and not an `Exception`, so no caller's
+    `except PolarsError` -- and not even `except Exception` -- could catch
+    it, and it escaped every refusal this package documents. The same file
+    with no cap raised `NoDataError`, which is catchable. All four
+    combinations now raise the one class.
+    """
+    path = _write_bytes(tmp_path, "empty", _EMPTY_PAYLOAD, gzipped=gzipped)
+
+    with pytest.raises(pl.exceptions.NoDataError):
+        read_source_csv(path, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows)
+
+
+def test_the_refusal_for_an_empty_file_is_an_ordinary_exception(tmp_path: Path) -> None:
+    """The point of the guard, stated as the assertion a panic would fail."""
+    path = _write_bytes(tmp_path, "empty", _EMPTY_PAYLOAD, gzipped=True)
+
+    try:
+        read_source_csv(path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP)
+    except Exception as error:
+        assert isinstance(error, pl.exceptions.PolarsError)
+    else:
+        pytest.fail("an empty file must be refused, not read")
+
+
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+def test_a_header_without_rows_is_not_refused_as_empty(
+    tmp_path: Path, gzipped: bool
+) -> None:
+    """A file naming its columns and holding no rows is a schema, not a void.
+
+    The guard refuses a file with nothing in it at all; this one has
+    something in it, and reads back as the empty frame it is.
+    """
+    path = _write_bytes(tmp_path, "header", f"{_HEADER}\n".encode(), gzipped=gzipped)
+
+    result = read_source_csv(
+        path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
+    )
+
+    assert result.frame.height == 0
+    assert result.frame.columns == _HEADER.split(",")
+
+
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+def test_a_capped_read_of_a_real_file_is_untouched_by_the_guard(
+    tmp_path: Path, gzipped: bool
+) -> None:
+    """The guard reads one byte and gets out of the way."""
+    rows = _clean_rows(start=0, length=_ROW_CAP + 4)
+    path = _write_csv(tmp_path, "real", rows, gzipped=gzipped)
+
+    result = read_source_csv(
+        path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
+    )
+
+    assert result.frame.height == _ROW_CAP
+
+
+def test_the_empty_file_refusal_logs_its_path_bounded(tmp_path: Path) -> None:
+    """The path is the caller's, and a long one is echoed bounded."""
+    deep = tmp_path.joinpath(*["p" * _LONG_COMPONENT_CHARS] * _LONG_PATH_COMPONENTS)
+    deep.mkdir(parents=True)
+    path = _write_bytes(deep, "empty", _EMPTY_PAYLOAD, gzipped=True)
+
+    logged: list[str] = []
+    sink_id = reader_module.logger.add(logged.append, level="ERROR", format="{message}")
+    try:
+        with pytest.raises(pl.exceptions.NoDataError) as raised:
+            read_source_csv(
+                path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
+            )
+    finally:
+        reader_module.logger.remove(sink_id)
+
+    assert len(str(raised.value)) < _MAX_READER_LINE_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_READER_LINE_CHARS
