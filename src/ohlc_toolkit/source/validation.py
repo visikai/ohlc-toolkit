@@ -348,8 +348,8 @@ def _check_non_finite_values(
     integer dtypes and for Null, and RAISES for every other dtype --
     including Decimal, which reports itself numeric. So the test here is
     ``is_float()``, not ``is_numeric()``: it admits exactly Float32 and
-    Float64, which are both the dtypes that answer and the only dtypes
-    that can hold a non-finite value. A declared-floating column that
+    Float64, the only two dtypes that both answer and can carry a
+    non-finite value of their own. A declared-floating column that
     arrived as anything else is already a schema finding, and scanning it
     unguarded would turn that reported finding into an exception.
 

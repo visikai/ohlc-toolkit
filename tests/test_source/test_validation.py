@@ -760,3 +760,21 @@ class TestNonFiniteValuesBothModes(unittest.TestCase):
         report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
         self.assertEqual(len(_find(report, FindingKind.SCHEMA)), 1)
         self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])
+
+    def test_a_float32_column_is_scanned_like_a_float64_one(self):
+        """Float32 is the other dtype `is_float` admits, and it is scanned.
+
+        A Float32 column is a conformant arrival for a declared floating
+        column -- it raises no schema finding -- so nothing else would
+        report its NaN. Narrowing the guard to Float64 alone would restore
+        exactly the silence this check exists to end, on a frame that looks
+        entirely well formed.
+        """
+        corrupted = self.frame.with_columns(
+            pl.Series("open", [1.0, float("nan"), 3.0, 4.0, 5.0], dtype=pl.Float32)
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.NON_FINITE_VALUES)
+        self.assertEqual(_find(report, FindingKind.SCHEMA), [])
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].count, 1)

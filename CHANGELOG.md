@@ -40,9 +40,10 @@ against their tags, and are not restated here.
   column parses to a non-finite float under a profile's pinned schema and is
   therefore now refused; and `snapshot.verify_snapshot_continuity`, and so
   `snapshot.read_snapshot_frame`, refuses a published history carrying one.
-  In `REPORT` mode every route returns the finding instead. Under the style
-  guide's rule that a breaking behavioural change belongs in a documented
-  major version, the release carrying this is a major one.
+  The two routes that take a mode return the finding instead in `REPORT`
+  mode; continuity verification has no mode and always refuses. Under the
+  style guide's rule that a breaking behavioural change belongs in a
+  documented major version, the release carrying this is a major one.
 - Every echo of a value the package did not choose -- a name, a tag, a
   path, a URL, third-party error text -- now reaches a log line or an
   error message only through `temporal.bounded_echo`; type refusals log
