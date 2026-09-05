@@ -5,7 +5,7 @@
 fix the call -- and ``error`` before a data, integrity, coverage or file
 error -- input from outside the call failed. These tests walk every module
 under ``src/ohlc_toolkit`` by AST and hold each ``raise`` to it, so the rule
-is checked on every run instead of remembered at review time.
+is checked on every run instead of left to memory.
 
 The log a raise pairs with is the last ``logger.<level>(...)`` statement
 before it in the same block. A raise with no such log in its block fails
