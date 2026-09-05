@@ -213,14 +213,10 @@ def annotate_windows(
     open_name, close_name = _WINDOW_BOUND_COLUMNS
     open_time = pl.col(open_name)
     close_time = pl.col(close_name)
-    # The casts are not re-validation: `_require_annotations` has already
-    # refused any other dtype, so these convert polars scalars to the
-    # Python ints and strs that go into `pl.lit`, rather than checking
-    # anything. They are cheap -- one pass over a sidecar's dozens of rows,
-    # not over the frame.
-    rows = [
-        (int(start), int(end), str(flag)) for start, end, flag in intervals.iter_rows()
-    ]
+    # `iter_rows` already yields Python ints and strs, and the dtypes are
+    # guaranteed by `_require_annotations`, so there is nothing here to
+    # convert or to check. One pass over a sidecar's dozens of rows.
+    rows: list[tuple[int, int, str]] = list(intervals.iter_rows())
 
     if rows:
         hits = [
