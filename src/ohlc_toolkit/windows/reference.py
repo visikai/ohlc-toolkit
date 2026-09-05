@@ -149,11 +149,23 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
 
     Precondition: ``frame`` should already have passed strict validation
     (:func:`ohlc_toolkit.source.validation.validate_source_frame`). This
-    function does not re-validate row data -- it will not detect a gap, a
-    duplicate, an off-phase timestamp, or a null price -- because
-    re-implementing those checks here would mean a second, divergent
-    definition of a valid frame. It does enforce its own resolution-time
-    rules on the schedule, listed under Raises below.
+    function does not re-validate row data, because re-implementing those
+    checks here would mean a second, divergent definition of a valid
+    frame. It does enforce its own resolution-time rules on the schedule,
+    listed under Raises below.
+
+    What it will not detect, each demonstrated by a test rather than
+    asserted here: a gap, a duplicate timestamp, an off-phase timestamp,
+    rows out of order, and a non-finite price. Each is aggregated as if it
+    were ordinary data.
+
+    A NULL price is the exception, and not a happy one: this function
+    RAISES ``TypeError`` on it, out of comparing ``None`` with a float
+    while folding the maximum. That is neither a refusal in this package's
+    taxonomy nor a result, and the fast engine does not do it -- so on a
+    null the two are not interchangeable. It is recorded rather than
+    repaired: guarding one entry of the list above while the rest stay
+    unguarded would imply a protection that does not exist.
 
     The frame is never mutated, never sorted, never de-duplicated, and
     never repaired.
