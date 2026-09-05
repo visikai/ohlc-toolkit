@@ -3,14 +3,16 @@
 import unittest
 
 import polars as pl
+import pytest
 
+from ohlc_toolkit.source import profile as profile_module
 from ohlc_toolkit.source.profile import (
     BITSTAMP_BTCUSD_1M,
     Availability,
     ColumnKind,
     SourceProfile,
 )
-from ohlc_toolkit.temporal import ConfigError, Duration
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, Duration
 
 
 def _make_profile(**overrides: object) -> SourceProfile:
@@ -269,3 +271,70 @@ class TestSourceProfilePhase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# A profile or column name far longer than any real one. A profile checks its
+# name only for emptiness, so the refusals that quote it must quote it bounded.
+_ENORMOUS_NAME_CHARS = 200_000
+_LOUD_NAME = "n" * _ENORMOUS_NAME_CHARS
+# Up to three bounded echoes beside prose; derived from the echo cap because
+# every fix here routes through it.
+_MAX_PROFILE_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
+
+
+class _LoudKind:
+    """A declared column kind that is not a ColumnKind and renders enormously."""
+
+    def __repr__(self) -> str:
+        """Render something far larger than any bounded echo allows."""
+        return "k" * _ENORMOUS_NAME_CHARS
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"name": _LOUD_NAME, "phase": "1m"}, id="phase not below cadence"),
+        pytest.param(
+            {"name": _LOUD_NAME, "timestamp_column": ""}, id="empty timestamp column"
+        ),
+        pytest.param({"name": _LOUD_NAME, "raw_schema": {}}, id="empty raw schema"),
+        pytest.param(
+            {"name": _LOUD_NAME, "timestamp_column": "ts"},
+            id="timestamp column not declared",
+        ),
+        pytest.param(
+            {"name": _LOUD_NAME, "raw_schema": {"timestamp": ColumnKind.FLOATING}},
+            id="timestamp column not integer",
+        ),
+        pytest.param(
+            {"timestamp_column": _LOUD_NAME}, id="loud timestamp column not declared"
+        ),
+        pytest.param(
+            {
+                "timestamp_column": _LOUD_NAME,
+                "raw_schema": {_LOUD_NAME: ColumnKind.FLOATING},
+            },
+            id="loud timestamp column not integer",
+        ),
+        pytest.param(
+            {"raw_schema": {"timestamp": _LoudKind()}},
+            id="loud declared kind not integer",
+        ),
+    ],
+)
+def test_a_profile_refusal_bounds_the_names_it_quotes_on_both_exits(
+    overrides: dict[str, object],
+) -> None:
+    """Neither the warning nor the message carries a whole profile or column name."""
+    logged: list[str] = []
+    sink_id = profile_module.logger.add(
+        logged.append, level="WARNING", format="{message}"
+    )
+    try:
+        with pytest.raises(ConfigError) as raised:
+            _make_profile(**overrides)
+    finally:
+        profile_module.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_PROFILE_REFUSAL_CHARS
+    assert logged, "the refusal warns before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_PROFILE_REFUSAL_CHARS

@@ -63,7 +63,8 @@ class Duration:
             self.total_seconds, int
         ):
             logger.warning(
-                "Rejecting non-integer duration seconds: {!r}", self.total_seconds
+                "Rejecting non-integer duration seconds: {}",
+                type(self.total_seconds).__name__,
             )
             raise ConfigError(
                 "Duration seconds must be an int, got "
@@ -118,7 +119,9 @@ class Duration:
 
         """
         if not isinstance(text, str):
-            logger.warning("Rejecting non-string duration input: {!r}", text)
+            logger.warning(
+                "Rejecting non-string duration input: {}", type(text).__name__
+            )
             raise ConfigError(f"Duration text must be a str, got {type(text).__name__}")
 
         if not _GRAMMAR_PATTERN.fullmatch(text):
@@ -192,7 +195,9 @@ def coerce_duration(value: Duration | str) -> Duration:
     if isinstance(value, str):
         return Duration.parse(value)
 
-    logger.warning("Rejecting duration value of unsupported type: {!r}", value)
+    logger.warning(
+        "Rejecting duration value of unsupported type: {}", type(value).__name__
+    )
     raise ConfigError(f"Expected Duration or str, got {type(value).__name__}")
 
 

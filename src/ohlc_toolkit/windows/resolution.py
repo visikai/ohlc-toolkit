@@ -28,6 +28,7 @@ differently (a Python tuple, a polars series) but must agree on exactly
 which instants they are.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
 
@@ -112,9 +113,9 @@ class ExplicitRange:
         for label, value in (("start", self.start), ("end", self.end)):
             if isinstance(value, bool) or not isinstance(value, int):
                 logger.warning(
-                    "Rejecting non-integer materialization range {}: {!r}",
+                    "Rejecting non-integer materialization range {}: {}",
                     label,
-                    value,
+                    type(value).__name__,
                 )
                 raise ConfigError(
                     f"Materialization range {label} must be an int of Unix "
@@ -273,6 +274,11 @@ def resolve_schedule(
     )
 
 
+def _echo_names(names: Sequence[str]) -> str:
+    """Render column names for a message, each bounded: one is the profile's."""
+    return ", ".join(bounded_echo(name) for name in names)
+
+
 def require_source_columns(frame: pl.DataFrame, profile: SourceProfile) -> None:
     """Check that every column the aggregation reads exists to be read.
 
@@ -292,24 +298,25 @@ def require_source_columns(frame: pl.DataFrame, profile: SourceProfile) -> None:
     undeclared = [name for name in required if name not in profile.raw_schema]
     if undeclared:
         logger.warning(
-            "Source profile {!r} does not declare the column(s) {}.",
-            profile.name,
-            undeclared,
+            "Source profile {} does not declare the column(s) {}.",
+            bounded_echo(profile.name),
+            _echo_names(undeclared),
         )
         raise ConfigError(
-            f"Source profile {profile.name!r} must declare the column(s) "
-            f"{undeclared} to be aggregated into windows."
+            f"Source profile {bounded_echo(profile.name)} must declare the "
+            f"column(s) {_echo_names(undeclared)} to be aggregated into windows."
         )
 
     absent = [name for name in required if name not in frame.columns]
     if absent:
         logger.warning(
-            "Source frame for profile {!r} is missing the column(s) {}.",
-            profile.name,
-            absent,
+            "Source frame for profile {} is missing the column(s) {}.",
+            bounded_echo(profile.name),
+            _echo_names(absent),
         )
         raise ConfigError(
-            f"The source frame does not contain the declared column(s) {absent}."
+            "The source frame does not contain the declared column(s) "
+            f"{_echo_names(absent)}."
         )
 
 
@@ -344,7 +351,9 @@ def coerce_materialization(
                 f"{[rule.value for rule in MaterializationRule]}."
             ) from error
 
-    logger.warning("Rejecting materialization of unsupported type: {!r}", value)
+    logger.warning(
+        "Rejecting materialization of unsupported type: {}", type(value).__name__
+    )
     raise ConfigError(
         f"Expected an ExplicitRange, a MaterializationRule, or a rule name, "
         f"got {type(value).__name__}."

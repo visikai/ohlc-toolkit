@@ -8,6 +8,7 @@ you asked for.
 
 import pytest
 
+from ohlc_toolkit.snapshot import release as release_module
 from ohlc_toolkit.snapshot.manifest import MANIFEST_ASSET_NAME
 from ohlc_toolkit.snapshot.release import (
     BITSTAMP_BTCUSD_1M_REPOSITORY,
@@ -15,7 +16,7 @@ from ohlc_toolkit.snapshot.release import (
     DEFAULT_RELEASE_HOST,
     SnapshotRelease,
 )
-from ohlc_toolkit.temporal import ConfigError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError
 from tests.test_snapshot.factories import (
     FIXTURE_HOST,
     FIXTURE_REPOSITORY,
@@ -129,3 +130,30 @@ def test_the_published_repository_constant_is_a_valid_release_identity() -> None
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# A tag inside the grammar but far past any echo cap: the pattern constrains
+# the charset, not the length.
+_ENORMOUS_TAG_CHARS = 200_000
+# Two bounded echoes beside prose; derived from the echo cap because the fix
+# routes through it.
+_MAX_NAME_REFUSAL_CHARS = 4 * MAX_ECHO_CHARS
+
+
+def test_an_asset_name_refusal_bounds_the_release_tag_on_both_exits() -> None:
+    """The tag quoted beside the refused name is bounded like the name is."""
+    release = SnapshotRelease(
+        repository=FIXTURE_REPOSITORY, tag="t" * _ENORMOUS_TAG_CHARS
+    )
+    logged: list[str] = []
+    sink_id = release_module.logger.add(
+        logged.append, level="WARNING", format="{message}"
+    )
+    try:
+        with pytest.raises(ConfigError, match="asset name") as raised:
+            release.asset_url("../escape")
+    finally:
+        release_module.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_NAME_REFUSAL_CHARS
+    assert logged, "the refusal warns before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_NAME_REFUSAL_CHARS

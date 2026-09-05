@@ -12,6 +12,7 @@ from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.temporal import (
     ConfigError,
     Duration,
+    bounded_echo,
     coerce_duration,
     validate_cadence,
 )
@@ -188,9 +189,9 @@ class SourceProfile:
         phase_seconds = self.phase.total_seconds
         if phase_seconds >= cadence_seconds:
             logger.warning(
-                "Rejecting source profile {!r}: phase {}s is not smaller than "
+                "Rejecting source profile {}: phase {}s is not smaller than "
                 "cadence {}s.",
-                self.name,
+                bounded_echo(self.name),
                 phase_seconds,
                 cadence_seconds,
             )
@@ -204,39 +205,41 @@ class SourceProfile:
             raise ConfigError("Source profile name must not be empty.")
         if not self.timestamp_column:
             logger.warning(
-                "Rejecting source profile {!r} with an empty timestamp column.",
-                self.name,
+                "Rejecting source profile {} with an empty timestamp column.",
+                bounded_echo(self.name),
             )
             raise ConfigError("Source profile timestamp_column must not be empty.")
         if not self.raw_schema:
             logger.warning(
-                "Rejecting source profile {!r} with an empty raw schema.", self.name
+                "Rejecting source profile {} with an empty raw schema.",
+                bounded_echo(self.name),
             )
             raise ConfigError(
                 "Source profile raw_schema must declare at least one column."
             )
         if self.timestamp_column not in self.raw_schema:
             logger.warning(
-                "Rejecting source profile {!r}: timestamp column {!r} is not a "
+                "Rejecting source profile {}: timestamp column {} is not a "
                 "declared raw column.",
-                self.name,
-                self.timestamp_column,
+                bounded_echo(self.name),
+                bounded_echo(self.timestamp_column),
             )
             raise ConfigError(
-                f"timestamp_column {self.timestamp_column!r} must be a key of raw_schema."
+                f"timestamp_column {bounded_echo(self.timestamp_column)} must be a "
+                "key of raw_schema."
             )
         if self.raw_schema[self.timestamp_column] is not ColumnKind.INTEGER:
             logger.warning(
-                "Rejecting source profile {!r}: timestamp column {!r} must be "
-                "declared ColumnKind.INTEGER, not {!r}.",
-                self.name,
-                self.timestamp_column,
-                self.raw_schema[self.timestamp_column],
+                "Rejecting source profile {}: timestamp column {} must be "
+                "declared ColumnKind.INTEGER, not {}.",
+                bounded_echo(self.name),
+                bounded_echo(self.timestamp_column),
+                bounded_echo(self.raw_schema[self.timestamp_column]),
             )
             raise ConfigError(
-                f"timestamp_column {self.timestamp_column!r} must be declared "
-                f"ColumnKind.INTEGER, not "
-                f"{self.raw_schema[self.timestamp_column]!r}: a floating "
+                f"timestamp_column {bounded_echo(self.timestamp_column)} must be "
+                "declared ColumnKind.INTEGER, not "
+                f"{bounded_echo(self.raw_schema[self.timestamp_column])}: a floating "
                 "timestamp column can silently truncate sub-second data."
             )
 

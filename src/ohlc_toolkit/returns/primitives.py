@@ -188,7 +188,7 @@ def _require_method(method: ReturnMethod) -> ReturnMethod:
 
     """
     if not isinstance(method, ReturnMethod):
-        logger.warning("Rejecting non-ReturnMethod method: {!r}", method)
+        logger.warning("Rejecting non-ReturnMethod method: {}", type(method).__name__)
         raise ConfigError(f"method must be a ReturnMethod, got {type(method).__name__}")
     return method
 

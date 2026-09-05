@@ -34,7 +34,7 @@ import requests
 
 from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.snapshot.errors import SnapshotIntegrityError
-from ohlc_toolkit.temporal import ConfigError
+from ohlc_toolkit.temporal import ConfigError, bounded_echo
 
 logger = get_logger(__name__)
 
@@ -126,24 +126,35 @@ class HttpAssetTransport:
                 status is not 200, or the body outgrows ``max_bytes``.
 
         """
-        logger.debug("Fetching release asset from {} (cap {} bytes).", url, max_bytes)
+        logger.debug(
+            "Fetching release asset from {} (cap {} bytes).",
+            bounded_echo(url),
+            max_bytes,
+        )
         try:
             response = requests.get(
                 url, stream=True, timeout=self.timeout_seconds, allow_redirects=True
             )
         except requests.RequestException as error:
-            logger.error("Release asset at {} could not be fetched: {}", url, error)
+            logger.error(
+                "Release asset at {} could not be fetched: {}",
+                bounded_echo(url),
+                bounded_echo(error),
+            )
             raise SnapshotIntegrityError(
-                f"Release asset at {url} could not be fetched: {error}."
+                f"Release asset at {bounded_echo(url)} could not be fetched: "
+                f"{bounded_echo(error)}."
             ) from error
 
         with response:
             if response.status_code != _HTTP_OK:
                 logger.error(
-                    "Release asset at {} returned HTTP {}.", url, response.status_code
+                    "Release asset at {} returned HTTP {}.",
+                    bounded_echo(url),
+                    response.status_code,
                 )
                 raise SnapshotIntegrityError(
-                    f"Release asset at {url} returned HTTP "
+                    f"Release asset at {bounded_echo(url)} returned HTTP "
                     f"{response.status_code}; the release does not serve it."
                 )
             self._stream_to(response, url, destination, max_bytes)
@@ -164,13 +175,18 @@ class HttpAssetTransport:
                     logger.error(
                         "Release asset at {} exceeds its declared size of {} "
                         "bytes; refusing it mid-stream after {} bytes.",
-                        url,
+                        bounded_echo(url),
                         max_bytes,
                         written,
                     )
                     raise SnapshotIntegrityError(
-                        f"Release asset at {url} exceeds the {max_bytes}-byte "
+                        f"Release asset at {bounded_echo(url)} exceeds the {max_bytes}-byte "
                         "size its manifest declared."
                     )
                 handle.write(chunk)
-        logger.debug("Wrote {} bytes from {} to {}.", written, url, destination)
+        logger.debug(
+            "Wrote {} bytes from {} to {}.",
+            written,
+            bounded_echo(url),
+            bounded_echo(str(destination)),
+        )

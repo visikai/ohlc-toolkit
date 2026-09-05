@@ -2,9 +2,11 @@
 
 import time
 import unittest
+from dataclasses import replace
 
 import polars as pl
 
+from ohlc_toolkit.source import validation as validation_module
 from ohlc_toolkit.source.profile import Availability, ColumnKind, SourceProfile
 from ohlc_toolkit.source.validation import (
     Finding,
@@ -38,6 +40,8 @@ _CADENCE_SECONDS = 60
 # ceiling derived from the echo cap rather than written as a round number,
 # so raising that cap cannot leave this assertion slack.
 _PATHOLOGICAL_STRUCT_FIELDS = 1000
+# A profile name far longer than any real one, for the strict refusal's echo.
+_PATHOLOGICAL_NAME_CHARS = 200_000
 _MAX_FINDING_MESSAGE_CHARS = 4 * MAX_ECHO_CHARS
 
 
@@ -549,3 +553,33 @@ class TestStrictModeErrorCarriesTheReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStrictRefusalEchoesTheProfileNameBounded(unittest.TestCase):
+    """The strict refusal quotes the profile name, so the quote is bounded.
+
+    Every shipped profile has a short name, but nothing caps the field, so
+    the refusal treats it like any value it did not choose: through the
+    same bound, in the message and in the log line alike.
+    """
+
+    def test_an_enormous_profile_name_is_echoed_bounded_on_both_exits(self):
+        """Neither the raised message nor the error log carries the whole name."""
+        loud = replace(_PROFILE, name="n" * _PATHOLOGICAL_NAME_CHARS)
+        frame = _set_timestamps(
+            build_clean_frame(start=0, cadence_seconds=_CADENCE_SECONDS, length=3),
+            [0, 120, 180],
+        )
+        logged: list[str] = []
+        sink_id = validation_module.logger.add(
+            logged.append, level="ERROR", format="{message}"
+        )
+        try:
+            with self.assertRaises(SourceValidationError) as caught:
+                validate_source_frame(frame, loud, mode=ValidationMode.STRICT)
+        finally:
+            validation_module.logger.remove(sink_id)
+
+        self.assertLess(len(str(caught.exception)), _MAX_FINDING_MESSAGE_CHARS)
+        self.assertTrue(logged, "the refusal logs before it raises")
+        self.assertLess(len(logged[-1]), _MAX_FINDING_MESSAGE_CHARS)

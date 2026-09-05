@@ -177,13 +177,13 @@ def fetch_snapshot(
         and manifest_sha256 != expected_manifest_sha256
     ):
         logger.error(
-            "Refusing snapshot {!r}: manifest identity is {}, expected {}.",
-            release.tag,
+            "Refusing snapshot {}: manifest identity is {}, expected {}.",
+            bounded_echo(release.tag),
             manifest_sha256,
             bounded_echo(expected_manifest_sha256),
         )
         raise SnapshotIntegrityError(
-            f"The fetched manifest for {release.tag!r} has identity "
+            f"The fetched manifest for {bounded_echo(release.tag)} has identity "
             f"{manifest_sha256}, not the expected "
             f"{bounded_echo(expected_manifest_sha256)}. Either the caller's "
             "record is stale or the published release changed under its tag."
@@ -194,9 +194,9 @@ def fetch_snapshot(
         for record in manifest.assets.values()
     }
     logger.info(
-        "Fetched snapshot {!r} into {}: {} asset(s), {} newly downloaded.",
-        release.tag,
-        resolved,
+        "Fetched snapshot {} into {}: {} asset(s), {} newly downloaded.",
+        bounded_echo(release.tag),
+        bounded_echo(str(resolved)),
         len(assets),
         sum(asset.was_downloaded for asset in assets.values()),
     )
@@ -215,10 +215,12 @@ def _prepare_directory(directory: str | os.PathLike[str]) -> Path:
     resolved = Path(directory)
     if resolved.exists() and not resolved.is_dir():
         logger.error(
-            "Refusing to fetch into {}: it exists and is not a directory.", resolved
+            "Refusing to fetch into {}: it exists and is not a directory.",
+            bounded_echo(str(resolved)),
         )
         raise ConfigError(
-            f"Snapshot destination {str(resolved)!r} exists and is not a directory."
+            f"Snapshot destination {bounded_echo(str(resolved))} exists and is not "
+            "a directory."
         )
     resolved.mkdir(parents=True, exist_ok=True)
     return resolved
@@ -242,14 +244,15 @@ def _fetch_manifest(
         manifest = parse_manifest(raw)
         if manifest.tag != release.tag:
             logger.error(
-                "Refusing the manifest at {}: it declares tag {}, not {!r}.",
-                url,
+                "Refusing the manifest at {}: it declares tag {}, not {}.",
+                bounded_echo(url),
                 bounded_echo(manifest.tag),
-                release.tag,
+                bounded_echo(release.tag),
             )
             raise SnapshotManifestError(
-                f"Manifest at {url} declares tag {bounded_echo(manifest.tag)}, "
-                f"but the release being fetched is {release.tag!r}."
+                f"Manifest at {bounded_echo(url)} declares tag "
+                f"{bounded_echo(manifest.tag)}, but the release being fetched is "
+                f"{bounded_echo(release.tag)}."
             )
         os.replace(temp_path, manifest_path)
     finally:
@@ -271,11 +274,11 @@ def _resolve_asset(
             logger.error(
                 "Refusing asset {!r}: {} exists and is not a regular file.",
                 record.name,
-                destination,
+                bounded_echo(str(destination)),
             )
             raise ConfigError(
                 f"Snapshot asset path for {record.name!r} exists and is not a "
-                f"regular file: {destination}."
+                f"regular file: {bounded_echo(str(destination))}."
             )
         present = _digest_of(destination)
         if present == record.sha256:
@@ -299,7 +302,8 @@ def _resolve_asset(
                 record.sha256,
             )
             raise SnapshotIntegrityError(
-                f"Asset {record.name!r} is already present at {destination} "
+                f"Asset {record.name!r} is already present at "
+                f"{bounded_echo(str(destination))} "
                 f"with sha256 {present}, not the declared {record.sha256}. It "
                 "is left untouched; pass ExistingAssetPolicy.REPLACE to "
                 "overwrite it deliberately."
@@ -335,7 +339,11 @@ def _download_verified(
         _verify_size(temp_path, record, url)
         _verify_digest(temp_path, record, url)
         os.replace(temp_path, destination)
-        logger.info("Verified and placed asset {!r} at {}.", record.name, destination)
+        logger.info(
+            "Verified and placed asset {!r} at {}.",
+            record.name,
+            bounded_echo(str(destination)),
+        )
     finally:
         # After a successful rename this is already gone; after any
         # failure it is the partly-written body nobody may read.
@@ -367,12 +375,13 @@ def _verify_size(temp_path: Path, record: AssetRecord, url: str) -> None:
         logger.error(
             "Asset {!r} from {} landed at {} bytes, not the declared {}.",
             record.name,
-            url,
+            bounded_echo(url),
             landed,
             record.size_bytes,
         )
         raise SnapshotIntegrityError(
-            f"Asset {record.name!r} from {url} landed at {landed} bytes, not "
+            f"Asset {record.name!r} from {bounded_echo(url)} landed at {landed} "
+            "bytes, not "
             f"the {record.size_bytes} bytes its manifest declared."
         )
 
@@ -384,12 +393,13 @@ def _verify_digest(temp_path: Path, record: AssetRecord, url: str) -> None:
         logger.error(
             "Asset {!r} from {} hashes to {}, not the declared {}.",
             record.name,
-            url,
+            bounded_echo(url),
             digest,
             record.sha256,
         )
         raise SnapshotIntegrityError(
-            f"Asset {record.name!r} from {url} has sha256 {digest}, not the "
+            f"Asset {record.name!r} from {bounded_echo(url)} has sha256 {digest}, "
+            "not the "
             f"declared {record.sha256}."
         )
 
