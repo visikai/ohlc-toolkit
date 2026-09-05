@@ -120,16 +120,31 @@ _SITES = (
         lambda: identity.optional_text_from_payload(_LOUD, label="x"),
         "payload text",
     ),
+    Site(
+        generators.logger,
+        lambda: generators.explicit(_LOUD),
+        "explicit schedule",
+    ),
+    Site(
+        duration.logger,
+        lambda: Duration(_LOUD),
+        "duration seconds",
+    ),
+    Site(
+        resolution.logger,
+        lambda: resolution.ExplicitRange(_LOUD, 0),
+        "materialization range bound",
+    ),
 )
 
 
 @pytest.mark.parametrize("site", _SITES, ids=[site.name for site in _SITES])
 def test_a_type_refusal_logs_the_type_and_not_the_value(site: Site) -> None:
-    """The warning names the offending type; the offending repr never appears."""
+    """Both exits name the offending type; the offending repr appears in neither."""
     logged: list[str] = []
     sink_id = site.logger.add(logged.append, level="WARNING", format="{message}")
     try:
-        with pytest.raises(ConfigError):
+        with pytest.raises(ConfigError) as raised:
             site.trip()
     finally:
         site.logger.remove(sink_id)
@@ -138,3 +153,6 @@ def test_a_type_refusal_logs_the_type_and_not_the_value(site: Site) -> None:
     line = logged[-1]
     assert _Loud.__name__ in line
     assert _MARKER not in line
+    message = str(raised.value)
+    assert _Loud.__name__ in message
+    assert _MARKER not in message

@@ -63,7 +63,8 @@ class Duration:
             self.total_seconds, int
         ):
             logger.warning(
-                "Rejecting non-integer duration seconds: {!r}", self.total_seconds
+                "Rejecting non-integer duration seconds: {}",
+                type(self.total_seconds).__name__,
             )
             raise ConfigError(
                 "Duration seconds must be an int, got "

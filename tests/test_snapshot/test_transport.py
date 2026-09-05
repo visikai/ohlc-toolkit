@@ -231,3 +231,35 @@ def test_an_http_error_bounds_the_url_on_both_exits(tmp_path: Path) -> None:
     assert len(str(raised.value)) < _MAX_FETCH_REFUSAL_CHARS
     assert logged, "the refusal logs before it raises; nothing was captured"
     assert len(logged[-1]) < _MAX_FETCH_REFUSAL_CHARS
+
+
+# A cap every real body outgrows on its first chunk, so the mid-stream size
+# refusal fires with the URL still in hand.
+_TINY_CAP = 1
+
+
+def test_a_size_cap_refusal_bounds_the_url_on_both_exits(tmp_path: Path) -> None:
+    """The mid-stream size refusal quotes the URL bounded on its log line and its message."""
+    loud_url = "https://example.invalid/" + "u" * _ENORMOUS_CHARS
+    response = MagicMock()
+    response.status_code = _SUCCESS
+    response.__enter__ = MagicMock(return_value=response)
+    response.__exit__ = MagicMock(return_value=False)
+    response.iter_content = MagicMock(return_value=iter([_BODY]))
+    logged: list[str] = []
+    sink_id = transport_module.logger.add(
+        logged.append, level="ERROR", format="{message}"
+    )
+    try:
+        with (
+            patch.object(transport_module.requests, "get", return_value=response),
+            pytest.raises(SnapshotIntegrityError, match="exceeds") as raised,
+        ):
+            HttpAssetTransport().download(
+                loud_url, tmp_path / "asset", max_bytes=_TINY_CAP
+            )
+    finally:
+        transport_module.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_FETCH_REFUSAL_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_FETCH_REFUSAL_CHARS

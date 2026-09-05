@@ -112,9 +112,9 @@ class ExplicitRange:
         for label, value in (("start", self.start), ("end", self.end)):
             if isinstance(value, bool) or not isinstance(value, int):
                 logger.warning(
-                    "Rejecting non-integer materialization range {}: {!r}",
+                    "Rejecting non-integer materialization range {}: {}",
                     label,
-                    value,
+                    type(value).__name__,
                 )
                 raise ConfigError(
                     f"Materialization range {label} must be an int of Unix "

@@ -175,7 +175,7 @@ class HttpAssetTransport:
                     logger.error(
                         "Release asset at {} exceeds its declared size of {} "
                         "bytes; refusing it mid-stream after {} bytes.",
-                        url,
+                        bounded_echo(url),
                         max_bytes,
                         written,
                     )

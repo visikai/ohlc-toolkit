@@ -668,7 +668,8 @@ def _coerced_pair(entry: Sequence[Duration | str]) -> WindowEmitPair:
             "Rejecting a cadence entry that is not a pair: {}", type(entry).__name__
         )
         raise ConfigError(
-            "Each entry must be a (window, emit_every) pair of durations."
+            "Each entry must be a (window, emit_every) pair of durations, got "
+            f"{type(entry).__name__}."
         )
     window, emit_every = entry
     return WindowEmitPair(

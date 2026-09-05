@@ -1155,7 +1155,8 @@ def explicit(
     """
     if isinstance(windows, str) or not isinstance(windows, Sequence):
         logger.warning(
-            "Rejecting an explicit schedule that is not a list: {!r}", windows
+            "Rejecting an explicit schedule that is not a list: {}",
+            type(windows).__name__,
         )
         raise ConfigError(
             f"An explicit schedule takes a list of durations, got "
