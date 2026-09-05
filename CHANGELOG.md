@@ -27,8 +27,32 @@ against their tags, and are not restated here.
   cell that is not a number, and nothing is coerced: making a NaN into a null
   is a repair this validator does not perform.
 
+### Fixed
+
+- A capped read of a file holding no data aborted the interpreter instead of
+  refusing. `source.read_source_csv` passes a row cap through to polars, and
+  at polars 1.44.1 an empty gzip archive read with any `n_rows` -- zero
+  included -- raises `pyo3_runtime.PanicException`, a `BaseException` that no
+  caller's `except PolarsError`, or even `except Exception`, can catch. It was
+  reachable from `snapshot.read_snapshot_frame`, which always caps its read at
+  the manifest's row count plus one, so a published release carrying an empty
+  history asset with a correct digest went straight past every documented
+  refusal. A file that reads as empty is now refused with polars' own
+  `NoDataError`, on capped and uncapped reads alike, so a cap changes what is
+  read and never what is raised. Only regular files are checked this way: a
+  FIFO, a stream or a character device is read exactly as before, because the
+  check opens the path and the read opens it again, which is free on a file
+  and destructive on anything that cannot be reopened.
+
 ### Changed
 
+- **Breaking.** `snapshot.read_snapshot_frame` raises `SnapshotIntegrityError`,
+  not `ConfigError`, when the named asset is absent from a fetched release. That
+  class already covers "an asset the release does not serve" and is what the
+  fetcher raises for the same condition; the asset name also has a default, so
+  the refusal fires on calls that configured nothing, where a release failing
+  to carry the asset this package asks for is an integrity failure and not the
+  caller's mistake.
 - **Breaking.** A NaN or either infinity in a declared price or volume column
   is now INVALID source data and is refused. It used to validate completely
   clean -- the null check counts nulls, and a NaN is not a null -- while
@@ -52,9 +76,11 @@ against their tags, and are not restated here.
   before a `ConfigError` (the caller's own argument is refused), `error`
   before a data, integrity, coverage or file error (input from outside the
   call failed; the file branch is `OSError` in full) and before a bare
-  re-raise. Five sites moved to match; `tests/test_refusal_levels.py` holds
-  every raise in the package to the pairing, and a new exception class must
-  be classified into a branch before it is raised.
+  re-raise, and a `polars.exceptions.PolarsError` this package raises or
+  re-raises is on the error side too. Five sites moved to match;
+  `tests/test_refusal_levels.py` holds every raise in the package to the
+  pairing, and a new exception class must be classified into a branch before
+  it is raised -- the test fails a class on neither branch.
 
 ## 1.0.0
 

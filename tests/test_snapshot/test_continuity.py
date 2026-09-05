@@ -28,11 +28,12 @@ from ohlc_toolkit.snapshot.continuity import (
     read_snapshot_frame,
     verify_snapshot_continuity,
 )
+from ohlc_toolkit.snapshot.errors import SnapshotIntegrityError
 from ohlc_toolkit.snapshot.fetcher import SnapshotFetchResult, fetch_snapshot
 from ohlc_toolkit.snapshot.manifest import SnapshotManifest, parse_manifest
 from ohlc_toolkit.snapshot.release import BITSTAMP_HISTORY_CSV_ASSET
 from ohlc_toolkit.source import FindingKind
-from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, DataValidationError
 from tests.test_snapshot.factories import (
     CADENCE_SECONDS,
     FIXTURE_ROWS,
@@ -350,17 +351,23 @@ def test_reading_a_gapped_fetched_history_is_refused(tmp_path: Path) -> None:
 def test_reading_an_asset_the_release_does_not_declare_is_refused(
     tmp_path: Path,
 ) -> None:
-    """Asking for a name that is not in the result is a caller mistake."""
+    """A release that does not carry the named asset has not delivered it.
+
+    The name may be the caller's or this package's own default, and the
+    refusal does not distinguish them: the fetcher raises this same class
+    for an asset a release does not serve, so one condition raises one
+    class.
+    """
     result = _fetch(build_default_assets(), tmp_path)
 
-    with pytest.raises(ConfigError, match="absent"):
+    with pytest.raises(SnapshotIntegrityError, match="absent"):
         read_snapshot_frame(result, asset_name="not_in_this_release.csv.gz")
 
 
 def _refuse_with_crowd(result: SnapshotFetchResult, size: int) -> tuple[str, list[str]]:
     """Refuse a missing asset against a release holding ``size`` assets.
 
-    Returns the raised message and every WARNING line the refusal logged.
+    Returns the raised message and every ERROR line the refusal logged.
     """
     one = next(iter(result.assets.values()))
     crowded = replace(
@@ -372,9 +379,9 @@ def _refuse_with_crowd(result: SnapshotFetchResult, size: int) -> tuple[str, lis
     )
 
     logged: list[str] = []
-    sink_id = continuity.logger.add(logged.append, level="WARNING", format="{message}")
+    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
     try:
-        with pytest.raises(ConfigError, match="absent") as raised:
+        with pytest.raises(SnapshotIntegrityError, match="absent") as raised:
             read_snapshot_frame(crowded, asset_name="not_in_this_release.csv.gz")
     finally:
         continuity.logger.remove(sink_id)
@@ -433,7 +440,7 @@ def test_the_default_asset_is_the_published_bitstamp_history(
 
     assert PARQUET_ASSET in result.assets
 
-    with pytest.raises(ConfigError, match=BITSTAMP_HISTORY_CSV_ASSET):
+    with pytest.raises(SnapshotIntegrityError, match=BITSTAMP_HISTORY_CSV_ASSET):
         read_snapshot_frame(result)
 
 
@@ -455,9 +462,9 @@ def test_an_absent_asset_refusal_bounds_the_release_tag_on_both_exits(
     )
 
     logged: list[str] = []
-    sink_id = continuity.logger.add(logged.append, level="WARNING", format="{message}")
+    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
     try:
-        with pytest.raises(ConfigError, match="absent") as raised:
+        with pytest.raises(SnapshotIntegrityError, match="absent") as raised:
             read_snapshot_frame(loud, asset_name="not_in_this_release.csv.gz")
     finally:
         continuity.logger.remove(sink_id)
@@ -531,3 +538,27 @@ def test_a_verified_read_bounds_the_tag_and_the_path_in_its_log_line(
     verified = [line for line in logged if line.startswith("Verified")]
     assert verified, "a successful read logs what it verified; nothing was captured"
     assert all(len(line) < _MAX_TAG_LINE_CHARS for line in verified)
+
+
+def test_a_published_history_holding_no_data_is_refused_not_a_panic(
+    tmp_path: Path,
+) -> None:
+    """The reachable route for the empty-file panic, and the reason it mattered.
+
+    `read_snapshot_frame` always caps its read at the manifest's row count
+    plus one, and polars aborted the interpreter rather than raising when a
+    capped read met an empty archive. A release can carry an empty history
+    asset with a correct digest and size, so the fetch is clean and this is
+    the first code that meets it. The refusal is an ordinary exception, so a
+    caller's `except` can see it.
+    """
+    assets = dict(build_default_assets())
+    assets[HISTORY_ASSET] = gzip_bytes(b"")
+    result = _fetch(assets, tmp_path)
+
+    try:
+        read_snapshot_frame(result, asset_name=HISTORY_ASSET)
+    except Exception as error:
+        assert isinstance(error, pl.exceptions.PolarsError)
+    else:
+        pytest.fail("an empty published history must be refused, not read")

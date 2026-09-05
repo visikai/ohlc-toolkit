@@ -17,6 +17,7 @@ import builtins
 from collections.abc import Iterator
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from ohlc_toolkit import snapshot, source, temporal, windows
@@ -24,7 +25,7 @@ from ohlc_toolkit.temporal import ConfigError, CoverageError, DataValidationErro
 
 _PACKAGE = Path(__file__).parents[1] / "src" / "ohlc_toolkit"
 # Where a raised exception's name is looked up, in order.
-_NAMESPACES = (temporal, source, snapshot, windows, builtins)
+_NAMESPACES = (temporal, source, snapshot, windows, pl.exceptions, builtins)
 # Levels that count as "error" for the pairing.
 _ERROR_LEVELS = frozenset({"error", "exception", "critical"})
 # Fewer raises than this means the walk is broken, not that the package is
@@ -33,9 +34,15 @@ _MIN_EXPECTED_RAISES = 100
 
 
 def _resolve(name: str) -> type[BaseException]:
-    """Turn the name a ``raise`` uses into the class it names."""
+    """Turn the name a ``raise`` uses into the class it names.
+
+    A raise may spell its class plainly or through a module, so only the
+    last component is looked up -- ``pl.exceptions.NoDataError`` and a bare
+    ``NoDataError`` name the same class and must classify the same way.
+    """
+    attribute = name.rsplit(".", 1)[-1]
     for namespace in _NAMESPACES:
-        found = getattr(namespace, name, None)
+        found = getattr(namespace, attribute, None)
         if isinstance(found, type) and issubclass(found, BaseException):
             return found
     pytest.fail(f"{name} is raised but is not a known exception class; classify it")
@@ -48,7 +55,10 @@ def _expected_level(exception: type[BaseException] | None) -> str:
         return "error"
     if issubclass(exception, ConfigError):
         return "warning"
-    if issubclass(exception, DataValidationError | CoverageError | OSError):
+    if issubclass(
+        exception,
+        DataValidationError | CoverageError | OSError | pl.exceptions.PolarsError,
+    ):
         return "error"
     pytest.fail(f"{exception.__name__} is on neither branch of the pairing")
 
