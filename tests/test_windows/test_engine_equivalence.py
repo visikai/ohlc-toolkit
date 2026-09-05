@@ -458,5 +458,135 @@ def test_the_volume_tolerance_covers_the_oracles_own_rounding() -> None:
     assert _VOLUME_RELATIVE_TOLERANCE >= oracle_fold_bound
 
 
+# The boundary of the equivalence claim. Six rows on a clean minute grid,
+# one price replaced, and a range that materializes three windows over the
+# replaced row. Written out rather than drawn from the matrix above: this
+# is the input the matrix deliberately never produces.
+_INVALID_BASE = 1_451_606_400
+_INVALID_ROWS = 6
+_INVALID_AT = 2
+_INVALID_SCHEMA = {
+    "timestamp": pl.Int64,
+    "open": pl.Float64,
+    "high": pl.Float64,
+    "low": pl.Float64,
+    "close": pl.Float64,
+    "volume": pl.Float64,
+}
+
+
+def _frame_with(price: float | None) -> pl.DataFrame:
+    """Build a clean minute grid with one price replaced by ``price``."""
+    prices: list[float | None] = [100.0 + index for index in range(_INVALID_ROWS)]
+    prices[_INVALID_AT] = price
+    timestamps = [_INVALID_BASE + index * 60 for index in range(_INVALID_ROWS)]
+    return pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": prices,
+            "high": prices,
+            "low": prices,
+            "close": prices,
+            "volume": [1.0] * _INVALID_ROWS,
+        },
+        schema=_INVALID_SCHEMA,
+    )
+
+
+def _invalid_range() -> ExplicitRange:
+    """Materialize the three windows that span the replaced row."""
+    return ExplicitRange(
+        start=_INVALID_BASE + 180, end=_INVALID_BASE + _INVALID_ROWS * 60
+    )
+
+
+def _both_over(frame: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Run engine and oracle over the same three windows of ``frame``."""
+    return (
+        compute_windows(
+            frame,
+            BITSTAMP_BTCUSD_1M,
+            window="3m",
+            emit_every="1m",
+            materialization=_invalid_range(),
+        ),
+        compute_reference_windows(
+            frame,
+            BITSTAMP_BTCUSD_1M,
+            window="3m",
+            emit_every="1m",
+            materialization=_invalid_range(),
+        ),
+    )
+
+
+def test_a_non_finite_price_makes_the_two_disagree_and_neither_is_right() -> None:
+    """The equivalence holds on VALID input, and this is what bounds that word.
+
+    A NaN is invalid source data and validation refuses it. Neither of
+    these functions validates, so a caller can hand one to either, and
+    then the oracle stops being a specification: polars propagates the NaN
+    through its rolling maximum while Python's `max` compares it and
+    keeps whichever operand it saw last. The engine reports every window
+    as NaN; the oracle reports two ordinary numbers and one NaN. There is
+    no reading on which the second is the correct answer to "what was the
+    highest price in this window", so "the oracle is right by definition"
+    cannot be unconditional.
+    """
+    engine, oracle = _both_over(_frame_with(float("nan")))
+
+    assert engine.get_column("high").to_list() == pytest.approx(
+        [float("nan")] * 3, nan_ok=True
+    )
+    assert oracle.get_column("high").to_list() == pytest.approx(
+        [101.0, 103.0, float("nan")], nan_ok=True
+    )
+    assert oracle.get_column("low").to_list() == pytest.approx(
+        [100.0, 101.0, float("nan")], nan_ok=True
+    )
+    # Everything that is a selection or an integer still agrees, so the
+    # divergence is exactly the two order statistics and not a wholesale
+    # difference of shape.
+    for column in ("open_time", "close_time", "src_count", "coverage_seconds"):
+        assert (
+            engine.get_column(column).to_list() == oracle.get_column(column).to_list()
+        )
+
+
+def test_a_null_price_stops_the_oracle_but_not_the_engine() -> None:
+    """The two are not interchangeable on invalid input, in either direction.
+
+    The engine's docstring used to say it would not detect a null price
+    "like the oracle". The oracle does not ignore a null: it raises a bare
+    `TypeError` out of comparing `None` with a float, which is neither a
+    refusal in this package's taxonomy nor a result. The engine, meanwhile,
+    drops the null silently and reports a maximum over the rows that
+    remain. Both behaviours are recorded rather than repaired: guarding one
+    entry of the non-detection list while the rest stay unguarded would
+    imply a protection that does not exist.
+    """
+    frame = _frame_with(None)
+
+    engine = compute_windows(
+        frame,
+        BITSTAMP_BTCUSD_1M,
+        window="3m",
+        emit_every="1m",
+        materialization=_invalid_range(),
+    )
+    # The null sits at the third minute, so each window's maximum is the
+    # largest of the rows that are left: 101, then 103, then 104.
+    assert engine.get_column("high").to_list() == [101.0, 103.0, 104.0]
+
+    with pytest.raises(TypeError, match="NoneType"):
+        compute_reference_windows(
+            frame,
+            BITSTAMP_BTCUSD_1M,
+            window="3m",
+            emit_every="1m",
+            materialization=_invalid_range(),
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

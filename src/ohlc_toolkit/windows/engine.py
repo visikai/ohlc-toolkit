@@ -4,8 +4,18 @@ This module computes exactly what
 :func:`~ohlc_toolkit.windows.reference.compute_reference_windows` computes
 -- same rule, same schema, same total emit grid, same refusals -- without
 paying its O(rows x ticks) cost. The oracle is the specification; this is
-the implementation meant to be run. Where the two could disagree, the
-oracle is right by definition.
+the implementation meant to be run.
+
+Where the two could disagree ON VALID INPUT, the oracle is right by
+definition. That qualifier is load-bearing rather than decorative.
+Neither function validates what it is handed, so both can be called with
+input the source contract rejects, and on such input the oracle is not a
+specification of anything -- it is Python's ``max`` and ``min`` meeting a
+value they were never promised. On a frame carrying a NaN the two
+return different answers and NEITHER is correct; on a frame carrying a
+null the oracle raises a bare ``TypeError`` from a comparison. Both are
+pinned in ``tests/test_windows/test_engine_equivalence.py`` so this
+paragraph cannot quietly stop being true.
 
 Why the included candles are a contiguous slice
 -----------------------------------------------
@@ -251,10 +261,22 @@ def compute_windows(  # noqa: PLR0913 - one keyword per schedule knob
     against it rather than restating it.
 
     Precondition: ``frame`` should already have passed strict validation
-    (:func:`ohlc_toolkit.source.validation.validate_source_frame`). Like
-    the oracle, this function does not re-validate row data and will not
-    detect a gap, a duplicate, an off-phase timestamp, or a null price. It
-    enforces only its own resolution-time rules on the schedule.
+    (:func:`ohlc_toolkit.source.validation.validate_source_frame`). This
+    function does not re-validate row data. It enforces only its own
+    resolution-time rules on the schedule.
+
+    What it will not detect, each demonstrated by a test rather than
+    asserted here: a gap, a duplicate timestamp, an off-phase timestamp,
+    rows out of order, a non-finite price, and a null price. Every one of
+    those is aggregated as if it were ordinary data.
+
+    The oracle behaves the same way on all of them EXCEPT a null, where it
+    raises a bare ``TypeError`` from comparing ``None`` -- so "like the
+    oracle" would be wrong, and the two are not interchangeable on invalid
+    input. That asymmetry is a defect of the pair rather than of either
+    one, and it is recorded rather than repaired here: adding a guard to
+    one member of this list while the rest stay unguarded would imply a
+    protection that does not exist.
 
     The frame is never mutated, sorted in place, de-duplicated, or
     repaired. The engine sorts a copy of the columns it reads when the
