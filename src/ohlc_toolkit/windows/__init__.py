@@ -21,8 +21,18 @@ refused by the other in the same words.
 :mod:`ohlc_toolkit.windows.quality` is a separate, later step: a
 recipe-recordable quality policy composed AFTER either implementation's
 output, never inside it.
+
+:mod:`ohlc_toolkit.windows.annotations` is another later step: it joins a
+sparse interval sidecar onto that output as opaque flags with overlap
+accounting, and reads nothing but the two window bounds.
 """
 
+from ohlc_toolkit.windows.annotations import (
+    AnnotationColumns,
+    AnnotationValidationError,
+    annotate_windows,
+    read_annotations,
+)
 from ohlc_toolkit.windows.engine import compute_windows
 from ohlc_toolkit.windows.quality import (
     GateMode,
@@ -41,6 +51,8 @@ from ohlc_toolkit.windows.resolution import (
 )
 
 __all__ = [
+    "AnnotationColumns",
+    "AnnotationValidationError",
     "ExplicitRange",
     "GateMode",
     "Materialization",
@@ -50,7 +62,9 @@ __all__ = [
     "QualityReport",
     "WindowCoverageError",
     "WindowQualityPolicy",
+    "annotate_windows",
     "apply_quality_policy",
     "compute_reference_windows",
     "compute_windows",
+    "read_annotations",
 ]

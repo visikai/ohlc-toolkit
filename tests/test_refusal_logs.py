@@ -14,13 +14,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import polars as pl
 import pytest
 
 from ohlc_toolkit.returns import primitives
 from ohlc_toolkit.schedules import cadence, generators, identity, registry
 from ohlc_toolkit.schedules.generators import DedupRule, RoundingRule
 from ohlc_toolkit.temporal import ConfigError, Duration, duration
-from ohlc_toolkit.windows import quality, resolution
+from ohlc_toolkit.windows import annotations, quality, resolution
 from ohlc_toolkit.windows.quality import QualityMode, WindowQualityPolicy
 
 if TYPE_CHECKING:
@@ -43,6 +44,16 @@ class _Loud:
 # Typed Any on purpose: every guard below declares a narrower parameter, and
 # handing it the wrong type is the whole point of the test.
 _LOUD: Any = _Loud()
+
+# The smallest frames the annotation step accepts, so a wrong-typed OTHER
+# argument is what each of its guards trips on.
+_BOUNDS = pl.DataFrame(
+    {"open_time": [0], "close_time": [60]},
+    schema={"open_time": pl.Int64, "close_time": pl.Int64},
+)
+_NO_INTERVALS = pl.DataFrame(
+    schema={"start_timestamp": pl.Int64, "end_timestamp": pl.Int64, "flag": pl.String}
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +145,31 @@ _SITES = (
         resolution.logger,
         lambda: resolution.ExplicitRange(_LOUD, 0),
         "materialization range bound",
+    ),
+    Site(
+        annotations.logger,
+        lambda: annotations.annotate_windows(_LOUD, _NO_INTERVALS),
+        "annotation window frame",
+    ),
+    Site(
+        annotations.logger,
+        lambda: annotations.annotate_windows(_BOUNDS, _LOUD),
+        "annotations frame",
+    ),
+    Site(
+        annotations.logger,
+        lambda: annotations.AnnotationColumns(start=_LOUD),
+        "annotation column name",
+    ),
+    Site(
+        annotations.logger,
+        lambda: annotations.annotate_windows(_BOUNDS, _NO_INTERVALS, prefix=_LOUD),
+        "annotation prefix",
+    ),
+    Site(
+        annotations.logger,
+        lambda: annotations.read_annotations("unread.csv", max_rows=_LOUD),
+        "annotation row cap",
     ),
 )
 
