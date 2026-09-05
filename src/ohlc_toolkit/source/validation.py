@@ -170,13 +170,16 @@ def validate_source_frame(
     report = ValidationReport(rows_checked=frame.height, findings=tuple(findings))
 
     if mode is ValidationMode.STRICT and not report.passed:
+        # The profile name is first-party in every shipped profile, but nothing
+        # caps its length, so it is echoed through the same bound as any
+        # untrusted value rather than trusted to stay short.
         message = (
-            f"Source frame {profile.name!r} failed strict validation with "
-            f"{len(report.findings)} finding(s)."
+            f"Source frame {bounded_echo(profile.name)} failed strict validation "
+            f"with {len(report.findings)} finding(s)."
         )
         logger.error(
-            "Source frame {!r} failed strict validation with {} finding(s).",
-            profile.name,
+            "Source frame {} failed strict validation with {} finding(s).",
+            bounded_echo(profile.name),
             len(report.findings),
         )
         raise SourceValidationError(message, report)

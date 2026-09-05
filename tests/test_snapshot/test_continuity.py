@@ -271,6 +271,9 @@ def test_continuity_failures_are_data_validation_errors() -> None:
 # LENGTH would change nothing here, which is the point.
 _SMALL_CROWD = 1000
 _LARGE_CROWD = 4000
+# A release tag far longer than any real one; the tag pattern caps charset,
+# not length, so the refusal has to bound it itself.
+_ENORMOUS_TAG_CHARS = 200_000
 # Room for the capped number of names at the echo bound, plus prose. This
 # is a sanity ceiling only; the assertion that actually bites is that the
 # refusal does not GROW with the crowd.
@@ -436,3 +439,29 @@ def test_the_default_asset_is_the_published_bitstamp_history(
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_an_absent_asset_refusal_bounds_the_release_tag_on_both_exits(
+    tmp_path: Path,
+) -> None:
+    """The tag is quoted beside the asset list, and is bounded like it.
+
+    The tag pattern constrains the charset and not the length, so this is
+    the other unbounded member of an expression that already bounded one.
+    """
+    result = _fetch(build_default_assets(), tmp_path)
+    loud = replace(
+        result, release=replace(result.release, tag="t" * _ENORMOUS_TAG_CHARS)
+    )
+
+    logged: list[str] = []
+    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
+    try:
+        with pytest.raises(ConfigError, match="absent") as raised:
+            read_snapshot_frame(loud, asset_name="not_in_this_release.csv.gz")
+    finally:
+        continuity.logger.remove(sink_id)
+
+    assert len(str(raised.value)) < _MAX_REFUSAL_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_REFUSAL_CHARS

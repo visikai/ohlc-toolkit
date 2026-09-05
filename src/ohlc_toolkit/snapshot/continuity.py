@@ -219,14 +219,14 @@ def read_snapshot_frame(
     if asset is None:
         held = _echo_asset_names(sorted(result.assets))
         logger.error(
-            "Asset {} is absent from the fetched release {!r}; it holds {}.",
+            "Asset {} is absent from the fetched release {}; it holds {}.",
             bounded_echo(asset_name),
-            result.release.tag,
+            bounded_echo(result.release.tag),
             held,
         )
         raise ConfigError(
             f"Asset {bounded_echo(asset_name)} is absent from the fetched "
-            f"release {result.release.tag!r}, which holds {held}."
+            f"release {bounded_echo(result.release.tag)}, which holds {held}."
         )
 
     # One row past the declaration: a longer file then yields exactly one
