@@ -143,8 +143,10 @@ def _holds_no_data(path: str | os.PathLike[str]) -> bool:
     gone. Those inputs go straight to the read, exactly as they did before
     this guard existed.
 
-    On a regular file the cost is one buffer fill however large the file
-    is, so it does not scale with a nine-hundred-megabyte history.
+    On a regular file the cost is fixed however large the file is -- one
+    open and one buffer fill for a plain file, two opens and three fills
+    for a gzip -- so it does not scale with a nine-hundred-megabyte
+    history.
 
     Says NO when it cannot tell. A missing path, a permission error, a
     truncated archive: every one of those is the read's to report, in the
@@ -184,8 +186,8 @@ def _require_data(path: str | os.PathLike[str]) -> None:
     shape panics, so a capped-only guard would fix the abort -- and would
     leave an empty file raising one class with a cap and another without
     one, which is the same defect in a quieter form. One buffer fill per
-    read of a regular file is a small price for a promise with no
-    exceptions.
+    read of a plain file, three for a gzip, is a small price for a promise
+    with no exceptions.
 
     Raises:
         NoDataError: If the file holds no data. The class is polars' own

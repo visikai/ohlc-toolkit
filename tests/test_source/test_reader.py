@@ -424,7 +424,7 @@ def test_the_guard_leaves_an_unreadable_archive_to_the_read(
 def test_a_capped_read_of_a_real_file_is_untouched_by_the_guard(
     tmp_path: Path, gzipped: bool
 ) -> None:
-    """The guard costs one buffer fill and gets out of the way."""
+    """The guard costs one buffer fill, three on a gzip, and steps aside."""
     rows = _clean_rows(start=0, length=_ROW_CAP + 4)
     path = _write_csv(tmp_path, "real", rows, gzipped=gzipped)
 
