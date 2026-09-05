@@ -611,7 +611,7 @@ if __name__ == "__main__":
     "infinity", [float("inf"), float("-inf")], ids=["positive", "negative"]
 )
 def test_an_infinite_price_does_not_make_the_two_disagree(infinity: float) -> None:
-    """ "Non-finite" is one list entry covering three values, and only one diverges.
+    """Only one of the three non-finite values makes the two disagree.
 
     A NaN diverges because every comparison against it is False, which
     polars and Python resolve differently. An infinity compares like any
