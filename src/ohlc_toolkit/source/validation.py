@@ -64,10 +64,20 @@ class ValidationMode(Enum):
 
 @unique
 class FindingKind(Enum):
-    """The category of check that produced a single finding."""
+    """The category of check that produced a single finding.
+
+    ``NULL_VALUES`` and ``NON_FINITE_VALUES`` are deliberately distinct: a
+    null is an absent cell, a NaN or an infinity is a present cell that is
+    not a number, and a report conflating them would misstate what the
+    frame holds. Neither is ever coerced into the other.
+    """
 
     SCHEMA = "schema"
     NULL_VALUES = "null_values"
+    # A null is an ABSENT cell; a non-finite value (NaN or either infinity)
+    # is a PRESENT cell that is not a number. They are different facts about
+    # the data, so they are different kinds: one report covering both would
+    # misstate what is in the frame. Neither is coerced into the other.
     NON_FINITE_VALUES = "non_finite_values"
     NON_INCREASING_TIMESTAMPS = "non_increasing_timestamps"
     OVERLAPPING_INTERVALS = "overlapping_intervals"
@@ -83,8 +93,9 @@ class Finding:
     Attributes:
         kind: The category of check that produced this finding.
         message: A short, human-readable, already-bounded description.
-        count: The number of offending rows (or columns, for schema and
-            null-value findings; or missing candles, for a gap finding).
+        count: The number of offending rows (or columns, for schema
+            findings; cells, for null-value and non-finite-value findings;
+            or missing candles, for a gap finding).
         sample_timestamps: A capped sample of relevant Unix-second
             timestamps. For a gap finding, this is always the exact
             two-element ``(expected_start, next_open)`` boundary; for
@@ -332,11 +343,15 @@ def _check_non_finite_values(
     Only columns DECLARED floating are read: the rule is about price and
     volume, and a column declared integer is not one of those even when a
     frame supplies it as a float. And only where the column ARRIVED as a
-    float, which is a real guard rather than a formality -- a
-    declared-floating column that came in as text or booleans is already a
-    schema finding, and polars answers ``is_finite`` for any numeric dtype
-    but RAISES on a string, a boolean or a struct, so scanning one
-    unguarded would turn a reported schema finding into an exception.
+    float, which is a real guard rather than a formality. Measured against
+    polars at the pinned version: ``is_finite`` answers for the float and
+    integer dtypes and for Null, and RAISES for every other dtype --
+    including Decimal, which reports itself numeric. So the test here is
+    ``is_float()``, not ``is_numeric()``: it admits exactly Float32 and
+    Float64, which are both the dtypes that answer and the only dtypes
+    that can hold a non-finite value. A declared-floating column that
+    arrived as anything else is already a schema finding, and scanning it
+    unguarded would turn that reported finding into an exception.
 
     Like the null check, this reports counts per column and no sample
     timestamps. It runs before the timestamp column has been shown

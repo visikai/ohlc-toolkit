@@ -684,7 +684,7 @@ class TestNonFiniteValuesBothModes(unittest.TestCase):
     def test_a_floating_column_that_arrived_as_an_integer_is_a_schema_finding_only(
         self,
     ):
-        """Asking a non-float series whether it is finite would raise; the schema check owns it."""
+        """An integer column cannot hold a non-finite value; the mismatch is the schema check's."""
         corrupted = self.frame.with_columns(
             pl.Series("open", [1, 2, 3, 4, 5], dtype=pl.Int64)
         )
