@@ -1,9 +1,13 @@
 """Tests for the polars-native source CSV reader."""
 
 import gzip
+import os
 import tempfile
+import threading
 import unittest
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar, cast
 
 import polars as pl
 import pytest
@@ -237,3 +241,259 @@ def test_a_missing_file_with_a_long_path_is_logged_bounded(tmp_path: Path) -> No
     assert len(logged) >= _EXPECTED_READER_LINES, logged
     for line in logged:
         assert len(line) < _MAX_READER_LINE_CHARS
+
+
+# The three shapes a file can take when it holds no rows, and the one that
+# used to abort the interpreter rather than refuse.
+_EMPTY_PAYLOAD = b""
+_ROW_CAP = 6
+# A file that says it is a gzip and then stops, and how much of a real
+# archive to keep so that opening it succeeds and reading it does not.
+_GZIP_MAGIC_ONLY = b"\x1f\x8b"
+_TRUNCATED_BYTES = 12
+# Long enough that a slow machine is not mistaken for a block, short enough
+# that a test which blocks FAILS instead of wedging the run. A guard that
+# opened a stream would hang forever rather than return a wrong answer, so
+# without this the mutation that removes the regular-file check stalls the
+# suite instead of failing it.
+_BLOCK_TIMEOUT_SECONDS = 20
+# PEP 695 syntax would read better, but this package supports 3.11.
+_Returned = TypeVar("_Returned")
+
+
+def _without_blocking(call: Callable[[], _Returned]) -> _Returned:
+    """Run ``call`` on a daemon thread and fail if it does not finish in time."""
+    outcome: list[object] = []
+
+    def collect() -> None:
+        try:
+            outcome.append(call())
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = threading.Thread(target=collect, daemon=True)
+    worker.start()
+    worker.join(_BLOCK_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        pytest.fail(f"the call did not return within {_BLOCK_TIMEOUT_SECONDS}s")
+    result = outcome[0]
+    if isinstance(result, BaseException):
+        raise result
+    return cast("_Returned", result)
+
+
+def _write_bytes(directory: Path, name: str, payload: bytes, *, gzipped: bool) -> Path:
+    """Write exactly these bytes, gzipped or not, and return the path."""
+    path = directory / (f"{name}.csv.gz" if gzipped else f"{name}.csv")
+    path.write_bytes(gzip.compress(payload, mtime=0) if gzipped else payload)
+    return path
+
+
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+@pytest.mark.parametrize("max_rows", [None, _ROW_CAP], ids=["uncapped", "capped"])
+def test_a_file_holding_no_data_is_refused_in_one_catchable_class(
+    tmp_path: Path, gzipped: bool, max_rows: int | None
+) -> None:
+    """A row cap must change what is read, never what is raised.
+
+    Measured at polars 1.44.1: an empty gzip archive read with any
+    `n_rows`, zero included, aborted with a `pyo3_runtime.PanicException`.
+    That is a `BaseException` and not an `Exception`, so no caller's
+    `except PolarsError` -- and not even `except Exception` -- could catch
+    it, and it escaped every refusal this package documents. The same file
+    with no cap raised `NoDataError`, which is catchable. All four
+    combinations now raise the one class.
+    """
+    path = _write_bytes(tmp_path, "empty", _EMPTY_PAYLOAD, gzipped=gzipped)
+
+    with pytest.raises(pl.exceptions.NoDataError):
+        read_source_csv(path, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows)
+
+
+def test_the_refusal_for_an_empty_file_is_an_ordinary_exception(tmp_path: Path) -> None:
+    """The point of the guard, stated as the assertion a panic would fail."""
+    path = _write_bytes(tmp_path, "empty", _EMPTY_PAYLOAD, gzipped=True)
+
+    try:
+        read_source_csv(path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP)
+    except Exception as error:
+        assert isinstance(error, pl.exceptions.PolarsError)
+    else:
+        pytest.fail("an empty file must be refused, not read")
+
+
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+def test_a_header_without_rows_is_not_refused_as_empty(
+    tmp_path: Path, gzipped: bool
+) -> None:
+    """A file naming its columns and holding no rows is a schema, not a void.
+
+    The guard refuses a file with nothing in it at all; this one has
+    something in it, and reads back as the empty frame it is.
+    """
+    path = _write_bytes(tmp_path, "header", f"{_HEADER}\n".encode(), gzipped=gzipped)
+
+    result = read_source_csv(
+        path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
+    )
+
+    assert result.frame.height == 0
+    assert result.frame.columns == _HEADER.split(",")
+
+
+def test_a_gzip_archive_is_recognised_by_its_bytes_not_its_name(
+    tmp_path: Path,
+) -> None:
+    """Compression is decided the way polars decides it: from the file itself.
+
+    A suffix check would pass every other test in this file, because each
+    of them writes gzip bytes to a `.gz` name. It would also let an empty
+    archive under a `.csv` name reach the capped read and abort the
+    interpreter again, which is the whole defect. This is the case that
+    tells the two rules apart.
+    """
+    path = tmp_path / "looks_plain.csv"
+    path.write_bytes(gzip.compress(_EMPTY_PAYLOAD, mtime=0))
+
+    with pytest.raises(pl.exceptions.NoDataError):
+        read_source_csv(path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP)
+
+
+def test_a_missing_file_is_logged_whether_or_not_a_cap_is_given(
+    tmp_path: Path,
+) -> None:
+    """The guard runs before the read, and must not swallow the read's own refusal.
+
+    A probe that opened the file itself could raise first and leave the
+    reader's log line unrun, so a capped read of a missing file would
+    refuse silently while an uncapped one announced itself.
+    """
+    missing = tmp_path / "absent.csv"
+
+    for max_rows in (None, _ROW_CAP):
+        logged: list[str] = []
+        sink_id = reader_module.logger.add(
+            logged.append, level="ERROR", format="{message}"
+        )
+        try:
+            with pytest.raises(FileNotFoundError):
+                read_source_csv(
+                    missing, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows
+                )
+        finally:
+            reader_module.logger.remove(sink_id)
+        assert logged, f"a missing file must be logged, max_rows={max_rows}"
+        assert logged[-1].startswith("Source file not found")
+
+
+@pytest.mark.parametrize(
+    ("name", "payload", "expected"),
+    [
+        pytest.param("magic.csv.gz", _GZIP_MAGIC_ONLY, 0, id="magic_bytes_only"),
+        pytest.param("truncated.csv.gz", None, None, id="truncated_archive"),
+    ],
+)
+def test_the_guard_leaves_an_unreadable_archive_to_the_read(
+    tmp_path: Path, name: str, payload: bytes | None, expected: int | None
+) -> None:
+    """A probe that cannot tell says nothing, so the read reports in its own words.
+
+    Deciding on behalf of a read it merely stumbled into is how a cap
+    would start changing what is raised. Both shapes below behave exactly
+    as they do with no cap at all.
+    """
+    if payload is None:
+        payload = gzip.compress(f"{_HEADER}\n".encode(), mtime=0)[:_TRUNCATED_BYTES]
+    path = tmp_path / name
+    path.write_bytes(payload)
+
+    def read(max_rows: int | None) -> object:
+        try:
+            return read_source_csv(
+                path, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows
+            ).frame.height
+        except Exception as error:
+            return type(error)
+
+    assert read(_ROW_CAP) == read(None)
+    if expected is not None:
+        assert read(_ROW_CAP) == expected
+
+
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+def test_a_capped_read_of_a_real_file_is_untouched_by_the_guard(
+    tmp_path: Path, gzipped: bool
+) -> None:
+    """The guard costs one buffer fill and gets out of the way."""
+    rows = _clean_rows(start=0, length=_ROW_CAP + 4)
+    path = _write_csv(tmp_path, "real", rows, gzipped=gzipped)
+
+    result = read_source_csv(
+        path, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
+    )
+
+    assert result.frame.height == _ROW_CAP
+
+
+@pytest.mark.parametrize("max_rows", [None, _ROW_CAP], ids=["uncapped", "capped"])
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
+    tmp_path: Path, gzipped: bool, max_rows: int | None
+) -> None:
+    """An empty file is refused here, whatever polars would do with it.
+
+    Only the gzip shape panics today, so for a plain file polars raises the
+    same class unaided and the exception alone cannot say who refused. The
+    log line can: it exists only if the guard ran. The guard covers both
+    shapes because a reader cannot know which shapes a given polars version
+    aborts on, and on a regular file the cost does not scale with the
+    file.
+    """
+    deep = tmp_path.joinpath(*["p" * _LONG_COMPONENT_CHARS] * _LONG_PATH_COMPONENTS)
+    deep.mkdir(parents=True)
+    path = _write_bytes(deep, "empty", _EMPTY_PAYLOAD, gzipped=gzipped)
+
+    logged: list[str] = []
+    sink_id = reader_module.logger.add(logged.append, level="ERROR", format="{message}")
+    try:
+        with pytest.raises(pl.exceptions.NoDataError) as raised:
+            read_source_csv(
+                path, _PROFILE, mode=ValidationMode.REPORT, max_rows=max_rows
+            )
+    finally:
+        reader_module.logger.remove(sink_id)
+
+    assert len(str(raised.value)) < _MAX_READER_LINE_CHARS
+    assert logged, "this package refuses the file itself, and says so before raising"
+    assert logged[-1].startswith("Source file holds no data")
+    assert len(logged[-1]) < _MAX_READER_LINE_CHARS
+
+
+def test_the_guard_does_not_look_at_anything_but_a_regular_file(
+    tmp_path: Path,
+) -> None:
+    """Anything that cannot be reopened must reach the read untouched.
+
+    The guard opens the path, reads and closes it, and the read that
+    follows opens it again. On a regular file that is free. On a stream it
+    is destructive, and not by the two bytes it asks for: a buffered read
+    pulls 128 KiB from the operating system, so a probe would swallow the
+    input and leave the read an empty one, or block forever on a writer
+    that has already gone.
+
+    The guard is checked directly rather than through a read of a real
+    pipe. An end-to-end version cannot be bounded from inside this
+    process: the blocking read happens in polars, which holds the
+    interpreter lock while it waits, so a deadline on another thread never
+    runs and a wrong guard hangs the suite instead of failing it. Measured
+    the hard way -- the first version of this test did exactly that.
+    """
+    fifo = tmp_path / "pipe.csv"
+    os.mkfifo(fifo)
+    empty = tmp_path / "empty.csv"
+    empty.write_bytes(_EMPTY_PAYLOAD)
+
+    assert reader_module._holds_no_data(empty) is True
+    assert _without_blocking(lambda: reader_module._holds_no_data(fifo)) is False
+    assert reader_module._holds_no_data(tmp_path) is False
+    assert reader_module._holds_no_data(tmp_path / "absent.csv") is False

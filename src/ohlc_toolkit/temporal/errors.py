@@ -13,7 +13,10 @@ a file, a download, a manifest, a sidecar, a source frame -- turned out not
 to be what it claimed, and that is worth an operator's attention even when
 the exception is caught. A bare ``raise`` that hands a caught failure on
 unchanged sits on the error side too, and the file branch is ``OSError`` in
-full, so a permission or connection failure stands beside a missing file.
+full, so a permission or connection failure stands beside a missing file. A
+``polars.exceptions.PolarsError`` raised or re-raised by this package is on
+the error side for the same reason: it says the bytes handed in could not be
+read as what they claimed to be.
 A new exception class must be classified into one branch or the other before
 it is raised anywhere: ``tests/test_refusal_levels.py`` holds every ``raise``
 in the package to this pairing and fails a class on neither branch.

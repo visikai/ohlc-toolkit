@@ -67,32 +67,37 @@ def _call_is_bounded(node: ast.Call) -> bool:
     return False
 
 
-def _constant(node: ast.Constant) -> bool:
-    """Accept a literal: the package chose it."""
+def _is_constant(node: ast.Constant) -> bool:
+    """Accept a literal: the package chose it.
+
+    The node is unused; every decision here takes one for a uniform
+    signature, which is what lets them sit in a table.
+    """
+    del node
     return True
 
 
-def _upper_name(node: ast.Name) -> bool:
+def _is_upper_name(node: ast.Name) -> bool:
     """Accept an UPPER_CASE name: a module constant."""
     return node.id.isupper()
 
 
-def _small_attribute(node: ast.Attribute) -> bool:
+def _is_small_attribute(node: ast.Attribute) -> bool:
     """Accept ``type(x).__name__`` and an enum's ``.value``."""
     return node.attr in _SMALL_ATTRIBUTES
 
 
-def _both_sides(node: ast.BinOp) -> bool:
+def _has_bounded_operands(node: ast.BinOp) -> bool:
     """Accept arithmetic over bounded operands."""
     return _is_bounded(node.left) and _is_bounded(node.right)
 
 
-def _each_element(node: ast.ListComp | ast.GeneratorExp) -> bool:
+def _has_bounded_element(node: ast.ListComp | ast.GeneratorExp) -> bool:
     """Accept a comprehension whose element is bounded."""
     return _is_bounded(node.elt)
 
 
-def _each_interpolation(node: ast.JoinedStr) -> bool:
+def _has_bounded_interpolations(node: ast.JoinedStr) -> bool:
     """Accept an f-string whose every interpolation is bounded."""
     return all(
         _is_bounded(value.value)
@@ -102,16 +107,22 @@ def _each_interpolation(node: ast.JoinedStr) -> bool:
 
 
 # One decision per expression shape the rule accepts on sight; any other
-# shape is not visibly bounded and is listed.
+# shape is not visibly bounded and is listed. Dispatch is by EXACT type
+# rather than by isinstance: no key below has a subclass the parser ever
+# constructs -- Python 3.11 still defines deprecated aliases of Constant,
+# but `ast.parse` never produces them -- so exact matching costs nothing and
+# keeps the table's behaviour readable off the table itself. A node type
+# this table does not name falls through to "not visibly bounded", which is
+# the safe direction: it reports rather than skips.
 _DECISIONS: dict[type[ast.AST], Callable[[Any], bool]] = {
-    ast.Constant: _constant,
-    ast.Name: _upper_name,
+    ast.Constant: _is_constant,
+    ast.Name: _is_upper_name,
     ast.Call: _call_is_bounded,
-    ast.Attribute: _small_attribute,
-    ast.BinOp: _both_sides,
-    ast.ListComp: _each_element,
-    ast.GeneratorExp: _each_element,
-    ast.JoinedStr: _each_interpolation,
+    ast.Attribute: _is_small_attribute,
+    ast.BinOp: _has_bounded_operands,
+    ast.ListComp: _has_bounded_element,
+    ast.GeneratorExp: _has_bounded_element,
+    ast.JoinedStr: _has_bounded_interpolations,
 }
 
 

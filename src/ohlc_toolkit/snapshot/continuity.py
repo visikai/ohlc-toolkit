@@ -48,6 +48,7 @@ from enum import Enum, unique
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
+from ohlc_toolkit.snapshot.errors import SnapshotIntegrityError
 from ohlc_toolkit.snapshot.fetcher import SnapshotFetchResult
 from ohlc_toolkit.snapshot.manifest import SnapshotManifest
 from ohlc_toolkit.snapshot.release import BITSTAMP_HISTORY_CSV_ASSET
@@ -59,7 +60,7 @@ from ohlc_toolkit.source import (
     read_source_csv,
     validate_source_frame,
 )
-from ohlc_toolkit.temporal import ConfigError, DataValidationError, bounded_echo
+from ohlc_toolkit.temporal import DataValidationError, bounded_echo
 
 logger = get_logger(__name__)
 
@@ -210,7 +211,16 @@ def read_snapshot_frame(
         The history frame, exactly as it is on disk.
 
     Raises:
-        ConfigError: If ``asset_name`` is not among the fetched assets.
+        SnapshotIntegrityError: If ``asset_name`` is not among the fetched
+            assets. The class is the fetcher's own for the same condition,
+            and it says so: it covers "an asset the release does not
+            serve", whether the caller named it or the package's default
+            did. A release that lacks the asset this package asks for by
+            default has failed, and a caller who named a missing one is
+            told by the same class the fetch would have used.
+        NoDataError: If the published asset reads as empty. A correct
+            digest says the bytes are the bytes; it does not say there are
+            any.
         SnapshotContinuityError: If the history contradicts its manifest
             or is not a complete grid.
 
@@ -218,13 +228,13 @@ def read_snapshot_frame(
     asset = result.assets.get(asset_name)
     if asset is None:
         held = _echo_asset_names(sorted(result.assets))
-        logger.warning(
+        logger.error(
             "Asset {} is absent from the fetched release {}; it holds {}.",
             bounded_echo(asset_name),
             bounded_echo(result.release.tag),
             held,
         )
-        raise ConfigError(
+        raise SnapshotIntegrityError(
             f"Asset {bounded_echo(asset_name)} is absent from the fetched "
             f"release {bounded_echo(result.release.tag)}, which holds {held}."
         )
