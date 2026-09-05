@@ -282,6 +282,14 @@ _LOUD_NAME = "n" * _ENORMOUS_NAME_CHARS
 _MAX_PROFILE_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
 
 
+class _LoudKind:
+    """A declared column kind that is not a ColumnKind and renders enormously."""
+
+    def __repr__(self) -> str:
+        """Render something far larger than any bounded echo allows."""
+        return "k" * _ENORMOUS_NAME_CHARS
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -307,6 +315,10 @@ _MAX_PROFILE_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
                 "raw_schema": {_LOUD_NAME: ColumnKind.FLOATING},
             },
             id="loud timestamp column not integer",
+        ),
+        pytest.param(
+            {"raw_schema": {"timestamp": _LoudKind()}},
+            id="loud declared kind not integer",
         ),
     ],
 )

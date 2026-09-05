@@ -10,9 +10,12 @@ believed.
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import patch
 
+import orjson
 import pytest
 
+from ohlc_toolkit.snapshot import manifest as manifest_module
 from ohlc_toolkit.snapshot.errors import SnapshotManifestError
 from ohlc_toolkit.snapshot.manifest import (
     MANIFEST_ASSET_NAME,
@@ -22,7 +25,7 @@ from ohlc_toolkit.snapshot.manifest import (
     SnapshotManifest,
     parse_manifest,
 )
-from ohlc_toolkit.temporal import DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, DataValidationError
 from tests.test_snapshot.factories import (
     FIXTURE_REVISION,
     FIXTURE_TAG,
@@ -382,3 +385,32 @@ def test_manifest_failures_are_data_validation_errors() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# An error text far longer than the decoder ever produces: orjson never embeds
+# the document in its message, so the bound has to be tripped by substituting
+# the error rather than by feeding a large payload.
+_ENORMOUS_ERROR_CHARS = 200_000
+# One bounded echo beside prose; derived from the echo cap because the fix
+# routes through it.
+_MAX_DECODE_REFUSAL_CHARS = 4 * MAX_ECHO_CHARS
+
+
+def test_a_json_decode_refusal_bounds_the_error_text_on_both_exits() -> None:
+    """The decoder's error text is third-party text, and reaches the log bounded."""
+    loud = orjson.JSONDecodeError("m" * _ENORMOUS_ERROR_CHARS, "{", 0)
+    logged: list[str] = []
+    sink_id = manifest_module.logger.add(
+        logged.append, level="ERROR", format="{message}"
+    )
+    try:
+        with (
+            patch.object(manifest_module.orjson, "loads", side_effect=loud),
+            pytest.raises(SnapshotManifestError, match="not valid JSON") as raised,
+        ):
+            parse_manifest(b"{")
+    finally:
+        manifest_module.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_DECODE_REFUSAL_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_DECODE_REFUSAL_CHARS

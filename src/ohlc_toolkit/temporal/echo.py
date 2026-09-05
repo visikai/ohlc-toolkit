@@ -20,7 +20,7 @@ logs ``type(value).__name__`` instead, matching what its exception says,
 because the type name is the whole diagnostic and the value adds nothing
 a bound would then have to trim. Three kinds of value need no bound, and
 they are the only ones echoed without one: first-party literals, keys
-and counts; numbers a guard has already checked the type of; and values
+and counts; numbers a guard has already validated; and values
 bounded where they were made -- a manifest asset name the parser caps in
 length before a record can exist, or a column name this package composes
 from an enum member and a canonical duration label. The rule is enforced

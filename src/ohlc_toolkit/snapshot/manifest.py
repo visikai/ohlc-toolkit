@@ -266,7 +266,7 @@ def _decode(raw: bytes) -> Mapping[str, Any]:
     try:
         payload = orjson.loads(raw)
     except orjson.JSONDecodeError as error:
-        logger.error("Manifest payload is not valid JSON: {}", error)
+        logger.error("Manifest payload is not valid JSON: {}", bounded_echo(error))
         raise SnapshotManifestError("Manifest payload is not valid JSON.") from error
     if not isinstance(payload, dict):
         logger.error(
