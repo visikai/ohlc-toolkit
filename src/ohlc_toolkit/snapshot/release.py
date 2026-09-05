@@ -139,9 +139,9 @@ class SnapshotRelease:
         """
         if not is_plain_asset_name(asset_name):
             logger.warning(
-                "Rejecting asset name {} for release {!r}.",
+                "Rejecting asset name {} for release {}.",
                 bounded_echo(asset_name),
-                self.tag,
+                bounded_echo(self.tag),
             )
             raise ConfigError(
                 f"Release asset name must be a plain filename, got "

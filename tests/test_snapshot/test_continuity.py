@@ -465,3 +465,69 @@ def test_an_absent_asset_refusal_bounds_the_release_tag_on_both_exits(
     assert len(str(raised.value)) < _MAX_REFUSAL_CHARS
     assert logged, "the refusal logs before it raises; nothing was captured"
     assert len(logged[-1]) < _MAX_REFUSAL_CHARS
+
+
+# One bounded tag echo beside prose, or a tag beside a path; derived from the
+# echo cap because every fix here routes through it.
+_MAX_TAG_LINE_CHARS = 4 * MAX_ECHO_CHARS
+# The manifest's tag is checked non-empty and nothing more: no pattern, no
+# length. It is the same value the release-tag pin above bounds, read from
+# the other side of the seam.
+_LOUD_TAG = "t" * _ENORMOUS_TAG_CHARS
+# Enough long directory names, nested, that the asset path far exceeds the
+# echo cap while every component stays within the filesystem's own limit.
+_DEEP_PATH_COMPONENTS = 14
+_DEEP_COMPONENT_CHARS = 250
+
+
+def _deep_directory(root: Path) -> Path:
+    """Nest long directory names until the path dwarfs any bounded echo."""
+    return root.joinpath(*["p" * _DEEP_COMPONENT_CHARS] * _DEEP_PATH_COMPONENTS)
+
+
+def test_a_continuity_refusal_bounds_the_manifest_tag_on_both_exits() -> None:
+    """The tag is quoted in the refusal's message and its error log, bounded in both."""
+    manifest = replace(_manifest(), tag=_LOUD_TAG)
+    short = build_history_frame(history_timestamps(rows=_SHORTENED_ROWS))
+    logged: list[str] = []
+    sink_id = continuity.logger.add(logged.append, level="ERROR", format="{message}")
+    try:
+        with pytest.raises(SnapshotContinuityError) as raised:
+            verify_snapshot_continuity(short, manifest)
+    finally:
+        continuity.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_TAG_LINE_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_TAG_LINE_CHARS
+
+
+def test_skipping_the_bounds_check_bounds_the_manifest_tag_in_its_warning() -> None:
+    """An unreadable timestamp column is reported with the tag bounded as well."""
+    manifest = replace(_manifest(), tag=_LOUD_TAG)
+    logged: list[str] = []
+    sink_id = continuity.logger.add(logged.append, level="WARNING", format="{message}")
+    try:
+        with pytest.raises(SnapshotContinuityError):
+            verify_snapshot_continuity(build_history_frame([]), manifest)
+    finally:
+        continuity.logger.remove(sink_id)
+    skipped = [line for line in logged if line.startswith("Skipping")]
+    assert skipped, "an empty frame skips the bounds check; nothing was logged"
+    assert all(len(line) < _MAX_TAG_LINE_CHARS for line in skipped)
+
+
+def test_a_verified_read_bounds_the_tag_and_the_path_in_its_log_line(
+    tmp_path: Path,
+) -> None:
+    """The success line names the snapshot and the file it came from, both bounded."""
+    result = _fetch(build_default_assets(), _deep_directory(tmp_path))
+    loud = replace(result, manifest=replace(result.manifest, tag=_LOUD_TAG))
+    logged: list[str] = []
+    sink_id = continuity.logger.add(logged.append, level="INFO", format="{message}")
+    try:
+        read_snapshot_frame(loud, asset_name=HISTORY_ASSET)
+    finally:
+        continuity.logger.remove(sink_id)
+    verified = [line for line in logged if line.startswith("Verified")]
+    assert verified, "a successful read logs what it verified; nothing was captured"
+    assert all(len(line) < _MAX_TAG_LINE_CHARS for line in verified)

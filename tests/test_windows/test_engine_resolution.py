@@ -22,7 +22,7 @@ from ohlc_toolkit.source.profile import (
     ColumnKind,
     SourceProfile,
 )
-from ohlc_toolkit.temporal import ConfigError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError
 from ohlc_toolkit.windows import (
     ExplicitRange,
     Materialization,
@@ -30,6 +30,7 @@ from ohlc_toolkit.windows import (
     compute_reference_windows,
     compute_windows,
     engine,
+    resolution,
 )
 from tests.test_windows.factories import SourceRow, frame_from_rows, profile_for
 
@@ -353,3 +354,68 @@ def test_an_enormous_emit_grid_is_materialized_but_never_quietly(
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# A profile or column name far longer than any real one. Neither is
+# length-checked anywhere, so the column refusals must quote them bounded.
+_ENORMOUS_NAME_CHARS = 200_000
+_LOUD_NAME = "n" * _ENORMOUS_NAME_CHARS
+# One bounded name beside a short list of bounded first-party column names;
+# derived from the echo cap because the fix routes through it.
+_MAX_COLUMN_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
+_OHLCV_SCHEMA = dict.fromkeys(
+    ("open", "high", "low", "close", "volume"), ColumnKind.FLOATING
+)
+
+
+def _loud_profile(**overrides: object) -> SourceProfile:
+    """Build a valid OHLCV profile whose name would swamp a log line if echoed."""
+    fields: dict[str, object] = {
+        "name": _LOUD_NAME,
+        "timestamp_column": "timestamp",
+        "availability": Availability.CLOSE_TIME,
+        "raw_schema": {"timestamp": ColumnKind.INTEGER, **_OHLCV_SCHEMA},
+        "cadence": "1m",
+    }
+    fields.update(overrides)
+    return SourceProfile.create(**fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("profile", "frame"),
+    [
+        pytest.param(
+            _loud_profile(raw_schema={"timestamp": ColumnKind.INTEGER}),
+            frame_from_rows(_MINUTE_CANDLES),
+            id="undeclared columns",
+        ),
+        pytest.param(
+            _loud_profile(),
+            frame_from_rows(_MINUTE_CANDLES).drop("volume"),
+            id="absent column",
+        ),
+        pytest.param(
+            _loud_profile(
+                name="quiet",
+                timestamp_column=_LOUD_NAME,
+                raw_schema={_LOUD_NAME: ColumnKind.INTEGER, **_OHLCV_SCHEMA},
+            ),
+            frame_from_rows(_MINUTE_CANDLES),
+            id="absent loud timestamp column",
+        ),
+    ],
+)
+def test_a_column_refusal_bounds_the_names_it_quotes_on_both_exits(
+    profile: SourceProfile, frame: pl.DataFrame
+) -> None:
+    """Neither the warning nor the message carries a whole profile or column name."""
+    logged: list[str] = []
+    sink_id = resolution.logger.add(logged.append, level="WARNING", format="{message}")
+    try:
+        with pytest.raises(ConfigError) as raised:
+            resolution.require_source_columns(frame, profile)
+    finally:
+        resolution.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_COLUMN_REFUSAL_CHARS
+    assert logged, "the refusal warns before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_COLUMN_REFUSAL_CHARS

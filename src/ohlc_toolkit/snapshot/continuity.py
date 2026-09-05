@@ -241,10 +241,10 @@ def read_snapshot_frame(
     report = _build_report(read.frame, read.report, result.manifest, profile)
     _enforce(report, result.manifest)
     logger.info(
-        "Verified {} row(s) of snapshot {!r} from {}.",
+        "Verified {} row(s) of snapshot {} from {}.",
         report.rows_checked,
-        result.manifest.tag,
-        asset.path,
+        bounded_echo(result.manifest.tag),
+        bounded_echo(asset.path),
     )
     return read.frame
 
@@ -254,13 +254,13 @@ def _enforce(report: ContinuityReport, manifest: SnapshotManifest) -> None:
     if report.passed:
         return
     message = (
-        f"Snapshot {manifest.tag!r} failed continuity with "
+        f"Snapshot {bounded_echo(manifest.tag)} failed continuity with "
         f"{len(report.seam_mismatches)} seam mismatch(es) and "
         f"{len(report.validation.findings)} grid finding(s)."
     )
     logger.error(
-        "Snapshot {!r} failed continuity: {} seam mismatch(es) {}, {} grid finding(s).",
-        manifest.tag,
+        "Snapshot {} failed continuity: {} seam mismatch(es) {}, {} grid finding(s).",
+        bounded_echo(manifest.tag),
         len(report.seam_mismatches),
         [mismatch.kind.value for mismatch in report.seam_mismatches],
         len(report.validation.findings),
@@ -299,9 +299,9 @@ def _check_seams(
 
     if not _bounds_are_readable(frame, profile):
         logger.warning(
-            "Skipping the first/last timestamp checks for snapshot {!r}: the "
+            "Skipping the first/last timestamp checks for snapshot {}: the "
             "timestamp column is empty, missing, or holds a null.",
-            manifest.tag,
+            bounded_echo(manifest.tag),
         )
         return mismatches
 
