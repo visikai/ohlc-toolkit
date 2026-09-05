@@ -5,7 +5,9 @@ import os
 import tempfile
 import threading
 import unittest
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar, cast
 
 import polars as pl
 import pytest
@@ -249,9 +251,35 @@ _ROW_CAP = 6
 # archive to keep so that opening it succeeds and reading it does not.
 _GZIP_MAGIC_ONLY = b"\x1f\x8b"
 _TRUNCATED_BYTES = 12
-# Long enough that a writer which never returns fails the test rather than
-# wedging the run.
-_WRITER_TIMEOUT_SECONDS = 20
+# Long enough that a slow machine is not mistaken for a block, short enough
+# that a test which blocks FAILS instead of wedging the run. A guard that
+# opened a stream would hang forever rather than return a wrong answer, so
+# without this the mutation that removes the regular-file check stalls the
+# suite instead of failing it.
+_BLOCK_TIMEOUT_SECONDS = 20
+# PEP 695 syntax would read better, but this package supports 3.11.
+_Returned = TypeVar("_Returned")
+
+
+def _without_blocking(call: Callable[[], _Returned]) -> _Returned:
+    """Run ``call`` on a daemon thread and fail if it does not finish in time."""
+    outcome: list[object] = []
+
+    def collect() -> None:
+        try:
+            outcome.append(call())
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = threading.Thread(target=collect, daemon=True)
+    worker.start()
+    worker.join(_BLOCK_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        pytest.fail(f"the call did not return within {_BLOCK_TIMEOUT_SECONDS}s")
+    result = outcome[0]
+    if isinstance(result, BaseException):
+        raise result
+    return cast("_Returned", result)
 
 
 def _write_bytes(directory: Path, name: str, payload: bytes, *, gzipped: bool) -> Path:
@@ -460,14 +488,12 @@ def test_a_stream_is_read_rather_than_probed(tmp_path: Path) -> None:
         with fifo.open("wb") as handle:
             handle.write(payload)
 
-    writer = threading.Thread(target=feed, daemon=True)
-    writer.start()
-    try:
-        result = read_source_csv(
+    threading.Thread(target=feed, daemon=True).start()
+    result = _without_blocking(
+        lambda: read_source_csv(
             fifo, _PROFILE, mode=ValidationMode.REPORT, max_rows=_ROW_CAP
         )
-    finally:
-        writer.join(timeout=_WRITER_TIMEOUT_SECONDS)
+    )
 
     assert result.frame.height == 1
 
@@ -482,6 +508,6 @@ def test_the_guard_does_not_look_at_anything_but_a_regular_file(
     empty.write_bytes(_EMPTY_PAYLOAD)
 
     assert reader_module._holds_no_data(empty) is True
-    assert reader_module._holds_no_data(fifo) is False
+    assert _without_blocking(lambda: reader_module._holds_no_data(fifo)) is False
     assert reader_module._holds_no_data(tmp_path) is False
     assert reader_module._holds_no_data(tmp_path / "absent.csv") is False
