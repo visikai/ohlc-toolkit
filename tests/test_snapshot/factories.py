@@ -174,9 +174,14 @@ def build_default_assets() -> dict[str, bytes]:
     return {
         HISTORY_ASSET: gzip_bytes(build_history_csv(timestamps)),
         PARQUET_ASSET: b"not really parquet, and no check here reads it as such",
+        # Six columns, in the published file's own order, so a reader that
+        # only tolerates the four it needs is exercised offline rather than
+        # only by the network lane.
         PROVENANCE_ASSET: (
-            b"start_timestamp,end_timestamp,duration_minutes,flag\n"
-            b"1362229320,1362233460,69,suspected_outage\n"
+            b"start_timestamp,end_timestamp,duration_minutes,flag,"
+            b"price_jump,reference\n"
+            b"1362229320,1362233460,69,suspected_outage,0.12,"
+            b"zero_volume>=60m\n"
         ),
     }
 

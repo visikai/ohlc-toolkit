@@ -326,7 +326,10 @@ def test_the_fixture_sidecar_reads_and_annotates_hour_windows_as_worked_by_hand(
     assert sidecar.row(0, named=True)["start_timestamp"] == _SIDECAR_START
     assert sidecar.row(0, named=True)["end_timestamp"] == _SIDECAR_END
     assert sidecar.row(0, named=True)["flag"] == _SIDECAR_FLAG
-    assert "duration_minutes" in sidecar.columns
+    # The fixture carries all six published columns, so the reader's
+    # tolerance of the ones it never reads is exercised here rather than
+    # only in the network lane.
+    assert sidecar.columns == _PUBLISHED_SIDECAR_COLUMNS
     annotated = annotate_windows(_hour_windows(), sidecar)
     assert annotated.get_column("close_time").to_list() == [
         _HOUR_GRID_BEFORE + (i + 1) * _HOUR_SECONDS for i in range(4)
@@ -636,4 +639,75 @@ def test_the_published_sidecar_reads_and_annotates_hour_windows(tmp_path: Path) 
     annotated = annotate_windows(_hour_windows(), sidecar)
     assert annotated.get_column("annotation_overlap_seconds").to_list() == (
         _EXPECTED_HOURLY_OVERLAP
+    )
+
+
+# A window whose close time does not exceed its open time. The bounds guard
+# checks presence and dtype, not order, so such a frame reaches the
+# arithmetic; without the clamp its overlap comes back negative.
+_MALFORMED_BOUNDS = (
+    ("zero length", 0),
+    ("inverted", -_ONE_MINUTE),
+)
+_COVERING_MARGIN = 600
+
+
+@pytest.mark.parametrize(
+    ("label", "span"), _MALFORMED_BOUNDS, ids=[c[0] for c in _MALFORMED_BOUNDS]
+)
+def test_a_window_with_no_positive_length_reports_no_overlap(
+    label: str, span: int
+) -> None:
+    """The clamp is the only thing standing between a malformed frame and a negative count.
+
+    `annotate_windows` refuses a frame missing its bounds or carrying them
+    as the wrong dtype, and says nothing about their order, so a window
+    whose close time does not exceed its open time is aggregated. The
+    seconds are clamped at zero for it. Removing the clamp makes the
+    inverted case report a negative overlap, which is not a quantity of
+    seconds at all.
+    """
+    frame = pl.DataFrame(
+        {"open_time": [_TIME_BASE], "close_time": [_TIME_BASE + span]},
+        schema={"open_time": pl.Int64, "close_time": pl.Int64},
+    )
+    # Starts well before either window's open and ends well after, so the
+    # half-open predicate holds for both cases and the seconds are what is
+    # under test rather than whether anything overlapped at all.
+    covering = _annotations(
+        (_TIME_BASE - _COVERING_MARGIN, _TIME_BASE + _COVERING_MARGIN, "x")
+    )
+
+    annotated = annotate_windows(frame, covering)
+
+    assert annotated.get_column("annotation_overlap_seconds").to_list() == [0]
+    # The flags are decided by the same predicate and are unaffected: the
+    # window still touches the interval by the half-open test.
+    assert annotated.get_column("annotation_flags").to_list() == [["x"]]
+
+
+def test_a_directory_is_refused_as_what_it_is(tmp_path: Path) -> None:
+    """Saying a directory does not exist sends a caller looking for the wrong thing."""
+    directory = tmp_path / "sidecar.csv"
+    directory.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="is not a regular file"):
+        read_annotations(directory)
+
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        read_annotations(tmp_path / "absent.csv")
+
+
+def test_a_repeated_header_resolves_to_the_first_column(tmp_path: Path) -> None:
+    """Recorded because it is the reader underneath deciding, not this module."""
+    path = tmp_path / "sidecar.csv"
+    path.write_text(
+        "start_timestamp,start_timestamp,end_timestamp,flag\n100,999,200,a\n"
+    )
+
+    sidecar = read_annotations(path)
+
+    assert sidecar.get_column("start_timestamp").to_list() == [100]
+    assert any(
+        name.startswith("start_timestamp_duplicated") for name in sidecar.columns
     )

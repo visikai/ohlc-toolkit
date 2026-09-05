@@ -172,13 +172,21 @@ def annotate_windows(
         columns: Which columns of ``annotations`` hold the start, the end
             and the flag.
         prefix: The stem of the two appended columns,
-            ``<prefix>_flags`` and ``<prefix>_overlap_seconds``.
+            ``<prefix>_flags`` and ``<prefix>_overlap_seconds``. Only
+            emptiness and type are checked, not shape: naming a column is
+            the caller's business, and the one failure that would matter
+            -- a stem whose columns collide with one the frame already
+            carries -- is refused separately whatever the stem looks like.
 
     Returns:
         ``frame`` with ``<prefix>_flags`` (List of String: the distinct
         overlapping flags, sorted, empty when none) and
         ``<prefix>_overlap_seconds`` (Int64: seconds of the window inside
-        the union of all intervals) appended.
+        the union of all intervals) appended. The seconds are clamped at
+        zero, which matters only for a malformed frame: a window whose
+        ``close_time`` does not exceed its ``open_time`` has negative
+        length, and this step reports no overlap for it rather than a
+        negative one.
 
     Raises:
         ConfigError: If ``frame`` is not a DataFrame or lacks an Int64
@@ -197,8 +205,14 @@ def annotate_windows(
     flags_column, overlap_column = _output_columns(prefix)
     _require_absent_columns(frame, (flags_column, overlap_column))
 
-    open_time = pl.col("open_time")
-    close_time = pl.col("close_time")
+    open_name, close_name = _WINDOW_BOUND_COLUMNS
+    open_time = pl.col(open_name)
+    close_time = pl.col(close_name)
+    # The casts are not re-validation: `_require_annotations` has already
+    # refused any other dtype, so these convert polars scalars to the
+    # Python ints and strs that go into `pl.lit`, rather than checking
+    # anything. They are cheap -- one pass over a sidecar's dozens of rows,
+    # not over the frame.
     rows = [
         (int(start), int(end), str(flag)) for start, end, flag in intervals.iter_rows()
     ]
@@ -252,7 +266,23 @@ def read_annotations(
     as :func:`~ohlc_toolkit.source.reader.read_source_csv` promises of a
     source file. The three ``columns`` names are read as Int64, Int64 and
     String and held to the same rules :func:`annotate_windows` applies,
-    so a file this returns is one that function accepts.
+    so a file this returns is one that function accepts. Any further
+    columns the file carries -- the published Bitstamp sidecar has a
+    duration and a price jump and a reference -- are kept untyped and
+    unchecked, because this step never reads them and typing them here
+    would invent a contract their publisher owns.
+
+    A file whose header repeats a name is read: polars renames the later
+    copy, so a declared name resolves to the FIRST column carrying it and
+    the rest come back under generated names. That is a property of the
+    reader underneath rather than a decision here, and it is recorded so
+    it is not mistaken for one.
+
+    A missing path and a path that is not a regular file both raise
+    ``FileNotFoundError``, naming which it is. This differs from the
+    source reader, which lets its own read raise and re-raises bare: this
+    function checks first because the check is what lets the message name
+    the file in this package's own bounded words.
 
     Args:
         path: The CSV file, with a header row.
@@ -264,7 +294,12 @@ def read_annotations(
             refused whole rather than truncated, since a silently
             shortened sidecar would be a silent drop on ingest; reading
             stops one row past the bound, so an over-long file is never
-            fully resident.
+            fully resident. That refusal is the one place this parameter
+            differs from its namesake on
+            :func:`~ohlc_toolkit.source.reader.read_source_csv`, which
+            TRUNCATES to the bound and leaves a caller's own seam check to
+            notice; here nothing downstream would notice, so the file is
+            refused instead.
 
     Returns:
         The sidecar as a frame, in file order.
@@ -282,9 +317,12 @@ def read_annotations(
     cap = _require_row_cap(max_rows)
     resolved = Path(path)
     if not resolved.is_file():
-        logger.error("Annotation file {} does not exist.", bounded_echo(str(resolved)))
+        # Say which it is. A directory at this path is not "missing", and a
+        # reader that says so sends the caller looking for the wrong thing.
+        problem = "is not a regular file" if resolved.exists() else "does not exist"
+        logger.error("Annotation file {} {}.", bounded_echo(str(resolved)), problem)
         raise FileNotFoundError(
-            f"Annotation file {bounded_echo(str(resolved))} does not exist."
+            f"Annotation file {bounded_echo(str(resolved))} {problem}."
         )
     logger.debug("Reading annotations from {}.", bounded_echo(str(resolved)))
     declared = {
@@ -498,9 +536,13 @@ def _touches(start: int, end: int) -> pl.Expr:
     """Hold where a window ``[open_time, close_time)`` overlaps ``[start, end)``.
 
     Half-open on both sides: an interval ending exactly at the open, or
-    starting exactly at the close, touches nothing.
+    starting exactly at the close, touches nothing. The two column names
+    come from ``_WINDOW_BOUND_COLUMNS`` rather than being spelled again
+    here, so the names this module checks for and the names it reads are
+    one statement.
     """
-    return (pl.col("open_time") < end) & (pl.col("close_time") > start)
+    open_name, close_name = _WINDOW_BOUND_COLUMNS
+    return (pl.col(open_name) < end) & (pl.col(close_name) > start)
 
 
 def _merged(rows: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
