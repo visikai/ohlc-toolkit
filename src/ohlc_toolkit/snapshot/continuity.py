@@ -38,7 +38,13 @@ be making on its own.
 
 The provenance CSV is a sparse outage table -- start, end, duration,
 flag, price jump, reference -- on an entirely different schema, which no
-source profile here describes at all.
+SOURCE PROFILE describes: it is not a candle grid and
+:func:`~ohlc_toolkit.source.validation.validate_source_frame` has nothing
+to say about it. It does have a reader of its own --
+:func:`ohlc_toolkit.windows.read_annotations` types and checks its three
+interval columns -- which nothing here calls, because joining annotations
+onto windows is a separate step over the aggregator's output rather than
+part of verifying a fetch.
 """
 
 from collections.abc import Sequence

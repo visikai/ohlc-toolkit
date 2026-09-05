@@ -29,6 +29,9 @@ against their tags, and are not restated here.
 
 ### Fixed
 
+- `windows.read_annotations` said a path "does not exist" when it was a
+  directory. It now says which it is, so a caller is not sent looking for a
+  missing file that is present.
 - A capped read of a file holding no data aborted the interpreter instead of
   refusing. `source.read_source_csv` passes a row cap through to polars, and
   at polars 1.44.1 an empty gzip archive read with any `n_rows` -- zero
