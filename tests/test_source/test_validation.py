@@ -583,3 +583,138 @@ class TestStrictRefusalEchoesTheProfileNameBounded(unittest.TestCase):
         self.assertLess(len(str(caught.exception)), _MAX_FINDING_MESSAGE_CHARS)
         self.assertTrue(logged, "the refusal logs before it raises")
         self.assertLess(len(logged[-1]), _MAX_FINDING_MESSAGE_CHARS)
+
+
+class TestNonFiniteValuesBothModes(unittest.TestCase):
+    """Test cases for the non-finite-value check on declared floating columns.
+
+    A NaN used to pass validation completely clean: the null check counts
+    nulls, and a NaN is not a null. It is a present cell that is not a
+    number, and unlike a null it propagates -- one NaN price contaminates
+    every window that averages it, and announces itself nowhere.
+    """
+
+    def setUp(self):
+        """Build a clean five-row grid shared by every test in this class."""
+        self.frame = build_clean_frame(
+            start=0, cadence_seconds=_CADENCE_SECONDS, length=5
+        )
+
+    def _with_open(self, values: list[float]) -> pl.DataFrame:
+        """Replace the open column with the given values."""
+        return self.frame.with_columns(pl.Series("open", values, dtype=pl.Float64))
+
+    def test_a_nan_price_is_reported_rather_than_passing_clean(self):
+        """The defect this check exists for: a NaN open used to validate clean."""
+        corrupted = self._with_open([1.0, float("nan"), 3.0, 4.0, 5.0])
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.NON_FINITE_VALUES)
+        self.assertFalse(report.passed)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].count, 1)
+        self.assertIn("open", findings[0].message)
+
+    def test_a_nan_price_raises_in_strict_mode(self):
+        """Strict validation refuses a NaN instead of handing the frame over."""
+        corrupted = self._with_open([1.0, float("nan"), 3.0, 4.0, 5.0])
+        with self.assertRaises(DataValidationError):
+            validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.STRICT)
+
+    def test_both_infinities_are_reported_like_a_nan(self):
+        """Infinity is the same question as NaN and gets the same answer."""
+        for value in (float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                corrupted = self._with_open([1.0, value, 3.0, 4.0, 5.0])
+                report = validate_source_frame(
+                    corrupted, _PROFILE, mode=ValidationMode.REPORT
+                )
+                findings = _find(report, FindingKind.NON_FINITE_VALUES)
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0].count, 1)
+
+    def test_a_non_finite_volume_is_reported_too(self):
+        """The rule covers every price or volume column, not just prices."""
+        corrupted = self.frame.with_columns(
+            pl.Series("volume", [1.0, 1.0, float("nan"), 1.0, 1.0], dtype=pl.Float64)
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.NON_FINITE_VALUES)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("volume", findings[0].message)
+
+    def test_a_nan_is_not_reported_as_a_null(self):
+        """The two kinds stay distinct: a report conflating them misstates the data."""
+        corrupted = self._with_open([1.0, float("nan"), 3.0, 4.0, 5.0])
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(_find(report, FindingKind.NULL_VALUES), [])
+        self.assertEqual(len(_find(report, FindingKind.NON_FINITE_VALUES)), 1)
+
+    def test_a_null_is_not_reported_as_non_finite(self):
+        """And the other way: a null is an absent cell, not a present non-number."""
+        corrupted = self._with_open([1.0, None, 3.0, 4.0, 5.0])  # type: ignore[list-item]
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])
+        self.assertEqual(len(_find(report, FindingKind.NULL_VALUES)), 1)
+
+    def test_every_non_finite_cell_is_counted_across_columns(self):
+        """The count is cells, not rows or columns, and each column is named once."""
+        corrupted = self.frame.with_columns(
+            pl.Series("open", [float("nan"), 2.0, float("inf"), 4.0, 5.0]),
+            pl.Series("close", [1.0, float("-inf"), 3.0, 4.0, 5.0]),
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.NON_FINITE_VALUES)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].count, 3)
+        self.assertIn("open (2)", findings[0].message)
+        self.assertIn("close (1)", findings[0].message)
+
+    def test_a_non_finite_value_does_not_gate_the_row_level_checks(self):
+        """A bad price says nothing about the timeline, which is still checked."""
+        corrupted = _drop_rows(self._with_open([1.0, float("nan"), 3.0, 4.0, 5.0]), {2})
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(len(_find(report, FindingKind.NON_FINITE_VALUES)), 1)
+        self.assertEqual(len(_find(report, FindingKind.GAP)), 1)
+
+    def test_an_integer_column_is_not_asked_whether_it_is_finite(self):
+        """Only declared floating columns are read; an integer cannot hold a NaN."""
+        report = validate_source_frame(self.frame, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertTrue(report.passed)
+
+    def test_a_floating_column_that_arrived_as_an_integer_is_a_schema_finding_only(
+        self,
+    ):
+        """Asking a non-float series whether it is finite would raise; the schema check owns it."""
+        corrupted = self.frame.with_columns(
+            pl.Series("open", [1, 2, 3, 4, 5], dtype=pl.Int64)
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(len(_find(report, FindingKind.SCHEMA)), 1)
+        self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])
+
+    def test_a_declared_column_the_frame_lacks_is_not_read(self):
+        """A missing column is the schema check's finding, not this one's."""
+        report = validate_source_frame(
+            self.frame.drop("open"), _PROFILE, mode=ValidationMode.REPORT
+        )
+        self.assertEqual(len(_find(report, FindingKind.SCHEMA)), 1)
+        self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])
+
+    def test_the_finding_message_stays_bounded_for_a_loud_column_name(self):
+        """Column names are the profile's, and nothing caps their length."""
+        loud = "n" * _PATHOLOGICAL_NAME_CHARS
+        profile = SourceProfile.create(
+            name="synthetic-1m",
+            cadence="1m",
+            timestamp_column="timestamp",
+            availability=Availability.CLOSE_TIME,
+            raw_schema={"timestamp": ColumnKind.INTEGER, loud: ColumnKind.FLOATING},
+        )
+        corrupted = pl.DataFrame(
+            {"timestamp": [0, 60], loud: [1.0, float("nan")]},
+            schema={"timestamp": pl.Int64, loud: pl.Float64},
+        )
+        report = validate_source_frame(corrupted, profile, mode=ValidationMode.REPORT)
+        findings = _find(report, FindingKind.NON_FINITE_VALUES)
+        self.assertEqual(len(findings), 1)
+        self.assertLess(len(findings[0].message), _MAX_FINDING_MESSAGE_CHARS)

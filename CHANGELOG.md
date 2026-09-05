@@ -21,6 +21,15 @@ against their tags, and are not restated here.
   count, so a sweep's figures can be reproduced by anyone. It reports; it
   does not gate.
 
+- `source.FindingKind.NON_FINITE_VALUES`: a NaN or either infinity in a
+  declared price or volume column is now a validation finding of its own
+  kind. It used to pass validation completely clean -- the null check counts
+  nulls, and a NaN is not a null -- while propagating through every window
+  that averaged it. Strict validation refuses it; report-only reports it. It
+  is kept distinct from `NULL_VALUES` because a null is an absent cell and a
+  NaN is a present cell that is not a number, and nothing is coerced: making
+  a NaN into a null is a repair this validator does not perform.
+
 ### Changed
 
 - Every echo of a value the package did not choose -- a name, a tag, a
