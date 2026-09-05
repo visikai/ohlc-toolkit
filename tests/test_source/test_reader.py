@@ -323,7 +323,7 @@ def test_a_capped_read_of_a_real_file_is_untouched_by_the_guard(
 def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
     tmp_path: Path, gzipped: bool
 ) -> None:
-    """This package refuses an empty file itself, whatever polars would do with it.
+    """An empty file is refused here, whatever polars would do with it.
 
     Only the gzip shape panics today, so for a plain file polars raises the
     same class unaided and the exception alone cannot say who refused. The
