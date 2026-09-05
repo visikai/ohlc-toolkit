@@ -744,3 +744,19 @@ class TestNonFiniteValuesBothModes(unittest.TestCase):
         report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
         self.assertEqual(len(_find(report, FindingKind.SCHEMA)), 1)
         self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])
+
+    def test_a_floating_column_that_arrived_as_a_decimal_is_a_schema_finding_only(self):
+        """Decimal is why the guard tests `is_float`, not `is_numeric`.
+
+        A Decimal column reports itself numeric and still raises on
+        `is_finite`, so a guard written as `is_numeric()` would let it
+        through and turn a reported schema finding into an exception. It is
+        the one dtype that tells the two spellings apart.
+        """
+        corrupted = self.frame.with_columns(
+            pl.Series("open", [1, 2, 3, 4, 5], dtype=pl.Decimal(10, 2))
+        )
+        self.assertTrue(corrupted.get_column("open").dtype.is_numeric())
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(len(_find(report, FindingKind.SCHEMA)), 1)
+        self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])
