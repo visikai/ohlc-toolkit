@@ -216,10 +216,13 @@ for finding in report.findings:
 Finding(kind=<FindingKind.GAP: 'gap'>, message='1 missing candle(s) expected in [1786924920, 1786924980)', count=1, sample_timestamps=(1786924920, 1786924980))
 ```
 
-The seven finding kinds are schema, nulls, non-increasing timestamps,
-overlapping intervals, off-phase timestamps, irregular intervals, and
-gaps. `ValidationMode.STRICT` raises `SourceValidationError` on any of
-them instead.
+The eight finding kinds are schema, nulls, non-finite values, non-increasing
+timestamps, overlapping intervals, off-phase timestamps, irregular intervals,
+and gaps. A non-finite value is a NaN or an infinity in a declared price or
+volume column; it is kept distinct from a null because a null is an absent
+cell and a NaN is a present cell that is not a number, and neither is coerced
+into the other. `ValidationMode.STRICT` raises `SourceValidationError` on any
+of them instead.
 
 ### `windows` — aggregation with an independent oracle
 

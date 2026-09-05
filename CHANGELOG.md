@@ -21,8 +21,29 @@ against their tags, and are not restated here.
   count, so a sweep's figures can be reproduced by anyone. It reports; it
   does not gate.
 
+- `source.FindingKind.NON_FINITE_VALUES`: a new finding kind, for a NaN or
+  either infinity in a declared price or volume column. It is kept distinct
+  from `NULL_VALUES` because a null is an absent cell and a NaN is a present
+  cell that is not a number, and nothing is coerced: making a NaN into a null
+  is a repair this validator does not perform.
+
 ### Changed
 
+- **Breaking.** A NaN or either infinity in a declared price or volume column
+  is now INVALID source data and is refused. It used to validate completely
+  clean -- the null check counts nulls, and a NaN is not a null -- while
+  propagating through every window that averaged it. Any frame or file that
+  relied on the old silence now fails, with no call-site change and by three
+  routes: `source.validate_source_frame` in `STRICT` mode raises
+  `SourceValidationError`; `source.read_source_csv` in `STRICT` mode does the
+  same, and note that a CSV holding the literal text `nan` or `inf` in a price
+  column parses to a non-finite float under a profile's pinned schema and is
+  therefore now refused; and `snapshot.verify_snapshot_continuity`, and so
+  `snapshot.read_snapshot_frame`, refuses a published history carrying one.
+  The two routes that take a mode return the finding instead in `REPORT`
+  mode; continuity verification has no mode and always refuses. Under the
+  style guide's rule that a breaking behavioural change belongs in a
+  documented major version, the release carrying this is a major one.
 - Every echo of a value the package did not choose -- a name, a tag, a
   path, a URL, third-party error text -- now reaches a log line or an
   error message only through `temporal.bounded_echo`; type refusals log

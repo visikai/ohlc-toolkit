@@ -9,9 +9,10 @@ O(n) in the number of rows actually present.
 
 Checks run in a fixed, deliberate order:
 
-1. Schema (missing or wrong-kind declared columns) and null-value checks
-   run first and unconditionally: every later check assumes the declared
-   columns exist, have the declared kind, and are free of nulls.
+1. Schema (missing or wrong-kind declared columns), null-value and
+   non-finite-value checks run first and unconditionally: every later
+   check assumes the declared columns exist, have the declared kind, and
+   are free of nulls.
 2. If the timestamp column itself is missing, wrong-kind, or contains any
    null, every row-level check (phase, monotonicity, overlap,
    irregular-interval, gap) is skipped outright. Running modulo or diff
@@ -32,7 +33,7 @@ from enum import Enum, unique
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.source.profile import SourceProfile
+from ohlc_toolkit.source.profile import ColumnKind, SourceProfile
 from ohlc_toolkit.temporal import DataValidationError, bounded_echo
 
 logger = get_logger(__name__)
@@ -63,10 +64,21 @@ class ValidationMode(Enum):
 
 @unique
 class FindingKind(Enum):
-    """The category of check that produced a single finding."""
+    """The category of check that produced a single finding.
+
+    ``NULL_VALUES`` and ``NON_FINITE_VALUES`` are deliberately distinct: a
+    null is an absent cell, a NaN or an infinity is a present cell that is
+    not a number, and a report conflating them would misstate what the
+    frame holds. Neither is ever coerced into the other.
+    """
 
     SCHEMA = "schema"
     NULL_VALUES = "null_values"
+    # A null is an ABSENT cell; a non-finite value (NaN or either infinity)
+    # is a PRESENT cell that is not a number. They are different facts about
+    # the data, so they are different kinds: one report covering both would
+    # misstate what is in the frame. Neither is coerced into the other.
+    NON_FINITE_VALUES = "non_finite_values"
     NON_INCREASING_TIMESTAMPS = "non_increasing_timestamps"
     OVERLAPPING_INTERVALS = "overlapping_intervals"
     OFF_PHASE = "off_phase"
@@ -81,8 +93,9 @@ class Finding:
     Attributes:
         kind: The category of check that produced this finding.
         message: A short, human-readable, already-bounded description.
-        count: The number of offending rows (or columns, for schema and
-            null-value findings; or missing candles, for a gap finding).
+        count: The number of offending rows (or columns, for schema
+            findings; cells, for null-value and non-finite-value findings;
+            or missing candles, for a gap finding).
         sample_timestamps: A capped sample of relevant Unix-second
             timestamps. For a gap finding, this is always the exact
             two-element ``(expected_start, next_open)`` boundary; for
@@ -191,6 +204,7 @@ def _run_checks(frame: pl.DataFrame, profile: SourceProfile) -> list[Finding]:
     """Run every check that applies to ``frame``, in the fixed order documented above."""
     findings = list(_check_schema(frame, profile))
     findings.extend(_check_null_values(frame, profile))
+    findings.extend(_check_non_finite_values(frame, profile))
     if not _timestamp_column_is_usable(frame, profile):
         return findings
 
@@ -309,6 +323,68 @@ def _check_null_values(frame: pl.DataFrame, profile: SourceProfile) -> list[Find
         Finding(
             kind=FindingKind.NULL_VALUES,
             message=(f"{total} null value(s) across declared column(s): {details}"),
+            count=total,
+        )
+    ]
+
+
+def _check_non_finite_values(
+    frame: pl.DataFrame, profile: SourceProfile
+) -> list[Finding]:
+    """Check every declared floating column present in the frame for NaN or infinity.
+
+    A null is an absent cell; a NaN is a present cell that is not a
+    number. They are different facts about the data, so they are
+    different findings -- one report saying "3 nulls" when the frame
+    holds three NaNs would misstate what is there. Neither is repaired:
+    coercing a NaN to a null, or to anything else, is a repair this
+    validator does not make.
+
+    Only columns DECLARED floating are read: the rule is about price and
+    volume, and a column declared integer is not one of those even when a
+    frame supplies it as a float. And only where the column ARRIVED as a
+    float, which is a real guard rather than a formality. Measured against
+    polars at the pinned version: ``is_finite`` answers for the float and
+    integer dtypes and for Null, and RAISES for every other dtype --
+    including Decimal, which reports itself numeric. So the test here is
+    ``is_float()``, not ``is_numeric()``: it admits exactly Float32 and
+    Float64, the only two dtypes that both answer and can carry a
+    non-finite value of their own. A declared-floating column that
+    arrived as anything else is already a schema finding, and scanning it
+    unguarded would turn that reported finding into an exception.
+
+    Like the null check, this reports counts per column and no sample
+    timestamps. It runs before the timestamp column has been shown
+    usable, so a sample drawn here could be taken from a timestamp column
+    that is itself corrupt -- and the column names plus counts already say
+    where to look.
+    """
+    offending = []
+    for name, kind in profile.raw_schema.items():
+        if kind is not ColumnKind.FLOATING or name not in frame.columns:
+            continue
+        column = frame.get_column(name)
+        if not column.dtype.is_float():
+            continue
+        # A null is not finite either, and is the null check's to report.
+        count = int((~column.is_finite()).fill_null(value=False).sum())
+        if count:
+            offending.append((name, count))
+    if not offending:
+        return []
+
+    total = sum(count for _, count in offending)
+    details = [
+        f"{_bounded_column_name(name)} ({count})"
+        for name, count in offending[:_MAX_SCHEMA_COLUMN_NAMES]
+    ]
+    return [
+        Finding(
+            kind=FindingKind.NON_FINITE_VALUES,
+            message=(
+                f"{total} non-finite value(s) (NaN or infinity) across declared "
+                f"column(s): {details}"
+            ),
             count=total,
         )
     ]
