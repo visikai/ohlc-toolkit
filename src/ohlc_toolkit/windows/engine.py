@@ -1,11 +1,31 @@
 """A Polars-native batch engine for windowed candle aggregation.
 
-This module computes exactly what
-:func:`~ohlc_toolkit.windows.reference.compute_reference_windows` computes
--- same rule, same schema, same total emit grid, same refusals -- without
-paying its O(rows x ticks) cost. The oracle is the specification; this is
-the implementation meant to be run. Where the two could disagree, the
-oracle is right by definition.
+On VALID input this module computes exactly what
+:func:`~ohlc_toolkit.windows.reference.compute_reference_windows`
+computes -- same rule, same schema, same total emit grid, same refusals
+-- without paying its O(rows x ticks) cost, and where the two could
+disagree the oracle is right by definition. The oracle is the
+specification; this is the implementation meant to be run.
+
+That qualifier is load-bearing rather than decorative, and it is on the
+whole claim rather than on its last clause. Neither function validates
+what it is handed, so both can be called with input the source contract
+rejects, and on two kinds of such input the equivalence fails:
+
+- A NaN price. The two return DIFFERENT answers and neither is correct.
+  polars propagates the NaN through its rolling maximum, so the engine
+  reports NaN for every window that touches the row; Python's ``max``
+  compares and keeps the accumulator, so the oracle reports whichever
+  ordinary value it had already accumulated. Infinities are NOT like
+  this: on either infinity the two agree exactly.
+- A NULL price. The oracle raises a bare ``TypeError`` from a comparison
+  and the engine does not, so "same refusals" is false there too.
+
+On the other invalid shapes the source contract rejects -- a gap, a
+duplicate, an off-phase timestamp, rows out of order -- the two agree
+exactly, and the oracle is as good a specification as it is on clean
+data. Every claim in this paragraph is pinned in
+``tests/test_windows/test_engine_equivalence.py``.
 
 Why the included candles are a contiguous slice
 -----------------------------------------------
@@ -251,10 +271,31 @@ def compute_windows(  # noqa: PLR0913 - one keyword per schedule knob
     against it rather than restating it.
 
     Precondition: ``frame`` should already have passed strict validation
-    (:func:`ohlc_toolkit.source.validation.validate_source_frame`). Like
-    the oracle, this function does not re-validate row data and will not
-    detect a gap, a duplicate, an off-phase timestamp, or a null price. It
-    enforces only its own resolution-time rules on the schedule.
+    (:func:`ohlc_toolkit.source.validation.validate_source_frame`). This
+    function does not re-validate row data. It enforces only its own
+    resolution-time rules on the schedule.
+
+    What it will not detect, each demonstrated by a test rather than
+    asserted here: a gap, a duplicate timestamp, an off-phase timestamp,
+    rows out of order, a non-finite price, and a null price. Every one of
+    those is aggregated as if it were ordinary data.
+
+    The oracle DETECTS none of them either, with one exception: on a null
+    it raises a bare ``TypeError`` from comparing ``None`` rather than
+    proceeding.
+
+    Detecting alike is not the same as agreeing, and there are TWO inputs
+    on which this function and the oracle are not interchangeable. On a
+    null, the oracle raises where this one proceeds -- and this one does
+    not simply ignore the null either: it is skipped by ``high`` and
+    ``low`` and propagated into ``open`` and ``close``. On a NaN, both
+    proceed and return different answers, and neither is correct.
+    Infinities are not affected: there the two agree exactly.
+
+    Both asymmetries are defects of the pair rather than of either one,
+    and both are recorded rather than repaired here: adding a guard to one
+    member of the list above while the rest stay unguarded would imply a
+    protection that does not exist.
 
     The frame is never mutated, sorted in place, de-duplicated, or
     repaired. The engine sorts a copy of the columns it reads when the

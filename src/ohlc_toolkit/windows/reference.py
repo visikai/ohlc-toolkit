@@ -149,11 +149,40 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
 
     Precondition: ``frame`` should already have passed strict validation
     (:func:`ohlc_toolkit.source.validation.validate_source_frame`). This
-    function does not re-validate row data -- it will not detect a gap, a
-    duplicate, an off-phase timestamp, or a null price -- because
-    re-implementing those checks here would mean a second, divergent
-    definition of a valid frame. It does enforce its own resolution-time
-    rules on the schedule, listed under Raises below.
+    function does not re-validate row data, because re-implementing those
+    checks here would mean a second, divergent definition of a valid
+    frame. It does enforce its own resolution-time rules on the schedule,
+    listed under Raises below.
+
+    What it will not detect, each demonstrated by a test rather than
+    asserted here: a gap, a duplicate timestamp, an off-phase timestamp,
+    rows out of order, and a non-finite price. Each is aggregated as if it
+    were ordinary data.
+
+    Not detecting them is not the same as agreeing with
+    :func:`~ohlc_toolkit.windows.engine.compute_windows` about them. On
+    TWO of those shapes the two are not interchangeable, and a caller
+    reading this as the normative contract needs both:
+
+    - A NULL price. This function RAISES ``TypeError`` on it, out of
+      comparing ``None`` with a float while folding the maximum -- neither
+      a refusal in this package's taxonomy nor a result -- and the engine
+      does not: it skips the null in ``high`` and ``low`` and carries it
+      into ``open`` and ``close``.
+    - A NaN price. Both proceed and return DIFFERENT answers, and neither
+      is correct. This function's ``max`` and ``min`` compare against the
+      NaN, every such comparison is False, so the accumulator survives and
+      an ordinary value is reported; the engine's polars aggregation
+      propagates the NaN instead. Infinities are NOT like this: on either
+      infinity the two agree exactly.
+
+    On every other shape above -- a gap, a duplicate, an off-phase
+    timestamp, rows out of order -- the two agree exactly, so this
+    function remains the specification there.
+
+    Both asymmetries are recorded rather than repaired: guarding one entry
+    of the list above while the rest stay unguarded would imply a
+    protection that does not exist.
 
     The frame is never mutated, never sorted, never de-duplicated, and
     never repaired.

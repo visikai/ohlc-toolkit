@@ -46,6 +46,24 @@ against their tags, and are not restated here.
 
 ### Changed
 
+- `windows.compute_windows`'s documented equivalence with the reference
+  oracle is stated as conditional on VALID input, in both places it was
+  claimed. Neither function validates, so either can be handed a frame the
+  source contract rejects, and on two kinds of such input the equivalence
+  fails: on a NaN price the two return different answers and neither is
+  correct, and on a null price the oracle raises a bare `TypeError` while
+  the engine proceeds -- so "same refusals" was false as well. Infinities
+  are NOT affected; there the two agree exactly. On a gap, a duplicate, an
+  off-phase timestamp or rows out of order they also agree exactly.
+- Both functions' precondition lists now name every shape they do not
+  detect -- a gap, a duplicate, an off-phase timestamp, rows out of order,
+  a non-finite price -- and state the null exception rather than implying
+  the two behave alike on it. `compute_reference_windows` carries the
+  normative copy and said it "will not detect ... a null price", which its
+  own behaviour contradicts. On a null the engine skips it in `high` and
+  `low` and propagates it into `open` and `close`, so it is not simply
+  dropped either. Documentation and tests only; no behaviour changes, and
+  no guard is added to either function.
 - **Breaking.** `snapshot.read_snapshot_frame` raises `SnapshotIntegrityError`,
   not `ConfigError`, when the named asset is absent from a fetched release. That
   class already covers "an asset the release does not serve" and is what the
