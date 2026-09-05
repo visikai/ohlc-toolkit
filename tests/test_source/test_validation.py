@@ -718,3 +718,29 @@ class TestNonFiniteValuesBothModes(unittest.TestCase):
         findings = _find(report, FindingKind.NON_FINITE_VALUES)
         self.assertEqual(len(findings), 1)
         self.assertLess(len(findings[0].message), _MAX_FINDING_MESSAGE_CHARS)
+
+    def test_a_floating_column_that_arrived_as_text_does_not_crash_the_check(self):
+        """Polars raises on `is_finite` for a string column, so the dtype guard is real."""
+        corrupted = self.frame.with_columns(
+            pl.Series("open", ["1.0", "2.0", "3.0", "4.0", "5.0"], dtype=pl.String)
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(len(_find(report, FindingKind.SCHEMA)), 1)
+        self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])
+
+    def test_a_column_declared_integer_is_not_scanned_even_when_it_arrives_as_a_float(
+        self,
+    ):
+        """The rule is about price and volume columns, which is what the profile declares.
+
+        A frame handing a float -- NaN and all -- to a column the profile
+        declares integer has a schema problem, and that is what is
+        reported. Widening this check to whatever happens to arrive as a
+        float would report the same cell twice under two different names.
+        """
+        corrupted = self.frame.with_columns(
+            pl.Series("timestamp", [0.0, 60.0, float("nan"), 180.0, 240.0])
+        )
+        report = validate_source_frame(corrupted, _PROFILE, mode=ValidationMode.REPORT)
+        self.assertEqual(len(_find(report, FindingKind.SCHEMA)), 1)
+        self.assertEqual(_find(report, FindingKind.NON_FINITE_VALUES), [])

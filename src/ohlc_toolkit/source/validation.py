@@ -329,11 +329,14 @@ def _check_non_finite_values(
     coercing a NaN to a null, or to anything else, is a repair this
     validator does not make.
 
-    Only FLOATING columns are read, because an integer column cannot hold
-    a non-finite value, and only where the column ARRIVED as a float: a
-    declared-floating column that came in as something else is already a
-    schema finding, and asking a non-float series whether it is finite
-    raises rather than answering.
+    Only columns DECLARED floating are read: the rule is about price and
+    volume, and a column declared integer is not one of those even when a
+    frame supplies it as a float. And only where the column ARRIVED as a
+    float, which is a real guard rather than a formality -- a
+    declared-floating column that came in as text or booleans is already a
+    schema finding, and polars answers ``is_finite`` for any numeric dtype
+    but RAISES on a string, a boolean or a struct, so scanning one
+    unguarded would turn a reported schema finding into an exception.
 
     Like the null check, this reports counts per column and no sample
     timestamps. It runs before the timestamp column has been shown
