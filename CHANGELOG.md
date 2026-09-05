@@ -49,6 +49,15 @@ against their tags, and are not restated here.
 
 ### Changed
 
+- **The declared floors for `orjson` and `requests` are raised**, to
+  `>=3.11.6` and `>=2.33.0`, the first versions clearing the advisories
+  open against them. The previous floors admitted versions those
+  advisories name: a consumer pinning `orjson==3.10.18` alongside
+  `ohlc-toolkit==1.0.0` resolved cleanly, and that version is the subject
+  of a high-severity advisory. The lockfile in this repository was never
+  affected -- it pins later versions -- but a lockfile binds only this
+  repository, and what a consumer of the published wheel may install is
+  decided by these floors.
 - `windows.compute_windows`'s documented equivalence with the reference
   oracle is stated as conditional on VALID input, in both places it was
   claimed. Neither function validates, so either can be handed a frame the

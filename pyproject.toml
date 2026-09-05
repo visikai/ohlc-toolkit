@@ -17,9 +17,13 @@ keywords = [
 ]
 dependencies = [
     "loguru>=0.7.3,<0.8.0",
-    "orjson>=3.10.15,<4.0.0",
+    # Floor is the first version clearing GHSA advisory alert #10 (high);
+    # anything lower is installable by a consumer of the published wheel.
+    "orjson>=3.11.6,<4.0.0",
     "polars>=1.35.0,<2.0.0",
-    "requests>=2.32.3,<3.0.0",
+    # Floor clears the two requests advisories (alerts #2 and #12); the
+    # lockfile alone does not bind what a consumer resolves.
+    "requests>=2.33.0,<3.0.0",
 ]
 
 [project.urls]

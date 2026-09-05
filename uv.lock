@@ -683,9 +683,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
-    { name = "orjson", specifier = ">=3.10.15,<4.0.0" },
+    { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
     { name = "polars", specifier = ">=1.35.0,<2.0.0" },
-    { name = "requests", specifier = ">=2.32.3,<3.0.0" },
+    { name = "requests", specifier = ">=2.33.0,<3.0.0" },
 ]
 
 [package.metadata.requires-dev]
