@@ -6,11 +6,14 @@ import unittest
 from pathlib import Path
 
 import polars as pl
+import pytest
 
+from ohlc_toolkit.source import BITSTAMP_BTCUSD_1M
+from ohlc_toolkit.source import reader as reader_module
 from ohlc_toolkit.source.profile import Availability, ColumnKind, SourceProfile
 from ohlc_toolkit.source.reader import SourceReadResult, read_source_csv
 from ohlc_toolkit.source.validation import FindingKind, ValidationMode
-from ohlc_toolkit.temporal import DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, DataValidationError
 
 _PROFILE = SourceProfile.create(
     name="reader-test-1m",
@@ -205,3 +208,32 @@ class TestReaderPropagatesMissingFile(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Long enough that an echoed path would swamp a line, short enough per
+# component and in total that the OS answers "not found" rather than
+# "name too long", so the not-found branch is the one exercised.
+_LONG_PATH_COMPONENTS = 14
+_LONG_COMPONENT_CHARS = 250
+# One bounded echo plus prose for the not-found line, two for the debug line.
+_MAX_READER_LINE_CHARS = 6 * MAX_ECHO_CHARS
+# The debug line before the open, and the not-found line after it.
+_EXPECTED_READER_LINES = 2
+
+
+def test_a_missing_file_with_a_long_path_is_logged_bounded(tmp_path: Path) -> None:
+    """Both the debug line and the not-found line bound the path they echo."""
+    long_path = tmp_path.joinpath(
+        *(["p" * _LONG_COMPONENT_CHARS] * _LONG_PATH_COMPONENTS)
+    )
+    logged: list[str] = []
+    sink_id = reader_module.logger.add(logged.append, level="DEBUG", format="{message}")
+    try:
+        with pytest.raises(FileNotFoundError):
+            read_source_csv(long_path, BITSTAMP_BTCUSD_1M, mode=ValidationMode.REPORT)
+    finally:
+        reader_module.logger.remove(sink_id)
+
+    assert len(logged) >= _EXPECTED_READER_LINES, logged
+    for line in logged:
+        assert len(line) < _MAX_READER_LINE_CHARS

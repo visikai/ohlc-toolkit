@@ -21,6 +21,7 @@ from ohlc_toolkit.source.validation import (
     ValidationReport,
     validate_source_frame,
 )
+from ohlc_toolkit.temporal import bounded_echo
 
 logger = get_logger(__name__)
 
@@ -127,7 +128,11 @@ def _read_raw_frame(
     schema_overrides = {
         name: _COLUMN_KIND_DTYPES[kind] for name, kind in profile.raw_schema.items()
     }
-    logger.debug("Reading source frame {!r} for profile {!r}.", path, profile.name)
+    logger.debug(
+        "Reading source frame {} for profile {}.",
+        bounded_echo(path),
+        bounded_echo(profile.name),
+    )
     try:
         # os.fspath() normalizes any PathLike (not just pathlib.Path) to
         # the str/bytes union polars' read_csv is typed to accept.
@@ -135,5 +140,5 @@ def _read_raw_frame(
             os.fspath(path), schema_overrides=schema_overrides, n_rows=max_rows
         )
     except FileNotFoundError:
-        logger.error("Source file not found: {}", path)
+        logger.error("Source file not found: {}", bounded_echo(path))
         raise

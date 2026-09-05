@@ -10,18 +10,19 @@ outgrows its declared size is cut off rather than written out.
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
+from ohlc_toolkit.snapshot import transport as transport_module
 from ohlc_toolkit.snapshot.errors import SnapshotIntegrityError
 from ohlc_toolkit.snapshot.transport import (
     DEFAULT_CHUNK_BYTES,
     DEFAULT_TIMEOUT_SECONDS,
     HttpAssetTransport,
 )
-from ohlc_toolkit.temporal import ConfigError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError
 
 _URL = "https://example.invalid/owner/name/releases/download/tag/asset.csv.gz"
 _BODY_CHUNKS = [b"first-", b"second-", b"third"]
@@ -168,3 +169,65 @@ def test_the_defaults_are_positive() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# A URL and an error text far longer than any real ones: the URL is built from
+# a release tag whose pattern caps charset but not length, and the error text
+# is whatever a server put in its reason phrase.
+_ENORMOUS_CHARS = 200_000
+# Two bounded echoes plus prose; derived from the echo cap because the fix
+# routes through it, so raising the cap cannot leave this slack.
+_MAX_FETCH_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
+
+
+def test_a_failed_fetch_bounds_the_url_and_the_error_on_both_exits(
+    tmp_path: Path,
+) -> None:
+    """Neither the raised message nor the error log carries the whole URL or error."""
+    loud_url = "https://example.invalid/" + "u" * _ENORMOUS_CHARS
+    loud_error = requests.ConnectionError("e" * _ENORMOUS_CHARS)
+    logged: list[str] = []
+    sink_id = transport_module.logger.add(
+        logged.append, level="ERROR", format="{message}"
+    )
+    try:
+        with (
+            patch.object(transport_module.requests, "get", side_effect=loud_error),
+            pytest.raises(SnapshotIntegrityError) as raised,
+        ):
+            HttpAssetTransport().download(
+                loud_url, tmp_path / "asset", max_bytes=_GENEROUS_CAP
+            )
+    finally:
+        transport_module.logger.remove(sink_id)
+
+    assert len(str(raised.value)) < _MAX_FETCH_REFUSAL_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_FETCH_REFUSAL_CHARS
+
+
+def test_an_http_error_bounds_the_url_on_both_exits(tmp_path: Path) -> None:
+    """The status-code refusal quotes the URL too, so it is bounded the same way."""
+    loud_url = "https://example.invalid/" + "u" * _ENORMOUS_CHARS
+    response = MagicMock()
+    response.status_code = 404
+    response.__enter__ = MagicMock(return_value=response)
+    response.__exit__ = MagicMock(return_value=False)
+    logged: list[str] = []
+    sink_id = transport_module.logger.add(
+        logged.append, level="ERROR", format="{message}"
+    )
+    try:
+        with (
+            patch.object(transport_module.requests, "get", return_value=response),
+            pytest.raises(SnapshotIntegrityError) as raised,
+        ):
+            HttpAssetTransport().download(
+                loud_url, tmp_path / "asset", max_bytes=_GENEROUS_CAP
+            )
+    finally:
+        transport_module.logger.remove(sink_id)
+
+    assert len(str(raised.value)) < _MAX_FETCH_REFUSAL_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_FETCH_REFUSAL_CHARS
