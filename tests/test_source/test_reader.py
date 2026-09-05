@@ -319,11 +319,21 @@ def test_a_capped_read_of_a_real_file_is_untouched_by_the_guard(
     assert result.frame.height == _ROW_CAP
 
 
-def test_the_empty_file_refusal_logs_its_path_bounded(tmp_path: Path) -> None:
-    """The path is the caller's, and a long one is echoed bounded."""
+@pytest.mark.parametrize("gzipped", [True, False], ids=["gzipped", "plain"])
+def test_the_empty_file_refusal_comes_from_here_and_names_its_path_bounded(
+    tmp_path: Path, gzipped: bool
+) -> None:
+    """This package refuses an empty file itself, whatever polars would do with it.
+
+    Only the gzip shape panics today, so for a plain file polars raises the
+    same class unaided and the exception alone cannot say who refused. The
+    log line can: it exists only if the guard ran. The guard covers both
+    shapes because a reader cannot know which shapes a given polars version
+    aborts on, and the cost is one byte.
+    """
     deep = tmp_path.joinpath(*["p" * _LONG_COMPONENT_CHARS] * _LONG_PATH_COMPONENTS)
     deep.mkdir(parents=True)
-    path = _write_bytes(deep, "empty", _EMPTY_PAYLOAD, gzipped=True)
+    path = _write_bytes(deep, "empty", _EMPTY_PAYLOAD, gzipped=gzipped)
 
     logged: list[str] = []
     sink_id = reader_module.logger.add(logged.append, level="ERROR", format="{message}")
@@ -336,5 +346,6 @@ def test_the_empty_file_refusal_logs_its_path_bounded(tmp_path: Path) -> None:
         reader_module.logger.remove(sink_id)
 
     assert len(str(raised.value)) < _MAX_READER_LINE_CHARS
-    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert logged, "this package refuses the file itself, and says so before raising"
+    assert logged[-1].startswith("Source file holds no data")
     assert len(logged[-1]) < _MAX_READER_LINE_CHARS
