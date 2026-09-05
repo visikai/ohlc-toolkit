@@ -214,7 +214,7 @@ def _prepare_directory(directory: str | os.PathLike[str]) -> Path:
     """Resolve and create the destination, refusing a non-directory path."""
     resolved = Path(directory)
     if resolved.exists() and not resolved.is_dir():
-        logger.error(
+        logger.warning(
             "Refusing to fetch into {}: it exists and is not a directory.",
             bounded_echo(str(resolved)),
         )
@@ -271,7 +271,7 @@ def _resolve_asset(
     destination = directory / record.name
     if destination.exists():
         if not destination.is_file():
-            logger.error(
+            logger.warning(
                 "Refusing asset {!r}: {} exists and is not a regular file.",
                 record.name,
                 bounded_echo(str(destination)),

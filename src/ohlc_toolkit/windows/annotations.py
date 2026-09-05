@@ -431,7 +431,7 @@ def _require_annotations(
     selected = annotations.select(columns.start, columns.end, columns.flag)
     nulls = selected.null_count().row(0)
     if any(nulls):
-        logger.warning(
+        logger.error(
             "Rejecting annotations with null(s): {} start, {} end, {} flag.", *nulls
         )
         raise AnnotationValidationError(
@@ -443,7 +443,7 @@ def _require_annotations(
     if inverted.height:
         first_start = int(inverted.get_column(columns.start)[0])
         first_end = int(inverted.get_column(columns.end)[0])
-        logger.warning(
+        logger.error(
             "Rejecting {} annotation interval(s) whose end does not exceed its "
             "start; the first is [{}, {}).",
             inverted.height,
