@@ -64,7 +64,7 @@ DEFAULT_ANNOTATION_PREFIX = "annotation"
 
 
 class AnnotationValidationError(DataValidationError):
-    """An annotation sidecar holds a value no interval can be made from.
+    """An annotation sidecar holds a value no interval can be made from, or too many.
 
     A null in a start, end or flag cell, an interval whose end does not
     exceed its start, a cell the declared kind cannot parse, or more rows
@@ -512,9 +512,10 @@ def _merged(rows: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
     start) are merged too; they cover a contiguous run of seconds, and
     summing them separately would give the same answer.
 
-    The ``sorted`` here is the only sort in this module, and it is
-    load-bearing: nothing upstream orders the intervals, since the reader
-    keeps file order, and merging needs them in start order.
+    The ``sorted`` here is the only ordering of the intervals in this
+    module, and it is load-bearing: nothing upstream orders them, since
+    the reader keeps file order, and merging needs them in start order.
+    (The flags column sorts its own list of names separately.)
     """
     merged: list[tuple[int, int]] = []
     for start, end, _ in sorted(rows):

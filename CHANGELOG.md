@@ -15,7 +15,7 @@ against their tags, and are not restated here.
   and appending exactly two columns. The reader keeps file order, takes an
   optional row cap that refuses rather than truncates, and raises
   `AnnotationValidationError` (a `DataValidationError`) for a sidecar it
-  cannot make intervals from.
+  cannot make intervals from, or one holding more rows than the cap.
 
 ### Changed
 
