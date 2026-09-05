@@ -263,3 +263,38 @@ def test_a_size_cap_refusal_bounds_the_url_on_both_exits(tmp_path: Path) -> None
     assert len(str(raised.value)) < _MAX_FETCH_REFUSAL_CHARS
     assert logged, "the refusal logs before it raises; nothing was captured"
     assert len(logged[-1]) < _MAX_FETCH_REFUSAL_CHARS
+
+
+# A destination nested deep enough that its path dwarfs any bounded echo,
+# with every component inside the filesystem's own name limit.
+_DEEP_PATH_COMPONENTS = 14
+_DEEP_COMPONENT_CHARS = 250
+
+
+def test_a_successful_download_bounds_the_destination_in_its_debug_line(
+    tmp_path: Path,
+) -> None:
+    """The line recording where the bytes went quotes the destination bounded."""
+    directory = tmp_path.joinpath(
+        *["p" * _DEEP_COMPONENT_CHARS] * _DEEP_PATH_COMPONENTS
+    )
+    directory.mkdir(parents=True)
+    response = MagicMock()
+    response.status_code = _SUCCESS
+    response.__enter__ = MagicMock(return_value=response)
+    response.__exit__ = MagicMock(return_value=False)
+    response.iter_content = MagicMock(return_value=iter(_BODY_CHUNKS))
+    logged: list[str] = []
+    sink_id = transport_module.logger.add(
+        logged.append, level="DEBUG", format="{message}"
+    )
+    try:
+        with patch.object(transport_module.requests, "get", return_value=response):
+            HttpAssetTransport().download(
+                _URL, directory / "asset", max_bytes=_GENEROUS_CAP
+            )
+    finally:
+        transport_module.logger.remove(sink_id)
+    wrote = [line for line in logged if line.startswith("Wrote")]
+    assert wrote, "a completed download logs where it wrote; nothing was captured"
+    assert all(len(line) < _MAX_FETCH_REFUSAL_CHARS for line in wrote)

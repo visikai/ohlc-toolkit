@@ -11,10 +11,13 @@ Nothing here opens a socket. The transport is the seam, and it is filled
 with an in-process map from URL to bytes.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+from ohlc_toolkit.snapshot import fetcher as fetcher_module
 from ohlc_toolkit.snapshot.errors import (
     SnapshotIntegrityError,
     SnapshotManifestError,
@@ -25,8 +28,9 @@ from ohlc_toolkit.snapshot.fetcher import (
     fetch_snapshot,
 )
 from ohlc_toolkit.snapshot.manifest import MANIFEST_ASSET_NAME
-from ohlc_toolkit.temporal import ConfigError, DataValidationError
+from ohlc_toolkit.temporal import MAX_ECHO_CHARS, ConfigError, DataValidationError
 from tests.test_snapshot.factories import (
+    FIXTURE_TAG,
     HISTORY_ASSET,
     PARQUET_ASSET,
     PROVENANCE_ASSET,
@@ -413,3 +417,155 @@ def test_integrity_failures_are_data_validation_errors(tmp_path: Path) -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# A tag inside the grammar but far past any echo cap -- the pattern constrains
+# the charset, not the length -- and a destination nested deep enough that its
+# path is too. Every URL is composed from the tag, so a loud tag makes every
+# URL loud as well. Every line that quotes any of them must quote it bounded.
+_ENORMOUS_TAG_CHARS = 200_000
+_LOUD_TAG = "t" * _ENORMOUS_TAG_CHARS
+_DEEP_PATH_COMPONENTS = 14
+_DEEP_COMPONENT_CHARS = 250
+# Up to three bounded echoes beside prose; derived from the echo cap because
+# every fix here routes through it.
+_MAX_ECHO_LINE_CHARS = 6 * MAX_ECHO_CHARS
+_UNKNOWN_DIGEST = "0" * 64
+
+
+def _deep_directory(root: Path) -> Path:
+    """Nest long directory names until the path dwarfs any bounded echo."""
+    return root.joinpath(*["p" * _DEEP_COMPONENT_CHARS] * _DEEP_PATH_COMPONENTS)
+
+
+@contextmanager
+def _captured(level: str) -> Iterator[list[str]]:
+    """Collect every message the fetcher logs at ``level`` or above."""
+    logged: list[str] = []
+    sink_id = fetcher_module.logger.add(logged.append, level=level, format="{message}")
+    try:
+        yield logged
+    finally:
+        fetcher_module.logger.remove(sink_id)
+
+
+def _assert_both_exits_bounded(
+    raised: pytest.ExceptionInfo[Exception], logged: list[str]
+) -> None:
+    """Assert the message and the last log line are both under the ceiling."""
+    assert len(str(raised.value)) < _MAX_ECHO_LINE_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_ECHO_LINE_CHARS
+
+
+def test_a_manifest_identity_refusal_bounds_the_tag_on_both_exits(
+    tmp_path: Path,
+) -> None:
+    """The identity mismatch names the release by its tag, bounded on both exits."""
+    fixture = build_release_fixture(tag=_LOUD_TAG)
+    with (
+        _captured("ERROR") as logged,
+        pytest.raises(SnapshotIntegrityError, match="manifest") as raised,
+    ):
+        fetch_snapshot(
+            fixture.release,
+            tmp_path,
+            transport=fixture.transport(),
+            expected_manifest_sha256=_UNKNOWN_DIGEST,
+        )
+    _assert_both_exits_bounded(raised, logged)
+
+
+def test_a_manifest_tag_refusal_bounds_the_url_and_the_tag_on_both_exits(
+    tmp_path: Path,
+) -> None:
+    """The tag mismatch quotes the manifest URL and both tags, all bounded."""
+    fixture = build_release_fixture(tag=_LOUD_TAG, manifest_tag=FIXTURE_TAG)
+    with (
+        _captured("ERROR") as logged,
+        pytest.raises(SnapshotManifestError, match="tag") as raised,
+    ):
+        _fetch(fixture, tmp_path)
+    _assert_both_exits_bounded(raised, logged)
+
+
+def test_a_size_refusal_bounds_the_url_on_both_exits(tmp_path: Path) -> None:
+    """The size mismatch quotes the asset URL, bounded on both exits."""
+    fixture = build_release_fixture(tag=_LOUD_TAG)
+    truncated = fixture.assets[HISTORY_ASSET][:-5]
+    with (
+        _captured("ERROR") as logged,
+        pytest.raises(SnapshotIntegrityError, match="bytes") as raised,
+    ):
+        _fetch(fixture, tmp_path, payloads=fixture.serving(HISTORY_ASSET, truncated))
+    _assert_both_exits_bounded(raised, logged)
+
+
+def test_a_digest_refusal_bounds_the_url_on_both_exits(tmp_path: Path) -> None:
+    """The digest mismatch quotes the asset URL, bounded on both exits."""
+    fixture = build_release_fixture(tag=_LOUD_TAG)
+    tampered = bytes(len(fixture.assets[HISTORY_ASSET]))
+    with (
+        _captured("ERROR") as logged,
+        pytest.raises(SnapshotIntegrityError, match="sha256") as raised,
+    ):
+        _fetch(fixture, tmp_path, payloads=fixture.serving(HISTORY_ASSET, tampered))
+    _assert_both_exits_bounded(raised, logged)
+
+
+def test_a_successful_fetch_bounds_the_tag_and_the_directory_in_every_log_line(
+    tmp_path: Path,
+) -> None:
+    """The success lines name the snapshot, its directory and each placed file, bounded."""
+    fixture = build_release_fixture(tag=_LOUD_TAG)
+    with _captured("DEBUG") as logged:
+        _fetch(fixture, _deep_directory(tmp_path))
+    assert logged, "a fetch logs what it did; nothing was captured"
+    assert all(len(line) < _MAX_ECHO_LINE_CHARS for line in logged)
+
+
+def test_a_non_directory_destination_refusal_bounds_the_path_on_both_exits(
+    tmp_path: Path,
+) -> None:
+    """A destination that is a file is named by its path, bounded on both exits."""
+    occupied = _deep_directory(tmp_path)
+    occupied.parent.mkdir(parents=True)
+    occupied.write_text("")
+    fixture = build_release_fixture()
+    with (
+        _captured("ERROR") as logged,
+        pytest.raises(ConfigError, match="directory") as raised,
+    ):
+        _fetch(fixture, occupied)
+    _assert_both_exits_bounded(raised, logged)
+
+
+def test_an_asset_path_occupied_by_a_directory_bounds_the_path_on_both_exits(
+    tmp_path: Path,
+) -> None:
+    """An asset path that is a directory is named by its path, bounded on both exits."""
+    directory = _deep_directory(tmp_path)
+    (directory / HISTORY_ASSET).mkdir(parents=True)
+    fixture = build_release_fixture()
+    with (
+        _captured("ERROR") as logged,
+        pytest.raises(ConfigError, match="regular file") as raised,
+    ):
+        _fetch(fixture, directory)
+    _assert_both_exits_bounded(raised, logged)
+
+
+def test_a_wrong_existing_asset_refusal_bounds_the_path_in_its_message(
+    tmp_path: Path,
+) -> None:
+    """The refusal to overwrite names where the wrong bytes sit, bounded."""
+    directory = _deep_directory(tmp_path)
+    directory.mkdir(parents=True)
+    (directory / HISTORY_ASSET).write_bytes(b"not the declared bytes")
+    fixture = build_release_fixture()
+    with (
+        _captured("ERROR") as logged,
+        pytest.raises(SnapshotIntegrityError, match="already present") as raised,
+    ):
+        _fetch(fixture, directory)
+    _assert_both_exits_bounded(raised, logged)

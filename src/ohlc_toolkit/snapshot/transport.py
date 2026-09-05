@@ -185,5 +185,8 @@ class HttpAssetTransport:
                     )
                 handle.write(chunk)
         logger.debug(
-            "Wrote {} bytes from {} to {}.", written, bounded_echo(url), destination
+            "Wrote {} bytes from {} to {}.",
+            written,
+            bounded_echo(url),
+            bounded_echo(str(destination)),
         )
