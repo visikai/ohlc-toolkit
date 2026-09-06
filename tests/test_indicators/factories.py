@@ -8,7 +8,7 @@ through the engine would hide the inputs behind three layers that have
 their own tests.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import polars as pl
 
@@ -32,18 +32,25 @@ _FILLER = {
 }
 
 
-def phased_from_closes(
-    closes: Sequence[Sequence[float | None] | None],
+def phased_from_fields(
+    given: Mapping[str, Sequence[Sequence[float | None] | None]],
     *,
     lookback: int,
     window_seconds: int = 180,
     emit_seconds: int = 60,
 ) -> PhasedLookback:
-    """Assemble harness output whose `close` lists are exactly as given.
+    """Assemble harness output whose named fields are exactly as given.
+
+    Every field not named is filled with a constant, so a test that
+    started passing because an unread column moved would be measuring the
+    wrong thing. A `None` tick in ANY named field nulls that tick in ALL
+    columns -- the harness's own all-or-nothing rule, which a fixture
+    that nulled one column and not the others would be lying about.
 
     Args:
-        closes: One list of closes per tick, NEWEST FIRST as the harness
-            orders them, or `None` for a tick whose inputs were missing.
+        given: Field name to one list per tick, NEWEST FIRST as the
+            harness orders them, or `None` for a tick whose inputs were
+            missing.
         lookback: The `L` the grid records.
         window_seconds: The window `W`.
         emit_seconds: The emit cadence `E`.
@@ -52,18 +59,32 @@ def phased_from_closes(
         The record a primitive reads.
 
     """
-    ticks = tuple(BASE + index * emit_seconds for index in range(len(closes)))
+    lengths = {len(rows) for rows in given.values()}
+    if len(lengths) != 1:
+        message = f"every field must give the same number of ticks, got {lengths}"
+        raise ValueError(message)
+    height = lengths.pop()
+    absent = {
+        index
+        for index in range(height)
+        if any(rows[index] is None for rows in given.values())
+    }
+    ticks = tuple(BASE + index * emit_seconds for index in range(height))
     columns: dict[str, pl.Series] = {
         "close_time": pl.Series("close_time", list(ticks), dtype=pl.Int64)
     }
     for field, dtype in PHASED_COLUMNS.items():
-        values = (
-            list(closes)
-            if field == "close"
-            else [
-                None if row is None else [_FILLER[field]] * len(row) for row in closes
-            ]
-        )
+        rows = given.get(field)
+        values: list[list[float | None] | None] = []
+        for index in range(height):
+            if index in absent:
+                values.append(None)
+            elif rows is not None:
+                given_row = rows[index]
+                assert given_row is not None
+                values.append(list(given_row))
+            else:
+                values.append([_FILLER[field]] * _width(given, index))
         columns[field] = pl.Series(field, values, dtype=pl.List(dtype))
     return PhasedLookback(
         frame=pl.DataFrame(columns),
@@ -75,6 +96,45 @@ def phased_from_closes(
             min_traded_seconds=0,
             ticks=ticks,
         ),
+    )
+
+
+def _width(
+    given: Mapping[str, Sequence[Sequence[float | None] | None]], index: int
+) -> int:
+    """How long the lists at one tick are, read off whatever was given."""
+    for rows in given.values():
+        row = rows[index]
+        if row is not None:
+            return len(row)
+    return 0
+
+
+def phased_from_closes(
+    closes: Sequence[Sequence[float | None] | None],
+    *,
+    lookback: int,
+    window_seconds: int = 180,
+    emit_seconds: int = 60,
+) -> PhasedLookback:
+    """Assemble harness output whose `close` lists are exactly as given.
+
+    Args:
+        closes: One list of closes per tick, NEWEST FIRST, or `None` for
+            a tick whose inputs were missing.
+        lookback: The `L` the grid records.
+        window_seconds: The window `W`.
+        emit_seconds: The emit cadence `E`.
+
+    Returns:
+        The record a primitive reads.
+
+    """
+    return phased_from_fields(
+        {"close": closes},
+        lookback=lookback,
+        window_seconds=window_seconds,
+        emit_seconds=emit_seconds,
     )
 
 

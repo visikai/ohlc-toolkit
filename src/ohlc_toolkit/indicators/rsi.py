@@ -57,10 +57,11 @@ from ohlc_toolkit.indicators.frames import PhasedLookback
 # same check is a 2.0 commitment that no caller has asked for.
 from ohlc_toolkit.indicators.identity import NormalizationClass, _validated_period
 from ohlc_toolkit.indicators.primitives import (
+    has_missing_input,
     indicator_identity,
+    require_finite_columns,
     require_phased_inputs,
 )
-from ohlc_toolkit.temporal import DataValidationError
 
 logger = get_logger(__name__)
 
@@ -130,13 +131,17 @@ class CutlersRSI:
             ConfigError: If the period is unusable, or if the frame was
                 not assembled for this lookback.
             DataValidationError: If either change total is non-finite,
-                which finite closes cannot produce.
+                which finite closes whose differences do not overflow
+                cannot produce.
 
         """
         require_phased_inputs(self, phased, period=period, fields=(_CLOSE,))
         identity = indicator_identity(self, phased, period=period)
         parts = phased.frame.select(_decomposed())
-        _require_finite_totals(parts, identity.column_name)
+        # On the TOTALS, not on the reading: a finite up total over an
+        # infinite down total is `0.0`, in range and indistinguishable
+        # from the only-falls convention.
+        require_finite_columns(parts, (_UP, _DOWN), computing=identity.column_name)
         return parts.select(_reading().alias(identity.column_name)).to_series()
 
 
@@ -158,9 +163,7 @@ def _decomposed() -> list[pl.Expr]:
     # a difference taken in that order is the negative of the change.
     changes = pl.col(_CLOSE).list.reverse().list.eval(pl.element().diff().drop_nulls())
     return [
-        (
-            pl.col(_CLOSE).list.drop_nulls().list.len() != pl.col(_CLOSE).list.len()
-        ).alias(_HOLE),
+        has_missing_input(_CLOSE).alias(_HOLE),
         changes.list.eval(pl.element().clip(lower_bound=0.0)).list.sum().alias(_UP),
         changes.list.eval((-pl.element()).clip(lower_bound=0.0))
         .list.sum()
@@ -202,41 +205,4 @@ def _reading() -> pl.Expr:
         .then(pl.lit(_NEUTRAL_RSI))
         .otherwise(_FULL_SCALE * (pl.col(_UP) / movement))
         .cast(pl.Float64)
-    )
-
-
-def _require_finite_totals(parts: pl.DataFrame, column: str) -> None:
-    """Refuse an infinite gain or loss total rather than reading through it.
-
-    The reading itself cannot show this. A finite ``up`` over an infinite
-    ``down`` is ``0.0`` -- in range, finite, and exactly the only-falls
-    convention, so nothing downstream could tell the two apart. Only one
-    of the four infinite combinations reaches the output as a NaN.
-
-    Unreachable from finite closes whose differences do not overflow,
-    which is the point: the source layer already refuses non-finite
-    prices, so an infinity here means a caller assembled the lookback by
-    hand out of values no reader would have accepted. Derived frames do
-    not manufacture what the source refuses.
-
-    Args:
-        parts: The decomposed totals.
-        column: The column being computed, for the refusal.
-
-    Raises:
-        DataValidationError: If either total is non-finite anywhere.
-
-    """
-    offending = {
-        name: int((~parts[name].drop_nulls().is_finite()).sum())
-        for name in (_UP, _DOWN)
-    }
-    if not any(offending.values()):
-        return
-    counted = ", ".join(f"{count} in {name}" for name, count in offending.items())
-    logger.error("Refusing non-finite change totals for {}.", column)
-    raise DataValidationError(
-        f"{column} decomposes to non-finite change total(s) ({counted}); the "
-        "closes they were computed from are not finite, or their differences "
-        "overflow."
     )

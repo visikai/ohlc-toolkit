@@ -6,22 +6,40 @@ named from, the three ways harness output can be wrong for the primitive
 holding it, and the one path that writes a column onto a frame.
 """
 
+from collections.abc import Callable
+
 import polars as pl
 import pytest
 
 from ohlc_toolkit.indicators import (
     CutlersRSI,
     FeatureFamily,
+    IndicatorPrimitive,
+    LogVolumeRatio,
     NormalizationClass,
     PhasedLookback,
+    PriceToMovingAverage,
+    RelativeRange,
     add_indicator,
     indicator_identity,
     phased_lookback,
     require_phased_inputs,
 )
+
+# Imported from the module rather than the package: these are shared
+# machinery for the primitives, deliberately absent from `__all__`.
+from ohlc_toolkit.indicators.primitives import (
+    require_finite_columns,
+    require_positive_inputs,
+)
 from ohlc_toolkit.temporal import ConfigError, Duration
 from ohlc_toolkit.windows import ExplicitRange, compute_windows
-from tests.test_indicators.factories import BASE, phased_from_closes, rising
+from tests.test_indicators.factories import (
+    BASE,
+    phased_from_closes,
+    phased_from_fields,
+    rising,
+)
 from tests.test_windows.factories import frame_from_rows, profile_for
 
 _MINUTE = 60
@@ -185,6 +203,109 @@ def test_a_primitive_runs_over_real_harness_output() -> None:
     assert set(values.drop_nulls().to_list()) == {100.0}
     assert values.null_count() == phased.frame["close"].null_count()
     assert values.null_count() > 0
+
+
+@pytest.mark.parametrize(
+    ("primitive", "expected"),
+    [
+        (CutlersRSI(), "bounded_by_construction"),
+        (RelativeRange(), "stationarized"),
+        (LogVolumeRatio(), "stationarized"),
+        (PriceToMovingAverage(), "stationarized"),
+    ],
+    ids=lambda value: getattr(value, "name", value),
+)
+def test_every_primitive_s_identity_carries_the_class_it_declares(
+    primitive: IndicatorPrimitive, expected: str
+) -> None:
+    """The class is on the record, not on the name -- so it has to be read."""
+    phased = phased_from_closes(
+        [rising(_LOOKBACK)], lookback=primitive.lookback(_PERIOD)
+    )
+
+    identity = indicator_identity(primitive, phased, period=_PERIOD)
+
+    assert identity.normalization.value == expected
+    assert identity.normalization is primitive.normalization
+
+
+def test_three_primitives_chain_over_one_lookback() -> None:
+    """The reason the writer returns the record: a recipe computes several.
+
+    The three that read `L = P + 1` share one harness call, and each
+    appends beside the last. Before the writer returned a record this
+    read `PhasedLookback(frame=..., grid=...)` between every call, and a
+    caller who got the grid wrong would have silently renamed a column.
+    """
+    phased = phased_from_fields(
+        {
+            "high": [[10.0] * _LOOKBACK],
+            "low": [[6.0] * _LOOKBACK],
+            "close": [[8.0] * _LOOKBACK],
+            "volume": [[5.0] * _LOOKBACK],
+        },
+        lookback=_LOOKBACK,
+    )
+
+    written = phased
+    for primitive in (CutlersRSI(), RelativeRange(), LogVolumeRatio()):
+        written = add_indicator(written, primitive, period=_PERIOD)
+
+    assert written.frame.columns[-3:] == [
+        "rsi_p3_w3m",
+        "relrange_p3_w3m",
+        "logvolratio_p3_w3m",
+    ]
+    assert written.grid == phased.grid
+    # Every reading is present: a chain that had lost the grid would have
+    # named a column for another window and left this one all null.
+    assert written.frame.select(pl.all().null_count()).row(0).count(0) == len(
+        written.frame.columns
+    )
+
+
+@pytest.mark.parametrize(
+    ("call", "parameter"),
+    [
+        pytest.param(
+            lambda phased: require_positive_inputs(
+                phased,
+                fields="close",  # type: ignore[arg-type]
+                reason="unused.",
+            ),
+            "fields",
+            id="require_positive_inputs",
+        ),
+        pytest.param(
+            lambda phased: require_finite_columns(
+                phased.frame,
+                "close",  # type: ignore[arg-type]
+                computing="unused",
+            ),
+            "columns",
+            id="require_finite_columns",
+        ),
+    ],
+)
+def test_a_bare_string_is_refused_by_every_collection_parameter(
+    call: Callable[[PhasedLookback], object], parameter: str
+) -> None:
+    """A `str` IS a `Collection[str]`, so the annotation cannot stop this.
+
+    Two sibling guards in this package already refuse it and these two
+    did not, which is the asymmetry that makes the next one a coin flip.
+    Without the refusal `require_finite_columns` raised a raw polars
+    `ColumnNotFoundError` naming a phantom column `c` -- loud, but about
+    the wrong thing.
+    """
+    phased = phased_from_closes([rising(_LOOKBACK)], lookback=_LOOKBACK)
+
+    with pytest.raises(ConfigError, match="not a single string") as caught:
+        call(phased)
+
+    # The message names WHICH parameter, so a caller passing two
+    # collections knows which one to fix.
+    assert str(caught.value).startswith(parameter)
 
 
 if __name__ == "__main__":

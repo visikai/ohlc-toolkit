@@ -262,7 +262,7 @@ def test_a_non_finite_change_total_is_refused_rather_than_read_through(
     that overflows -- so checking the inputs would not have caught it
     either.
     """
-    with pytest.raises(DataValidationError, match="non-finite change total"):
+    with pytest.raises(DataValidationError, match="non-finite intermediate"):
         _RSI.values(phased_from_closes([closes], lookback=_LOOKBACK), period=_PERIOD)
 
 

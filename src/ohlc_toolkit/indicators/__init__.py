@@ -27,6 +27,8 @@ from ohlc_toolkit.indicators.identity import (
     effective_history,
     effective_n,
 )
+from ohlc_toolkit.indicators.logvolratio import LogVolumeRatio
+from ohlc_toolkit.indicators.mapos import PriceToMovingAverage
 from ohlc_toolkit.indicators.phased import phased_lookback
 from ohlc_toolkit.indicators.primitives import (
     IndicatorPrimitive,
@@ -35,6 +37,7 @@ from ohlc_toolkit.indicators.primitives import (
     require_phased_inputs,
 )
 from ohlc_toolkit.indicators.reference import phased_lookback_reference
+from ohlc_toolkit.indicators.relrange import RelativeRange
 from ohlc_toolkit.indicators.rsi import CutlersRSI
 
 # `resolve_phased_grid` is deliberately NOT here. Both entry points call
@@ -56,9 +59,12 @@ __all__ = [
     "FeatureFamily",
     "FeatureIdentity",
     "IndicatorPrimitive",
+    "LogVolumeRatio",
     "NormalizationClass",
     "PhasedGrid",
     "PhasedLookback",
+    "PriceToMovingAverage",
+    "RelativeRange",
     "add_indicator",
     "effective_history",
     "effective_n",
