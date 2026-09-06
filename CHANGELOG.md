@@ -22,6 +22,21 @@ recorded here because it is the reason the entries below are breaking.
 
 ### Added
 
+- **A count-valued `LookbackSchedule`**, with `metallic_lookback`,
+  `log_spaced_lookback` and `explicit_lookback`. Its members are period
+  counts rather than durations: the same `21` is twenty-one minutes on a
+  1m frame and twenty-one weeks on a 1w one. It is a separate type rather
+  than a mode on `WindowSchedule`, because a lookback borrowed from a
+  window schedule would be silently coupled to it, and because
+  `require_resolved_windows` refuses anything but a `Duration` — a guard
+  worth keeping rather than loosening. The arithmetic is shared: the
+  recurrence, the log-spaced placement and the quantize/bound/dedup rule
+  are one implementation called with counts where the window schedule
+  calls it with seconds.
+  Identities cannot collide. A lookback records its members under
+  `"periods"` and a window schedule under `"windows"`, and `3` is not
+  `"3m"`, so each reader refuses the other's payload for a missing key
+  rather than coercing it.
 - `windows` output gains **`traded_seconds`** (Int64), the tenth column:
   the summed duration of the included source intervals whose `volume` is
   greater than zero. `coverage_seconds` says the source had rows;
@@ -107,6 +122,16 @@ recorded here because it is the reason the entries below are breaking.
   one is refused with a `ConfigError` rather than silently checked
   against one threshold. A caller that projects a frame down to what the
   step consults must keep all three.
+- A generated schedule's maximum is now compared against the QUANTIZED
+  term rather than the raw one. Generation produces the first term past
+  the bound and lets resolution decide, so a term of 21.434 against a
+  maximum of 21 is kept — it quantizes to exactly 21, which is inside the
+  bound — where it was previously dropped for a value the schedule never
+  uses. Every other bound in the resolver is already applied after
+  quantization; this was the one that was not. Measured: no schedule in
+  this repository's suite changes, and neither does the named legacy
+  schedule or the eleven-window schedule its one consumer records, so no
+  existing `schedule_id` moves.
 - **BREAKING: positional construction of `WindowQualityPolicy` and
   `QualityReport` changes.** `min_traded_seconds` is inserted between
   `min_coverage` and `gate_mode` rather than appended, so

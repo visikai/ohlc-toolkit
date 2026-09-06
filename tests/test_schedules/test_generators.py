@@ -889,5 +889,46 @@ class TestRecordedRules:
             )
 
 
+def test_a_term_that_rounds_back_inside_the_maximum_is_kept() -> None:
+    """The bound is applied to the quantized value, not the raw one.
+
+    The recurrence's fifth term here is 21.434 minutes against a maximum
+    of 21m. It belongs in the schedule because it quantizes to exactly
+    21m, which is inside the bound; the raw value it was previously
+    compared against is a number the schedule never uses. Generation
+    therefore produces the first term past the bound and lets resolution
+    decide.
+
+    Measured when this changed: no schedule in this suite moved, and
+    neither did the named legacy schedule or the eleven-window schedule
+    of the one consumer that records a `schedule_id`.
+    """
+    schedule = metallic_recurrence(
+        coefficient=math.sqrt(math.e + math.sqrt(5)),
+        seed="1m",
+        grain="1m",
+        minimum="3m",
+        maximum="21m",
+    )
+
+    assert [str(window) for window in schedule.windows] == ["3m", "8m", "21m"]
+
+
+def test_only_one_term_past_the_maximum_is_generated() -> None:
+    """The generosity is exactly one term, not an unbounded run.
+
+    Quantization is monotone, so anything further past the bound rounds
+    past it too and is dropped. A maximum of 9m admits 8m and stops.
+    """
+    schedule = metallic_recurrence(
+        coefficient=math.sqrt(math.e + math.sqrt(5)),
+        seed="1m",
+        grain="1m",
+        maximum="9m",
+    )
+
+    assert [str(window) for window in schedule.windows] == ["1m", "3m", "8m"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
