@@ -146,7 +146,19 @@ _REQUIRED_COLUMNS = ("close_time", "coverage_seconds", "traded_seconds")
 _INT64_COLUMN_MEANINGS = {
     "close_time": "an Int64 Unix second",
     "coverage_seconds": "an Int64 count of whole seconds",
+    "traded_seconds": "an Int64 count of whole seconds",
 }
+
+# The loop below promises that adding a column to _REQUIRED_COLUMNS gets it
+# the dtype guard by construction. That promise is only true while the two
+# structures agree, and when they did not the loop raised `KeyError` instead
+# of the refusal it was written to raise -- past the log line, out of the
+# module's own error type, and invisible to statement coverage, because the
+# lookup executes fine for every column that IS in the table.
+assert set(_INT64_COLUMN_MEANINGS) == set(_REQUIRED_COLUMNS), (
+    "every required column needs an Int64 meaning: "
+    f"{sorted(set(_REQUIRED_COLUMNS) ^ set(_INT64_COLUMN_MEANINGS))}"
+)
 
 
 @unique
@@ -155,10 +167,10 @@ class QualityMode(Enum):
 
     Attributes:
         PASS_THROUGH: Return the frame unchanged.
-        FILTER: Drop rows below the coverage threshold, returning a new
+        FILTER: Drop rows that miss either threshold, returning a new
             frame.
-        GATE: Check the coverage threshold without dropping rows; react
-            per :class:`GateMode`.
+        GATE: Check both thresholds without dropping rows; react per
+            :class:`GateMode`.
 
     """
 
@@ -169,7 +181,7 @@ class QualityMode(Enum):
 
 @unique
 class GateMode(Enum):
-    """How a ``GATE`` policy reacts to a coverage violation.
+    """How a ``GATE`` policy reacts to a threshold violation.
 
     Mirrors :class:`ohlc_toolkit.source.validation.ValidationMode`'s
     strict/report split, applied to windows instead of a raw source
@@ -271,7 +283,7 @@ class WindowQualityPolicy:
         _validated_min_coverage(self.min_coverage)
         _validated_min_traded_seconds(self.min_traded_seconds)
 
-    def to_dict(self) -> dict[str, str | float]:
+    def to_dict(self) -> dict[str, str | float | int]:
         """Serialize this identity to a deterministic, JSON-compatible dict.
 
         ``min_coverage`` is stored as the plain float, not as a decimal
@@ -416,7 +428,7 @@ def _validated_min_coverage(value: object) -> float:
 
 @dataclass(frozen=True)
 class QualityReport:
-    """The outcome of measuring a frame against a policy's coverage threshold.
+    """The outcome of measuring a frame against a policy's two thresholds.
 
     Produced in every mode, including the ones that do not act on it: a
     ``PASS_THROUGH`` policy records what it declined to act on, and a
@@ -555,16 +567,29 @@ def _require_quality_columns(frame: pl.DataFrame) -> None:
     with the wrong kind would pass while a dirty one crashed elsewhere.
 
     Raises:
-        ConfigError: If ``close_time`` or ``coverage_seconds`` is absent
-            from ``frame``, or if either is not an ``Int64`` column.
+        ConfigError: If any of ``close_time``, ``coverage_seconds`` or
+            ``traded_seconds`` is absent from ``frame``, or is not an
+            ``Int64`` column.
 
     """
     missing = [name for name in _REQUIRED_COLUMNS if name not in frame.columns]
     if missing:
         logger.warning("Rejecting frame missing quality column(s): {}", missing)
+        # A frame missing exactly `traded_seconds` is the shape every
+        # artifact written before this schema has, so the message says so
+        # rather than leaving its reader to work out why a frame that
+        # worked last week does not now.
+        superseded = (
+            " A frame carrying the other columns but not traded_seconds is"
+            " a schema v1 window frame, which this version supersedes"
+            " rather than reinterprets: nothing invents a traded_seconds"
+            " for it."
+            if missing == ["traded_seconds"]
+            else ""
+        )
         raise ConfigError(
             f"A window quality policy requires column(s) {missing}; apply it "
-            "to an engine-produced window frame."
+            f"to an engine-produced window frame.{superseded}"
         )
 
     # One loop over the required columns rather than a guard apiece, so the
@@ -753,8 +778,10 @@ def apply_quality_policy(
     Args:
         frame: A window frame such as
             :func:`~ohlc_toolkit.windows.engine.compute_windows` produces,
-            carrying at least ``close_time`` and an integer
-            ``coverage_seconds``.
+            carrying at least ``close_time``, ``coverage_seconds`` and
+            ``traded_seconds``, all ``Int64``. A frame carrying only the
+            first two is a schema v1 frame, which this refuses rather
+            than checks against one threshold.
         policy: The policy identity to apply.
         window: The window duration ``W`` the frame was aggregated over,
             as a :class:`~ohlc_toolkit.temporal.Duration` or a compact
@@ -767,11 +794,12 @@ def apply_quality_policy(
         :attr:`QualityMode.PASS_THROUGH` and for a :attr:`QualityMode.GATE`
         that did not raise, and a new row-subset -- rows below the
         threshold or stating no coverage dropped, the rest in their
-        original order -- for :attr:`QualityMode.FILTER`.
+        original order, where "the threshold" means either of them --
+        for :attr:`QualityMode.FILTER`.
 
     Raises:
-        ConfigError: If ``frame`` is missing a required column, if
-            either required column is not ``Int64``, or if
+        ConfigError: If ``frame`` is missing a required column, if any
+            required column is not ``Int64``, or if
             ``window`` cannot be coerced to a
             :class:`~ohlc_toolkit.temporal.Duration` or coerces to the
             zero duration. A zero window is refused for the same reason

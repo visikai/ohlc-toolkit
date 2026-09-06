@@ -162,8 +162,8 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
 
     Not detecting them is not the same as agreeing with
     :func:`~ohlc_toolkit.windows.engine.compute_windows` about them. On
-    TWO of those shapes the two are not interchangeable, and a caller
-    reading this as the normative contract needs both:
+    THREE of those shapes the two are not interchangeable, and a caller
+    reading this as the normative contract needs all three:
 
     - A NULL price. This function RAISES ``TypeError`` on it, out of
       comparing ``None`` with a float while folding the maximum -- neither
@@ -176,6 +176,18 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
       an ordinary value is reported; the engine's polars aggregation
       propagates the NaN instead. Infinities are NOT like this: on either
       infinity the two agree exactly.
+    - A NULL volume. This function RAISES ``TypeError`` on it, out of
+      comparing ``None`` with ``0`` for ``traded_seconds``, for the same
+      reason it raises on a null price; the engine treats it as untraded
+      and carries the null into ``volume``.
+
+    A NaN VOLUME is not on this list, and was: polars answers ``NaN > 0``
+    with True where Python answers False, so the engine once counted a NaN
+    as a full interval of trading where this function counted none. The
+    engine now asks ``is_not_nan`` alongside the comparison, so the two
+    agree. It is recorded here because the list is only worth having if it
+    is exhaustive, and a reader deciding whether to trust one against the
+    other needs to know which way that was settled.
 
     On every other shape above -- a gap, a duplicate, an off-phase
     timestamp, rows out of order -- the two agree exactly, so this

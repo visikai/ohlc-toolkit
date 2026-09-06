@@ -658,12 +658,28 @@ def _traded_counts(
     is an integer count, so a difference of prefixes is exact and there is
     no addition order that has to be preserved for it.
 
-    A null or a NaN volume is not a trade. The fill is what says so,
-    rather than leaving the answer to whatever a comparison against null
-    happens to propagate -- and it fails in the direction that reports
-    less trading, never more.
+    Three values need saying, because polars and Python do not agree
+    about all of them and the oracle is written in the other one:
+
+    - a NULL volume is not a trade. `fill_null` is what says so, rather
+      than leaving the answer to whatever a comparison against null
+      propagates;
+    - a NaN volume is not a trade either, and `is_not_nan` is what says
+      so. In polars `NaN > 0` is TRUE, where Python's `nan > 0` is
+      False, so without this the fast path counted a NaN as a full
+      interval of trading while the oracle counted none -- the two
+      disagreeing about the same frame, in the direction that reports
+      MORE trading than was observed;
+    - an INFINITE volume IS counted, in both, because `inf > 0` is true
+      in either language. It is invalid source data and validation is
+      where it gets refused; this function's job is to agree with the
+      oracle about it, not to hold a second opinion.
     """
-    traded = (candles.volume > 0).fill_null(value=False).cast(pl.Int64)
+    traded = (
+        ((candles.volume > 0) & candles.volume.is_not_nan())
+        .fill_null(value=False)
+        .cast(pl.Int64)
+    )
     prefix = pl.concat([pl.Series("traded", [0], dtype=pl.Int64), traded.cum_sum()])
     return (prefix.gather(upper) - prefix.gather(lower)).rename("traded_count")
 

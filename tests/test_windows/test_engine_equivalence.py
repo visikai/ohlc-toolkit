@@ -517,6 +517,25 @@ def _frame_with(price: float | None) -> pl.DataFrame:
     )
 
 
+def _frame_with_volume(volume: float) -> pl.DataFrame:
+    """Build a clean minute grid with one candle's VOLUME replaced."""
+    volumes = [1.0] * _INVALID_ROWS
+    volumes[_INVALID_AT] = volume
+    prices: list[float] = [100.0 + index for index in range(_INVALID_ROWS)]
+    timestamps = [_INVALID_BASE + index * 60 for index in range(_INVALID_ROWS)]
+    return pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": prices,
+            "high": prices,
+            "low": prices,
+            "close": prices,
+            "volume": volumes,
+        },
+        schema=_INVALID_SCHEMA,
+    )
+
+
 def _invalid_range() -> ExplicitRange:
     """Materialize the three windows that span the replaced row."""
     return ExplicitRange(
@@ -658,3 +677,92 @@ def test_an_infinite_price_does_not_make_the_two_disagree(infinity: float) -> No
     engine, oracle = _both_over(_frame_with(infinity))
 
     assert_frame_equal(engine, oracle)
+
+
+@pytest.mark.parametrize(
+    ("volume", "label"),
+    [
+        (float("nan"), "nan"),
+        (float("inf"), "inf"),
+        (float("-inf"), "-inf"),
+        (0.0, "zero"),
+        (7.961e-05, "dust"),
+    ],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_the_two_engines_agree_on_traded_seconds_for_every_odd_volume(
+    volume: float, label: str
+) -> None:
+    """The values where polars and Python do not obviously agree.
+
+    NaN is the one that was wrong: polars answers ``NaN > 0`` with True
+    and Python answers False, so the fast path counted a NaN as a whole
+    interval of trading where the oracle counted none. Nothing caught it,
+    because no fixture in the corpus carried a NaN volume -- the
+    equivalence suite exists to find exactly this and had no input that
+    could.
+
+    The infinities are here because they are the values a reader would
+    assume behave like NaN and they do not: ``inf > 0`` is true in both
+    languages, so both count it. Zero and dust are the predicate's own
+    boundary, the one place an epsilon could hide: the smallest positive
+    volume anywhere in this corpus is 7.961e-05, so a guard written as
+    ``> 1e-12`` would pass every other test in the suite.
+    """
+    frame = _frame_with_volume(volume)
+
+    engine = compute_windows(
+        frame,
+        BITSTAMP_BTCUSD_1M,
+        window="3m",
+        emit_every="1m",
+        materialization=_invalid_range(),
+    )
+    oracle = compute_reference_windows(
+        frame,
+        BITSTAMP_BTCUSD_1M,
+        window="3m",
+        emit_every="1m",
+        materialization=_invalid_range(),
+    )
+
+    assert (
+        engine.get_column("traded_seconds").to_list()
+        == oracle.get_column("traded_seconds").to_list()
+    ), label
+    # Not only equal: equal to what the rule says. A window holding the
+    # replaced candle reports two traded minutes where it does not count
+    # and three where it does, so an implementation that agreed with
+    # itself about the wrong answer still fails here.
+    counts_as_traded = volume > 0 and not math.isnan(volume)
+    expected = 180 if counts_as_traded else 120
+    assert engine.get_column("traded_seconds").to_list()[0] == expected, label
+
+
+def test_a_null_volume_is_not_a_trade_in_the_engine() -> None:
+    """The `fill_null` in the fast path, pinned.
+
+    Flipping it to ``True`` used to pass the whole suite: the null-volume
+    case reached the engine nowhere, so the entire null-and-NaN paragraph
+    of that function's docstring was unfalsifiable -- which is how its
+    claim came to be wrong about the other half. The oracle is not
+    compared here because it RAISES on a null volume, which is the third
+    entry in its own list of divergences.
+    """
+    frame = _frame_with_volume(1.0).with_columns(
+        pl.Series("volume", [None] + [1.0] * (_INVALID_ROWS - 1), dtype=pl.Float64)
+    )
+
+    engine = compute_windows(
+        frame,
+        BITSTAMP_BTCUSD_1M,
+        window="3m",
+        emit_every="1m",
+        materialization=ExplicitRange(
+            start=_INVALID_BASE + 180, end=_INVALID_BASE + 240
+        ),
+    )
+
+    # The window [base, base+180) holds the null candle and two others.
+    assert engine.get_column("traded_seconds").to_list() == [120]
+    assert engine.get_column("coverage_seconds").to_list() == [180]

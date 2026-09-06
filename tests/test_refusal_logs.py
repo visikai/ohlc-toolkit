@@ -89,6 +89,11 @@ _SITES = (
     Site(
         quality.logger, lambda: quality._validated_min_coverage(_LOUD), "min_coverage"
     ),
+    Site(
+        quality.logger,
+        lambda: quality._validated_min_traded_seconds(_LOUD),
+        "min_traded_seconds",
+    ),
     Site(primitives.logger, lambda: primitives._require_method(_LOUD), "return method"),
     Site(
         generators.logger,
@@ -172,6 +177,25 @@ _SITES = (
         "annotation row cap",
     ),
 )
+
+
+# Census pin, the same device tests/test_workflow_pins.py and
+# tests/test_dependency_floors.py use: without it a guard added to the
+# package and forgotten here leaves this file parametrised over the sites
+# that WERE registered, passing while covering one fewer than it did before.
+# `min_traded_seconds` was added to the package and not to this tuple; the
+# suite stayed green, because a list nothing counts cannot be short.
+# Update deliberately when a type-refusing guard is added or removed.
+_EXPECTED_SITES = 30
+
+
+def test_the_site_census_is_pinned() -> None:
+    """A guard missing from this tuple is a guard nothing here checks."""
+    assert len(_SITES) == _EXPECTED_SITES, [site.name for site in _SITES]
+    # Names are what the parametrisation ids are built from, so a duplicate
+    # would silently collapse two sites into one reported case.
+    names = [site.name for site in _SITES]
+    assert len(set(names)) == len(names), sorted(names)
 
 
 @pytest.mark.parametrize("site", _SITES, ids=[site.name for site in _SITES])

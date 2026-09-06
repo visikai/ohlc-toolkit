@@ -30,3 +30,10 @@ volume exactly `0.0`. It is the only case whose `traded_seconds` differs
 from its `coverage_seconds`, and without it every file here would report
 the two columns byte-identical -- which an implementation that simply
 copied one to the other would reproduce exactly.
+
+The committed real minute slice contributes nothing here either: it holds
+0 zero-volume rows in 20160, so every window over it reports
+`traded_seconds` equal to `coverage_seconds`. That is worth stating
+because the public grid is around 19% untraded overall, which would lead a
+reader to assume a real slice must exercise the distinction. This one does
+not.

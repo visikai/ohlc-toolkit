@@ -30,8 +30,13 @@ recorded here because it is the reason the entries below are breaking.
   in the first nine columns could tell a dead window from a quiet one.
   The predicate is volume, never `high != low` -- on the public
   one-minute grid 13.71% of traded minutes trade at a single price, and a
-  flatness test would report every one of them as untraded. A null or NaN
-  volume is not a trade.
+  flatness test would report every one of them as untraded. A null volume
+  is not a trade, and neither is a NaN -- polars answers `NaN > 0` with
+  True where Python answers False, so the fast path and the reference
+  oracle are made to agree explicitly rather than by luck. An INFINITE
+  volume is counted as a trade by both, because `inf > 0` is true in
+  either language; it is invalid source data and validation is where it
+  is refused.
 - `WindowQualityPolicy` gains **`min_traded_seconds`** (int, default
   `0`), a second threshold consuming `traded_seconds` with the same
   modes, the same fail-closed null handling and the same single mask. It
@@ -102,6 +107,16 @@ recorded here because it is the reason the entries below are breaking.
   one is refused with a `ConfigError` rather than silently checked
   against one threshold. A caller that projects a frame down to what the
   step consults must keep all three.
+- **BREAKING: positional construction of `WindowQualityPolicy` and
+  `QualityReport` changes.** `min_traded_seconds` is inserted between
+  `min_coverage` and `gate_mode` rather than appended, so
+  `WindowQualityPolicy(QualityMode.GATE, 0.9, GateMode.REPORT)` -- legal
+  at 1.0.0 -- now raises `ConfigError: min_traded_seconds must be an int,
+  got GateMode`. `QualityReport` likewise gains four fields at interior
+  positions. Both fail loudly rather than silently mis-assigning, and
+  keyword construction is unaffected; the fields are ordered by what they
+  mean rather than by when they were added, because the order is part of
+  a public dataclass for as long as the major version lasts.
 - **Dependency floors are raised so the published wheel cannot carry a
   version with a published advisory against it.** `orjson` to `>=3.11.6` and `requests`
   to `>=2.33.0`, the first versions clearing the advisories against them;
