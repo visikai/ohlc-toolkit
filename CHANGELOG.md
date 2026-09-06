@@ -4,6 +4,64 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
+## Unreleased
+
+### Changed
+
+- **BREAKING: `metallic_recurrence` and `metallic_lookback` now REFUSE a
+  seed their own lower bound would drop after quantization.** The seed is
+  a POINT — the term the recurrence starts from and the first member of
+  the schedule. A `minimum` is a FILTER over the terms that follow, and
+  seeding below one on purpose is a documented use: run the recurrence
+  from a small term and keep only the large ones. That still works.
+  What is refused is a seed AT OR ABOVE the bound that quantization moves
+  below it, because then one number was named twice and neither was
+  honoured:
+
+      metallic_recurrence(coefficient=1.618, seed="10s", grain="3s",
+                          minimum="10s", maximum="5m")
+        -> ['27s', '51s', '1m51s', '3m51s']
+      the same call without the minimum
+        -> ['9s', '27s', '51s', '1m51s', '3m51s']
+
+  The schedule recorded `seed: 10s` beside a first member of `27s`. This
+  is the class the 2.0.0 entry for the log-spaced endpoints said it was
+  not closing, now closed in the generator that one scoped out.
+  **The rule, which is what you need to tell whether you are affected:**
+  your call is affected if and only if you pass a `minimum`, your `seed`
+  is at or above it, and quantizing the seed at your grain and rounding
+  rule moves it below that minimum. The comparison is against the seed AS
+  GIVEN, not as quantized, so the trim pattern is untouched.
+  **`minimum` and `maximum` themselves are NOT held to the log-spaced
+  rule here, deliberately.** For those generators the bounds are the
+  first and last points; for this one they are filters over terms a
+  recurrence produced. A `1m30s` maximum on a `1m` grain quantizes to
+  `2m`, and the intended behaviour is to drop the term rather than refuse
+  the schedule — which this package has tested since 1.0.
+  **No resolved schedule changes its members, so no schedule id moves.**
+  Every configuration that now refuses is one where the seed had already
+  been silently dropped, and a schedule with no `minimum` cannot reach the
+  guard at all. No refusal RATE is quoted here on purpose: it is a
+  percentage over a grid of parameters nobody chose, and it moves with the
+  `maximum` you sweep. The rule above is what tells you whether a
+  particular call is affected.
+  **A stored schedule is not re-checked when it is read back.**
+  `from_dict` deserializes a recorded payload without applying this
+  predicate, so a schedule written before this change keeps its id and
+  raises nothing — including one that records `seed: 10s` and
+  `minimum: 10s` beside a first member of `27s`, which is the artifact
+  this change exists to stop being created. If you hold stored schedules,
+  the rule above applies verbatim to the recorded spec: a payload is
+  affected if it names a `minimum`, its `seed` is at or above it, and
+  quantizing that seed at the recorded grain and rounding rule moves it
+  below the minimum.
+  Some configurations that already raised now raise a DIFFERENT message
+  from the same `ConfigError` class, so an `except` clause is unaffected:
+  the new check runs before the quantize-to-zero one, so
+  `coefficient=1.0, seed="1s", grain="3s", minimum="1s", maximum="25s"`
+  moves from "A generated window of 1.0 quantizes to 0s at a 3s grain" to
+  "The seed 1s is at or above the minimum 1s, but quantizes to 0s".
+
 ## 2.0.0 - 2026-09-06
 
 **Read this first if you are on 1.x.** The windowed-candle frame now has

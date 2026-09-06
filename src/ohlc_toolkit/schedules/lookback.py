@@ -40,6 +40,7 @@ from ohlc_toolkit.schedules.generators import (
     log_spaced_values,
     recurrence_values,
     require_endpoints_on_the_grain,
+    require_seed_above_its_own_floor,
     resolve_values,
 )
 from ohlc_toolkit.schedules.identity import (
@@ -543,8 +544,9 @@ def metallic_lookback(  # noqa: PLR0913 - one keyword per recorded parameter
         The resolved schedule.
 
     Raises:
-        ConfigError: For any parameter the spec refuses, a recurrence
-            that will not reach the maximum, or bounds that leave
+        ConfigError: For any parameter the spec refuses, for a seed at or
+            above the minimum that quantizes below it, for a recurrence
+            that will not reach the maximum, or for bounds that leave
             nothing.
 
     """
@@ -556,6 +558,13 @@ def metallic_lookback(  # noqa: PLR0913 - one keyword per recorded parameter
         minimum=minimum,
         rounding=rounding,
         dedup=dedup,
+    )
+    require_seed_above_its_own_floor(
+        seed=spec.seed,
+        minimum=spec.minimum,
+        grain=spec.grain,
+        rounding=spec.rounding,
+        units=PERIOD_UNITS,
     )
     values = recurrence_values(
         coefficient=spec.coefficient,

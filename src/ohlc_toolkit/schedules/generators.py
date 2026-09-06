@@ -995,6 +995,84 @@ def require_endpoints_on_the_grain(
         )
 
 
+def require_seed_above_its_own_floor(
+    *,
+    seed: int,
+    minimum: int | None,
+    grain: int,
+    rounding: RoundingRule,
+    units: ScheduleUnits,
+) -> None:
+    """Refuse a seed a caller's own lower bound would drop after quantization.
+
+    The seed is a POINT the caller names -- the term the recurrence starts
+    from, and the first member of the resolved schedule. A lower bound is a
+    FILTER over the terms that follow. The two are different things, and
+    seeding below a bound on purpose is a documented use: run the
+    recurrence from a small term and keep only the large ones.
+
+    What is not a use is a seed at or above the bound that quantization
+    moves BELOW it. Then the caller named one number twice -- as the point
+    to start from and as the floor -- and received neither:
+
+        metallic_recurrence(coefficient=1.618, seed="10s", grain="3s",
+                            minimum="10s", maximum="5m")
+          -> ['27s', '51s', '1m51s', '3m51s']
+        the same call without the minimum
+          -> ['9s', '27s', '51s', '1m51s', '3m51s']
+
+    The schedule records ``seed: 10s`` beside a first member of ``27s``,
+    which is the self-contradicting artifact the log-spaced endpoints were
+    made to refuse. This is the same class in the generator that one
+    deliberately scoped out.
+
+    The comparison is against the seed AS GIVEN, not as quantized: a seed
+    genuinely below the bound is the trim pattern and passes untouched.
+
+    Args:
+        seed: The term the recurrence starts from.
+        minimum: The optional lower bound.
+        grain: The quantization grain, in whole units.
+        rounding: The tie rule quantization applies.
+        units: How to describe a member when refusing.
+
+    Raises:
+        ConfigError: If the seed is at or above the bound and quantizes
+            below it.
+
+    """
+    if minimum is None or seed < minimum:
+        return
+    quantized = _quantize(Fraction(seed), grain, rounding)
+    if quantized >= minimum:
+        return
+    logger.warning(
+        "Rejecting a seed of {} that quantizes to {} at a {} grain, below the "
+        "minimum {}.",
+        units.render(seed),
+        units.render(quantized),
+        units.render_grain(grain),
+        units.render(minimum),
+    )
+    # The remedy differs when the seed quantizes to NOTHING: no minimum
+    # rescues a seed the grain cannot represent at all, so offering one
+    # would be advice that cannot work.
+    remedy = (
+        f"Choose a grain that represents {units.render(seed)}."
+        if quantized == 0
+        else (
+            f"Choose a grain that represents {units.render(seed)}, or a "
+            f"minimum the grain can represent."
+        )
+    )
+    raise ConfigError(
+        f"The seed {units.render(seed)} is at or above the minimum "
+        f"{units.render(minimum)}, but quantizes to {units.render(quantized)} "
+        f"at a {units.render_grain(grain)} grain -- so the point the schedule "
+        f"starts from would be dropped by your own lower bound. {remedy}"
+    )
+
+
 def resolve_values(  # noqa: PLR0913 - one keyword per resolution rule
     values: list[Fraction],
     *,
@@ -1226,9 +1304,10 @@ def metallic_recurrence(  # noqa: PLR0913 - one keyword per recorded parameter
         parameters that produced them.
 
     Raises:
-        ConfigError: If any parameter is invalid, if the recurrence runs
-            past the term cap, if a term quantizes to nothing, or if the
-            bounds leave no windows.
+        ConfigError: If any parameter is invalid, if the seed is at or
+            above the minimum and quantizes below it, if the recurrence
+            runs past the term cap, if a term quantizes to nothing, or if
+            the bounds leave no windows.
 
     """
     spec = MetallicRecurrenceSpec(
@@ -1238,6 +1317,13 @@ def metallic_recurrence(  # noqa: PLR0913 - one keyword per recorded parameter
         maximum=validate_window_duration(maximum),
         minimum=None if minimum is None else validate_window_duration(minimum),
         rounding=rounding,
+    )
+    require_seed_above_its_own_floor(
+        seed=spec.seed.total_seconds,
+        minimum=None if spec.minimum is None else spec.minimum.total_seconds,
+        grain=spec.grain.total_seconds,
+        rounding=spec.rounding,
+        units=DURATION_UNITS,
     )
     windows = _resolve_windows(
         _recurrence_terms(spec),
