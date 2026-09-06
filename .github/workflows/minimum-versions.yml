@@ -77,9 +77,19 @@ jobs:
       # resolves against. Test tooling is added after the audit, so its
       # own transitive closure cannot be mistaken for something this
       # package ships.
+      #
+      # A floor with no wheel for the interpreter in this matrix cell
+      # fails HERE rather than at the check below, because uv falls back
+      # to building from source. That is intended: measured, floored at
+      # orjson 3.10.15 this step fails on 3.14 with PyO3 refusing an
+      # interpreter newer than 3.13, which is a real answer about what a
+      # consumer on 3.14 can install.
       - name: Install at the lowest resolution
         run: |
-          uv venv .venv --python "${{ matrix.python-version }}"
+          # --clear so the step is reproducible when someone runs
+          # these same commands over a checkout that already has a
+          # .venv; a runner never does.
+          uv venv .venv --clear --python "${{ matrix.python-version }}"
           uv pip install --python .venv --resolution lowest -e .
 
       - name: Check the declared floors are the versions installed
