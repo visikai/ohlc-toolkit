@@ -22,8 +22,12 @@ a log line.
 pip install ohlc-toolkit
 ```
 
-Python 3.11 or newer. Four runtime dependencies: `polars`, `requests`,
-`loguru`, `orjson`.
+Python 3.11 or newer. Seven declared runtime dependencies: `polars`,
+`requests`, `loguru` and `orjson`, which this package imports, plus
+`urllib3`, `idna` and `certifi`, which it does not. Those three are
+declared because `requests` carries them into every install and its own
+ranges admit versions with published advisories against them; a floor
+here is the only place a consumer's resolve can be closed.
 
 ## 1.0 is a break
 

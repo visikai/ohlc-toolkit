@@ -42,8 +42,8 @@ _VERSION = re.compile(r"^v\d+\.\d+\.\d+$")
 # stops parsing, would leave every assertion below iterating an empty
 # list and passing vacuously. Update these deliberately when a workflow
 # or a step is added.
-_EXPECTED_WORKFLOWS = 5
-_EXPECTED_REFERENCES = 20
+_EXPECTED_WORKFLOWS = 6
+_EXPECTED_REFERENCES = 22
 
 # The action holding publishing rights, and the registry it resolves
 # through. It builds its own container reference from the ref it is
