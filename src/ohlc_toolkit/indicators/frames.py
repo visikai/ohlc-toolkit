@@ -10,7 +10,9 @@ every indicator built on the frame being wrong together, and by then the
 artifact has been written.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import polars as pl
 
@@ -24,7 +26,7 @@ logger = get_logger(__name__)
 #: is not among them: it is `close_time - W` for every row, so carrying it
 #: would be recording the same fact twice and inviting the two to
 #: disagree. `close_time` is the frame's key rather than a phased field.
-PHASED_COLUMNS: dict[str, pl.DataType] = {
+_PHASED_COLUMN_TYPES: dict[str, pl.DataType] = {
     "open": pl.Float64(),
     "high": pl.Float64(),
     "low": pl.Float64(),
@@ -34,6 +36,11 @@ PHASED_COLUMNS: dict[str, pl.DataType] = {
     "coverage_seconds": pl.Int64(),
     "traded_seconds": pl.Int64(),
 }
+
+#: Exposed as a read-only mapping rather than the dict itself: it is a
+#: public name on a 2.0 surface, and a caller that mutated it would change
+#: what every later call reads.
+PHASED_COLUMNS: Mapping[str, pl.DataType] = MappingProxyType(_PHASED_COLUMN_TYPES)
 
 #: What a windowed-candle frame must carry for any of this to mean
 #: anything. A frame without `traded_seconds` is a schema v1 frame, and
@@ -170,11 +177,26 @@ def _validated_lookback(value: object) -> int:
     if value <= 0:
         logger.warning("Rejecting non-positive lookback: {}", value)
         raise ConfigError(f"lookback must be strictly positive, got {value}")
+    if value > MAX_LOOKBACK:
+        logger.warning("Rejecting a lookback of {}.", value)
+        raise ConfigError(
+            f"lookback must be at most {MAX_LOOKBACK}, got {value}; each phase is "
+            "a separate join, so an unbounded count is an unbounded query."
+        )
     return value
 
 
 def _validated_threshold(value: object) -> int:
-    """Return a traded threshold, rejecting anything that is not a non-negative int."""
+    """Return a traded threshold, rejecting anything that is not a non-negative int.
+
+    The same check :mod:`ohlc_toolkit.windows.quality` applies to its own
+    ``min_traded_seconds``, and deliberately a second copy rather than an
+    import: this module reads a threshold a RECIPE states, that one reads
+    a threshold a POLICY states, and the two are separate numbers that
+    happen to share a grammar. Importing would couple a recipe's
+    validation to a policy's, so that relaxing one would silently relax
+    the other. A test compares the two messages instead.
+    """
     if isinstance(value, bool) or not isinstance(value, int):
         logger.warning("Rejecting non-int min_traded_seconds: {}", type(value).__name__)
         raise ConfigError(
@@ -242,21 +264,41 @@ def _require_regular_grid(frame: pl.DataFrame) -> int:
 
     """
     closes = frame.get_column("close_time")
+    if closes.null_count():
+        logger.warning("Rejecting {} null close_time value(s).", closes.null_count())
+        raise ConfigError(
+            f"close_time must not be null; this frame has {closes.null_count()} "
+            "null value(s), and a row with no close time is a row no lookup can "
+            "reach."
+        )
     if closes.len() < _MINIMUM_ROWS:
         logger.warning("Rejecting a phased frame of {} row(s).", closes.len())
         raise ConfigError(
             f"A phased lookback needs at least {_MINIMUM_ROWS} rows to measure a "
             f"cadence from, got {closes.len()}."
         )
-    spacings = sorted(closes.diff().drop_nulls().unique().to_list())
-    if not spacings or spacings[0] <= 0:
+    steps = closes.diff().drop_nulls()
+    spacings = sorted(steps.unique().to_list())
+    if not spacings or spacings[0] < 0:
         logger.warning("Rejecting a close_time column that does not ascend.")
         raise ConfigError(
             f"A phased lookback needs an ascending close_time grid; this frame's "
             f"row spacings are {bounded_echo(spacings)}."
         )
-    cadence = int(spacings[0])
-    ragged = [spacing for spacing in spacings if spacing % cadence]
+    if spacings[0] == 0:
+        logger.warning("Rejecting a frame that repeats a close_time.")
+        raise ConfigError(
+            "A phased lookback needs each close_time once; this frame repeats one, "
+            "so an exact-equality lookup would have two answers."
+        )
+
+    # The MODAL step, not the smallest. Taking the smallest let a single
+    # off-grid row redefine the cadence as its own tiny gap, at which point
+    # both the emit-multiple rule and the anchor-phase rule are vacuously
+    # satisfied and the caller gets a frame of nulls -- the exact answer
+    # those two rules exist to refuse.
+    cadence = int(steps.mode().min())  # type: ignore[arg-type]
+    ragged = [spacing for spacing in spacings if spacing % cadence or spacing < cadence]
     if ragged:
         logger.warning("Rejecting row spacings that are not whole steps: {}", ragged)
         raise ConfigError(
@@ -337,3 +379,8 @@ def _emit_ticks(
 
 
 _MINIMUM_ROWS = 2
+
+#: The same cap a schedule carries, for the same reason: a count nobody
+#: bounded is a query nobody bounded. The published lookback ladder tops
+#: out at 56, so this is far above anything a recipe states.
+MAX_LOOKBACK = 512

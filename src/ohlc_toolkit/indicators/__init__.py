@@ -14,21 +14,25 @@ not. Reading from the source-cadence materialization is what makes every
 """
 
 from ohlc_toolkit.indicators.frames import (
+    MAX_LOOKBACK,
     PHASED_COLUMNS,
     REQUIRED_COLUMNS,
     PhasedGrid,
     PhasedLookback,
-    resolve_phased_grid,
 )
 from ohlc_toolkit.indicators.phased import phased_lookback
 from ohlc_toolkit.indicators.reference import phased_lookback_reference
 
+# `resolve_phased_grid` is deliberately NOT here. Both entry points call
+# it and neither caller does; exporting it would enlarge the published
+# contract with machinery that has no stated user, and a 2.0 name cannot
+# be withdrawn without another major.
 __all__ = [
+    "MAX_LOOKBACK",
     "PHASED_COLUMNS",
     "REQUIRED_COLUMNS",
     "PhasedGrid",
     "PhasedLookback",
     "phased_lookback",
     "phased_lookback_reference",
-    "resolve_phased_grid",
 ]

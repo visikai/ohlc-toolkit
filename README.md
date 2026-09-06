@@ -165,7 +165,7 @@ under 0.1 s for both return columns. polars uses the whole thread pool.
 
 ## What's in it
 
-`import ohlc_toolkit` reaches all six subpackages. Names are not
+`import ohlc_toolkit` reaches all seven subpackages. Names are not
 flattened into the top level — spell them `ohlc_toolkit.windows.X`, or
 import from the subpackage.
 
@@ -379,6 +379,27 @@ bytes are the bytes this manifest describes. It does not prove the
 manifest is the one you meant — a different, self-consistent release
 verifies clean and is reported as itself, which is the right behaviour,
 since the identity it returns is what you record.
+
+### `indicators` — the phased lookback every indicator reads through
+
+At each tick of the emit grid, a phased indicator consumes the `L`
+non-overlapping windows of duration `W` ending at `t`, `t − W`, `t − 2W`,
+and so on. `phased_lookback` is the fast path; `phased_lookback_reference`
+is the brute-force oracle it is tested against.
+
+The inputs are read from the window's **source-cadence** materialization,
+not from its own `E`-cadence frame. `{t − kW}` lies on the emit grid only
+when `E` divides `W`, and it frequently does not: at `W = 2h26m` against
+`E = 3m`, the emit frame holds none of the phases at all.
+
+Lookups are exact equality on `close_time` — never a shift, a nearest
+match or an as-of join. A window whose `traded_seconds` falls below the
+recipe's threshold is a null input, applied here whatever quality mode
+wrote the frame, because report mode removes nothing. Any null among the
+`L` inputs nulls the whole output row rather than leaving a list with a
+hole in it, so no indicator downstream has to remember the rule. The
+effective history `L × W` comes back with the result rather than being
+left to callers to multiply.
 
 ## Development
 

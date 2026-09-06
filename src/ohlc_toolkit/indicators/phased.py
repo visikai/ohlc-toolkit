@@ -119,10 +119,12 @@ def _admitted(frame: pl.DataFrame, grid: PhasedGrid) -> pl.DataFrame:
     below-threshold window and an absent one reach the join in the same
     state, so exactly one rule decides what a missing input is.
     """
-    return frame.filter(
-        pl.col("traded_seconds").is_not_null()
-        & (pl.col("traded_seconds") >= grid.min_traded_seconds)
-    ).select(pl.col(_TICK_KEY), *(pl.col(name) for name in PHASED_COLUMNS))
+    # No `is_not_null` beside the comparison: polars drops a null
+    # predicate, so a null `traded_seconds` fails the filter already.
+    # Spelling it out was inert code inflating a coverage figure.
+    return frame.filter(pl.col("traded_seconds") >= grid.min_traded_seconds).select(
+        pl.col(_TICK_KEY), *(pl.col(name) for name in PHASED_COLUMNS)
+    )
 
 
 def _join_phase(
