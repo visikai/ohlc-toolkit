@@ -19,6 +19,11 @@ from ohlc_toolkit.indicators import (
 )
 from ohlc_toolkit.temporal import ConfigError, Duration
 
+# One class for every fixture below: this file is about the NAME, and the
+# normalization class is the one identity field the name deliberately does
+# not carry.
+_CLASS = NormalizationClass.BOUNDED_BY_CONSTRUCTION
+
 _PUBLISHED = [
     ("rsi", FeatureFamily.PHASED, 14, "21m", "rsi_p14_w21m"),
     ("relrange", FeatureFamily.PHASED, 7, "56m", "relrange_p7_w56m"),
@@ -39,6 +44,7 @@ def test_the_published_names_are_exactly_these(
         family=family,
         period=period,
         window=Duration.parse(window),
+        normalization=_CLASS,
     )
 
     assert identity.column_name == name
@@ -55,7 +61,7 @@ def test_a_published_name_parses_back_to_what_produced_it(
     Parsing the string is the direction that matters: a stored artifact
     hands a reader column names and nothing else.
     """
-    parsed = FeatureIdentity.parse(name)
+    parsed = FeatureIdentity.parse(name, normalization=_CLASS)
 
     assert parsed.indicator == indicator
     assert parsed.family is family
@@ -78,10 +84,11 @@ def test_the_dense_family_is_representable_before_it_exists() -> None:
         family=FeatureFamily.DENSE,
         period=14,
         window=Duration.parse("21m"),
+        normalization=_CLASS,
     )
 
     assert dense.column_name == "rsi_d14_w21m"
-    assert FeatureIdentity.parse("rsi_d14_w21m") == dense
+    assert FeatureIdentity.parse("rsi_d14_w21m", normalization=_CLASS) == dense
     # And it does not collide with the phased column of the same shape.
     assert (
         dense.column_name
@@ -90,6 +97,7 @@ def test_the_dense_family_is_representable_before_it_exists() -> None:
             family=FeatureFamily.PHASED,
             period=14,
             window=Duration.parse("21m"),
+            normalization=_CLASS,
         ).column_name
     )
 
@@ -114,9 +122,10 @@ def test_two_identities_differing_anywhere_get_different_names(
         family=family,
         period=period,
         window=Duration(window_seconds),
+        normalization=_CLASS,
     )
 
-    assert FeatureIdentity.parse(identity.column_name) == identity
+    assert FeatureIdentity.parse(identity.column_name, normalization=_CLASS) == identity
 
 
 @pytest.mark.parametrize(
@@ -136,7 +145,7 @@ def test_a_name_that_could_not_have_been_derived_is_refused(
 ) -> None:
     """Parsing refuses rather than guessing at a shape it does not know."""
     with pytest.raises(ConfigError, match=match):
-        FeatureIdentity.parse(column)
+        FeatureIdentity.parse(column, normalization=_CLASS)
 
 
 @pytest.mark.parametrize(
@@ -159,6 +168,7 @@ def test_an_indicator_name_that_would_not_parse_back_is_refused(
             family=FeatureFamily.PHASED,
             period=14,
             window=Duration.parse("21m"),
+            normalization=_CLASS,
         )
 
 
@@ -176,6 +186,7 @@ def test_a_period_that_is_not_a_positive_int_is_refused(
             family=FeatureFamily.PHASED,
             period=period,  # type: ignore[arg-type]
             window=Duration.parse("21m"),
+            normalization=_CLASS,
         )
 
 
@@ -187,6 +198,7 @@ def test_a_family_that_is_not_a_member_is_refused() -> None:
             family="p",  # type: ignore[arg-type]
             period=14,
             window=Duration.parse("21m"),
+            normalization=_CLASS,
         )
 
 
@@ -198,6 +210,7 @@ def test_a_zero_window_is_refused() -> None:
             family=FeatureFamily.PHASED,
             period=14,
             window=Duration.parse("0s"),
+            normalization=_CLASS,
         )
 
 
@@ -262,6 +275,161 @@ def test_an_indicator_that_is_not_a_string_is_refused() -> None:
             family=FeatureFamily.PHASED,
             period=14,
             window=Duration.parse("21m"),
+            normalization=_CLASS,
+        )
+
+
+class TestTheBannedNamePart:
+    """The refusal that three earlier tests appeared to cover and did not.
+
+    Each case below is one where the banned-part guard is the ONLY thing
+    that can refuse, and each matches on a phrase the input does not
+    contain. The earlier tests matched on `BANNED_NAME_PART` itself,
+    which is the literal "timestamp" and appears in every input -- so the
+    match succeeded against the echoed input whatever had refused, and
+    weakening the guard from `in` to `==` left the suite green while
+    `timestampfoo_p14_w21m` became constructible.
+    """
+
+    @pytest.mark.parametrize(
+        "indicator", ["timestampfoo", "mytimestamp", "atimestampb"]
+    )
+    def test_an_indicator_carrying_the_part_anywhere_is_refused(
+        self, indicator: str
+    ) -> None:
+        """Nothing else about these names is wrong.
+
+        Each is lowercase, alphanumeric, starts with a letter and has no
+        underscore, so the indicator pattern accepts every one. Only the
+        banned-part guard can refuse them.
+        """
+        with pytest.raises(ConfigError, match="close_time is the time key"):
+            FeatureIdentity(
+                indicator=indicator,
+                family=FeatureFamily.PHASED,
+                period=14,
+                window=Duration.parse("21m"),
+                normalization=_CLASS,
+            )
+
+    @pytest.mark.parametrize(
+        "column", ["mytimestamp_p14_w21m", "timestampfoo_p14_w21m"]
+    )
+    def test_a_column_carrying_the_part_anywhere_is_refused(self, column: str) -> None:
+        """These parse cleanly as names; only the part makes them illegal."""
+        with pytest.raises(ConfigError, match="close_time is the time key"):
+            FeatureIdentity.parse(column, normalization=_CLASS)
+
+    def test_a_name_that_merely_looks_similar_is_not_caught(self) -> None:
+        """The other direction, so the guard is not refusing everything.
+
+        "stamps" contains no banned part. Without this, a guard that
+        refused every indicator would pass every test above.
+        """
+        identity = FeatureIdentity(
+            indicator="stamps",
+            family=FeatureFamily.PHASED,
+            period=1,
+            window=Duration.parse("1m"),
+            normalization=_CLASS,
+        )
+
+        assert identity.column_name == "stamps_p1_w1m"
+
+
+class TestTheCountsRefuseTheirOwnArguments:
+    """The `Raises:` both count functions promise, which nothing enforced.
+
+    Their validators were reachable only through `FeatureIdentity`, so
+    stripping every check from the two functions left the suite green --
+    and `effective_n("1d", "0s", 3)` became a `ZeroDivisionError` out of a
+    function documented to raise `ConfigError`.
+    """
+
+    @pytest.mark.parametrize(
+        ("period", "window", "match"),
+        [
+            (0, "3m", r"strictly positive"),
+            (3, "0s", r"window must be strictly positive"),
+            (True, "3m", r"must be an int"),
+        ],
+    )
+    def test_effective_history_refuses_its_arguments(
+        self, period: object, window: str, match: str
+    ) -> None:
+        """Each argument, and the message names which one."""
+        with pytest.raises(ConfigError, match=match):
+            effective_history(period, window)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        ("history", "window", "period", "match"),
+        [
+            ("0s", "3m", 3, r"history_range must be strictly positive"),
+            ("1d", "0s", 3, r"window must be strictly positive"),
+            ("1d", "3m", 0, r"strictly positive"),
+        ],
+    )
+    def test_effective_n_refuses_and_says_which_argument(
+        self, history: str, window: str, period: object, match: str
+    ) -> None:
+        """Two durations, so the message has to name the one it refused.
+
+        Without the label both zero cases produced the same sentence,
+        naming neither -- and a `ZeroDivisionError` was one edit away.
+        """
+        with pytest.raises(ConfigError, match=match):
+            effective_n(history, window, period)  # type: ignore[arg-type]
+
+
+def test_a_window_too_long_to_parse_is_still_a_config_error() -> None:
+    """`parse` takes a name off a stored artifact, so it cannot leak.
+
+    A numeric component of more than 4300 digits trips CPython's own
+    integer-parsing limit inside `Duration.parse`, which raises a bare
+    `ValueError`. This entry point documents `ConfigError`, so it
+    converts rather than letting a caller discover the difference.
+    """
+    absurd = "9" * 5000 + "m"
+
+    with pytest.raises(ConfigError):
+        FeatureIdentity.parse(f"rsi_p14_w{absurd}", normalization=_CLASS)
+
+
+def test_the_record_carries_a_normalization_class_the_name_does_not() -> None:
+    """§8's rule holds: what varies between columns is in the name.
+
+    The class does not vary between the columns of one feature, so it
+    lives in the record the manifest gets and not in the name. That is
+    also why `parse` takes it as an argument: the name cannot vouch for
+    it, and defaulting it would invent the one field it does not carry.
+    """
+    identity = FeatureIdentity(
+        indicator="rsi",
+        family=FeatureFamily.PHASED,
+        period=14,
+        window=Duration.parse("21m"),
+        normalization=NormalizationClass.STATIONARIZED,
+    )
+
+    assert identity.normalization is NormalizationClass.STATIONARIZED
+    assert "stationarized" not in identity.column_name
+    assert (
+        FeatureIdentity.parse(
+            identity.column_name, normalization=NormalizationClass.STATIONARIZED
+        )
+        == identity
+    )
+
+
+def test_a_normalization_that_is_not_a_member_is_refused() -> None:
+    """The string is not the class; the member is."""
+    with pytest.raises(ConfigError, match="must be a NormalizationClass"):
+        FeatureIdentity(
+            indicator="rsi",
+            family=FeatureFamily.PHASED,
+            period=14,
+            window=Duration.parse("21m"),
+            normalization="stationarized",  # type: ignore[arg-type]
         )
 
 

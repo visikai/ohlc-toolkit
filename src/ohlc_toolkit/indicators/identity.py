@@ -97,6 +97,11 @@ class FeatureIdentity:
         family: How it reads its inputs.
         period: The lookback count `L`.
         window: The window duration `W`.
+        normalization: What kind of comparability the values already
+            have. Carried by the record and NOT by the column name: it
+            does not vary between the columns of one feature, and the
+            rule is that the name holds what varies. A primitive declares
+            it, because the answer follows from how the number is built.
 
     """
 
@@ -104,6 +109,7 @@ class FeatureIdentity:
     family: FeatureFamily
     period: int
     window: Duration
+    normalization: NormalizationClass
 
     def __post_init__(self) -> None:
         """Check every field, however this was constructed.
@@ -113,8 +119,9 @@ class FeatureIdentity:
                 alphanumeric starting with a letter, if it carries the
                 banned name part, if the family is not a
                 :class:`FeatureFamily`, if the period is not a strictly
-                positive int, or if the window is not a strictly positive
-                duration.
+                positive int, if the window is not a strictly positive
+                duration, or if the normalization is not a
+                :class:`NormalizationClass`.
 
         """
         object.__setattr__(self, "indicator", _validated_indicator(self.indicator))
@@ -127,6 +134,15 @@ class FeatureIdentity:
             )
         object.__setattr__(self, "period", _validated_period(self.period))
         object.__setattr__(self, "window", _validated_window(self.window))
+        if not isinstance(self.normalization, NormalizationClass):
+            logger.warning(
+                "Rejecting non-NormalizationClass normalization: {}",
+                type(self.normalization).__name__,
+            )
+            raise ConfigError(
+                f"normalization must be a NormalizationClass, got "
+                f"{type(self.normalization).__name__}"
+            )
 
     @property
     def column_name(self) -> str:
@@ -140,11 +156,19 @@ class FeatureIdentity:
         return f"{self.indicator}_{self.family.value}{self.period}_w{self.window}"
 
     @classmethod
-    def parse(cls, column: str) -> Self:
+    def parse(cls, column: str, *, normalization: NormalizationClass) -> Self:
         """Recover the identity a column name was derived from.
+
+        The normalization class is an ARGUMENT, not something recovered:
+        the name does not carry it, by design, so a reader parsing a
+        stored column supplies it from the manifest that recorded it.
+        Defaulting it here would invent the one field the name cannot
+        vouch for.
 
         Args:
             column: A column name as :attr:`column_name` produces.
+            normalization: The class the manifest recorded for this
+                feature.
 
         Returns:
             The identity it names.
@@ -178,8 +202,36 @@ class FeatureIdentity:
             indicator=match["indicator"],
             family=family,
             period=int(match["period"]),
-            window=coerce_duration(match["window"]),
+            window=_parsed_window(match["window"]),
+            normalization=normalization,
         )
+
+
+def _parsed_window(spelling: str) -> Duration:
+    """Parse the window part of a column name, refusing what will not parse.
+
+    ``coerce_duration`` raises :class:`ConfigError` for the shapes it
+    knows about, and a bare ``ValueError`` for one it does not: a numeric
+    component of more than 4300 digits trips CPython's integer-parsing
+    limit inside it. This entry point takes a column name off a stored
+    artifact and documents ``ConfigError``, so the leak is closed here
+    rather than left for a caller to discover.
+
+    Raises:
+        ConfigError: For any window spelling this cannot turn into a
+            duration.
+
+    """
+    try:
+        return coerce_duration(spelling)
+    except ValueError as error:
+        # ConfigError does not derive from ValueError, so the taxonomy's
+        # own refusals pass through here untouched and only the leak is
+        # converted.
+        logger.warning("Rejecting an unparsable window: {}", bounded_echo(spelling))
+        raise ConfigError(
+            f"{bounded_echo(spelling)} is not a duration this can parse."
+        ) from error
 
 
 def effective_history(period: int, window: Duration | str) -> Duration:
@@ -230,7 +282,7 @@ def effective_n(
         ConfigError: If any argument is unusable.
 
     """
-    span = _validated_window(history_range).total_seconds
+    span = _validated_window(history_range, label="history_range").total_seconds
     window_seconds = _validated_window(window).total_seconds
     return span // window_seconds // _validated_period(period)
 
@@ -280,10 +332,15 @@ def _validated_period(value: object) -> int:
     return value
 
 
-def _validated_window(value: Duration | str) -> Duration:
-    """Coerce a window duration and refuse a zero one."""
-    window = coerce_duration(value)
-    if window.total_seconds == 0:
-        logger.warning("Rejecting a zero window.")
-        raise ConfigError("window must be strictly positive, got 0s.")
-    return window
+def _validated_window(value: Duration | str, *, label: str = "window") -> Duration:
+    """Coerce a duration and refuse a zero one, saying which one it was.
+
+    The label is not decoration. :func:`effective_n` takes two durations,
+    and without it both ``("0s", "3m", 3)`` and ``("1d", "0s", 3)``
+    produced the same message naming neither.
+    """
+    duration = coerce_duration(value)
+    if duration.total_seconds == 0:
+        logger.warning("Rejecting a zero {}.", label)
+        raise ConfigError(f"{label} must be strictly positive, got 0s.")
+    return duration

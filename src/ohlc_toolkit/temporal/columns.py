@@ -18,7 +18,7 @@ what to do about the collision differs by call site, and only that
 sentence does.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection
 
 import polars as pl
 
@@ -30,21 +30,39 @@ logger = get_logger(__name__)
 
 
 def require_absent_columns(
-    frame: pl.DataFrame, names: Sequence[str], *, remedy: str
+    frame: pl.DataFrame, names: Collection[str], *, remedy: str
 ) -> None:
     """Refuse to write over a column the frame already carries.
 
     Args:
         frame: The frame about to be written to.
-        names: The column names this call would add.
+        names: The column names this call would add. A bare ``str`` is
+            REFUSED rather than iterated -- see below.
         remedy: What the caller should do instead, in the calling
             module's own words. It completes the refusal, so write it as
             a sentence.
 
     Raises:
-        ConfigError: If ``frame`` already carries any of ``names``.
+        ConfigError: If ``names`` is a single string, or if ``frame``
+            already carries any of ``names``.
 
     """
+    # A `str` IS a `Collection[str]`, so no annotation can make this
+    # unrepresentable and a type checker will not catch it. Passing one
+    # iterates its CHARACTERS: `require_absent_columns(frame, "close")`
+    # looks for columns named "c", "l", "o", "s", "e", finds none, and
+    # returns -- a guard whose whole purpose is to prevent an overwrite
+    # passing while the overwrite proceeds. It is the most natural
+    # mistake a caller can make and the worst failure this function has,
+    # so it is refused out loud rather than left to a checker the caller
+    # may not run.
+    if isinstance(names, str):
+        logger.warning("Rejecting a single column name passed as a bare str.")
+        raise ConfigError(
+            f"names must be a collection of column names, not a single string; "
+            f"{bounded_echo(names)} would be read one character at a time. Pass "
+            "a tuple, as in (name,)."
+        )
     present = [name for name in names if name in frame.columns]
     if not present:
         return
