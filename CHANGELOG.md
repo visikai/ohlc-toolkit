@@ -128,6 +128,48 @@ recorded here because it is the reason the entries below are breaking.
   column named `c`, and lets the overwrite proceed.
   The returns path's refusal text and log prefix changed to the shared
   wording; the columns it names and the exception it raises did not.
+- **`indicators.RelativeRange`**, **`indicators.LogVolumeRatio`** and
+  **`indicators.PriceToMovingAverage`**, the other three primitives. All
+  three are STATIONARIZED: ratios or log ratios that remove the price or
+  volume scale without estimating anything from a sample. One unit
+  convention across the slice, because a series running from $5 to
+  $100k+ makes any price-unit quantity incomparable with itself a year
+  later.
+  - `relrange`, `L = P + 1`: the mean true range over the `P` windows
+    that have a predecessor, divided by the current close. A window's
+    true range uses the PREVIOUS PHASED window's close -- the window one
+    `W` earlier, not the previous row of any frame. Computed as
+    `max(high, prev) - min(low, prev)`, which is the three-candidate
+    definition exactly rather than approximately: subtraction is
+    monotone, so no candidate can win by rounding. The tempting
+    arithmetic-only form `clip(high - prev, 0) + clip(prev - low, 0)` is
+    not exact where `prev` lies inside the bar.
+  - `logvolratio`, `L = P + 1`: the natural log of the current volume
+    over the MEDIAN volume of the `P` windows before it. A median because
+    volume is heavy-tailed and one outlying window would drag a mean
+    baseline toward itself, flattening the events the indicator exists to
+    show; a log because the plain ratio lives on the same tail, and
+    doubling and halving should be the same distance from zero. The
+    current window is excluded from its own baseline, so a spike cannot
+    shrink the ratio it is supposed to produce.
+    A zero or negative volume among present inputs is REFUSED rather than
+    read through: a present window has traded seconds at or above the
+    recipe's threshold and therefore volume above zero, so a zero is a
+    violation upstream, not a null or a negative infinity to interpret.
+  - `mapos`, `L = P`: the natural log of the current close over the
+    simple mean close of the `P` windows ending at the tick, the current
+    one INCLUDED -- which is what makes `P` identical closes read exactly
+    `0.0`. At `P = 1` the mean is the current close itself and every
+    reading is identically zero.
+    This replaces a moving-average log SLOPE, which is nearly
+    proportional to the `P x W` backward log return this package already
+    computes. Over a seeded random walk of 600 minutes at `W = 3m` and
+    `P = 3`, the slope correlates with that return at **+0.999999** while
+    price-to-mean correlates at **+0.764172**: where the mean MOVED and
+    where the price SITS relative to it are different facts.
+  A non-positive close is refused for both price ratios, on the same
+  reasoning: a windowed candle's close is a traded price, so a zero one
+  is a violation upstream rather than a division to perform.
 - **`ohlc_toolkit.indicators`**, a seventh subpackage, holding the phased
   lookback every indicator reads through: at each tick of the emit grid,
   the `L` non-overlapping windows of duration `W` ending at `t`, `t - W`,

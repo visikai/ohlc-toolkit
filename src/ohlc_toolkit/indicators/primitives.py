@@ -30,7 +30,12 @@ from ohlc_toolkit.indicators.identity import (
     FeatureIdentity,
     NormalizationClass,
 )
-from ohlc_toolkit.temporal import ConfigError, Duration, require_absent_columns
+from ohlc_toolkit.temporal import (
+    ConfigError,
+    DataValidationError,
+    Duration,
+    require_absent_columns,
+)
 from ohlc_toolkit.temporal.echo import bounded_echo
 
 logger = get_logger(__name__)
@@ -269,3 +274,99 @@ def add_indicator(
         remedy="compute this indicator once, or write it to a frame of its own.",
     )
     return PhasedLookback(frame=phased.frame.with_columns(values), grid=phased.grid)
+
+
+def has_missing_input(*fields: str) -> pl.Expr:
+    """Mark the ticks whose inputs are not all present.
+
+    A tick is incomplete if a list it reads is null -- the harness's own
+    all-or-nothing rule for a window that was absent or below the traded
+    threshold -- or if a list carries a null INSIDE it, which the harness
+    never emits but a hand-built record can. The second is worth checking
+    at every primitive: an aggregation would skip the null and average
+    over one fewer input than the period says there are.
+
+    Args:
+        fields: The phased fields the primitive reads.
+
+    Returns:
+        A boolean expression, true where the tick cannot be computed.
+
+    """
+    return pl.any_horizontal(
+        pl.col(field).list.drop_nulls().list.len() != pl.col(field).list.len()
+        for field in fields
+    )
+
+
+def require_positive_inputs(
+    phased: PhasedLookback, *, fields: Collection[str], reason: str
+) -> None:
+    """Refuse a non-positive value where the arithmetic needs a positive one.
+
+    A ratio divides by one of these and a log takes one as an argument,
+    so a zero or a negative does not produce a wrong number -- it
+    produces a null, an infinity or a NaN, each of which a reader would
+    have to interpret. The refusal happens here instead, naming the
+    contract that was broken upstream.
+
+    Only PRESENT inputs are examined: a null is the harness saying the
+    window was absent or below the traded threshold, which is a legal
+    state the primitive nulls through.
+
+    Args:
+        phased: The harness output.
+        fields: The fields that must be strictly positive.
+        reason: Why the contract says they are, quoted in the refusal.
+
+    Raises:
+        DataValidationError: If any present value is not positive.
+
+    """
+    counts = phased.frame.select(
+        (pl.col(field).list.eval(pl.element() <= 0.0).list.sum()).sum().alias(field)
+        for field in fields
+    ).row(0, named=True)
+    offending = {name: int(count) for name, count in counts.items() if count}
+    if not offending:
+        return
+    counted = ", ".join(f"{count} in {name}" for name, count in offending.items())
+    logger.error("Refusing non-positive phased input(s): {}.", counted)
+    raise DataValidationError(
+        f"Non-positive value(s) among present inputs ({counted}); {reason}"
+    )
+
+
+def require_finite_columns(
+    frame: pl.DataFrame, columns: Collection[str], *, computing: str
+) -> None:
+    """Refuse a non-finite intermediate rather than reading through it.
+
+    Checked on the intermediates a reading is assembled from rather than
+    on the reading itself, because most non-finite intermediates do not
+    survive into the output as non-finite values: a finite numerator over
+    an infinite denominator is ``0.0``, which is in range and looks
+    exactly like a legitimate reading.
+
+    Args:
+        frame: The intermediates.
+        columns: The ones that must be finite.
+        computing: The column being computed, for the refusal.
+
+    Raises:
+        DataValidationError: If any is non-finite anywhere.
+
+    """
+    offending = {
+        name: int((~frame[name].drop_nulls().is_finite()).sum()) for name in columns
+    }
+    offending = {name: count for name, count in offending.items() if count}
+    if not offending:
+        return
+    counted = ", ".join(f"{count} in {name}" for name, count in offending.items())
+    logger.error("Refusing non-finite intermediate(s) for {}.", computing)
+    raise DataValidationError(
+        f"{computing} is assembled from non-finite intermediate(s) ({counted}); "
+        "the values they were computed from are not finite, or the arithmetic "
+        "between them overflows."
+    )
