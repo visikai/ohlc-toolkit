@@ -24,7 +24,15 @@ dependencies = [
     # still holds -- these were dismissed on 2026-09-06 as stale, since
     # they named a lockfile deleted in the move to uv.
     "orjson>=3.11.6,<4.0.0",
-    "polars>=1.35.0,<2.0.0",
+    # Floor is the first version whose `rolling_*_by` accepts a series
+    # containing nulls. 1.35.1 through 1.37.1 raise
+    # InvalidOperationError out of `compute_windows` instead of skipping
+    # the null, so the documented behaviour on a null price held for
+    # none of them -- measured on 3.11 and 3.14, which agree, since the
+    # difference is in the Rust core rather than the bindings. 1.35.0
+    # was not installable at any point: its pinned polars-runtime-32
+    # companion is yanked.
+    "polars>=1.38.1,<2.0.0",
     # Floor clears both advisories against requests; the lockfile alone
     # does not bind what a consumer resolves.
     "requests>=2.33.0,<3.0.0",
