@@ -6,6 +6,8 @@ window's own `E`-cadence frame; that case is where the two differ, and
 where reading from the `E` frame silently returns nothing.
 """
 
+import re
+
 import polars as pl
 import pytest
 from hypothesis import assume, given, settings
@@ -826,8 +828,10 @@ def test_a_frame_whose_cadence_does_not_divide_the_window_is_refused() -> None:
     satisfied; every row spans `2h26m`, so the span rule is satisfied;
     the emit grid sits on the frame's own phase, so the anchor rule is
     satisfied. Only `t - kW` is unreachable, and the harness answered
-    that with a column of nulls end to end -- 0 non-null rows of 4,000
-    on the artifacts this was measured on, with nothing raised.
+    that with a column of nulls end to end: every one of this fixture's
+    34 emit ticks, with nothing raised. The share does not depend on how
+    long the frame is -- at a lookback of 2 no tick can be complete at
+    all, so a frame of any size comes back entirely null.
 
     The emit step is deliberately NOT the window here. An emit step that
     divided the window would make `t - kW` an emit tick and let the
@@ -848,8 +852,44 @@ def test_a_frame_whose_cadence_does_not_divide_the_window_is_refused() -> None:
         rows, window=window, cadence=cadence, first_tick=first, last_tick=last
     )
 
-    with pytest.raises(ConfigError, match="must divide the window"):
+    with pytest.raises(ConfigError, match="must divide the window") as refusal:
         phased_lookback(coarse, window=window, emit_every=emit, lookback=2)
+
+    # The advice has to be advice. A message naming windows the cadence
+    # does NOT divide sends the caller straight back into this same
+    # refusal, and nothing would notice: every suggested window is
+    # checked against the cadence rather than merely being present.
+    suggested = [
+        int(value)
+        for value in re.findall(r"\d+", str(refusal.value).split("divides:")[1])
+    ]
+    assert suggested
+    assert all(value % cadence_seconds == 0 for value in suggested), suggested
+
+
+def test_the_oracle_refuses_the_same_frame_the_harness_does() -> None:
+    """Both resolve through one function; this is what says so out loud.
+
+    The module docstring promises the two cannot drift apart in what they
+    refuse. They share `resolve_phased_grid`, so this cannot fail while
+    that holds -- which is the point: it is the test that would fail if
+    someone gave either one its own resolution path.
+    """
+    window, cadence, emit = "2h26m", "3m", "6m"
+    window_seconds = Duration.parse(window).total_seconds
+    cadence_seconds = Duration.parse(cadence).total_seconds
+    count = 2 * window_seconds // _MINUTE + 60
+    first = _BASE + -(-window_seconds // cadence_seconds) * cadence_seconds
+    coarse = _windows_at_cadence(
+        _source_rows(count),
+        window=window,
+        cadence=cadence,
+        first_tick=first,
+        last_tick=_BASE + count * _MINUTE + 1,
+    )
+
+    with pytest.raises(ConfigError, match="must divide the window"):
+        phased_lookback_reference(coarse, window=window, emit_every=emit, lookback=2)
 
 
 def test_the_window_the_coarse_grid_cannot_serve_is_served_at_source_cadence() -> None:

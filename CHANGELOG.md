@@ -37,9 +37,22 @@ against their tags, and are not restated here.
   at a lookback of 1 turned silently into an all-null column when the
   lookback was raised to 2.
 
-  Artifacts materialized at source cadence — what
-  `compute_windows` writes and what every published recipe reads — are
-  unaffected.
+  Some configurations that already raised now raise a DIFFERENT message
+  from the same `ConfigError` class, so an `except` clause is unaffected:
+  this check runs before the emit-cadence one, so a 120s-cadence frame of
+  60s windows at `emit_every="60s"` moves from "The emit cadence must be a
+  whole multiple of the frame's 120s cadence" to "The frame's 120s cadence
+  must divide the window of 60s".
+
+  No refusal RATE is quoted here on purpose, for the reason the entry
+  below gives: a percentage over a grid of parameters nobody chose
+  measures the grid, not the change. The rule above is what tells you
+  whether a particular call is affected — and the lookback-1 paragraph
+  names the one class of caller that was getting a correct answer and
+  will now get a refusal.
+
+  Artifacts materialized at source cadence — what `compute_windows` writes
+  and what every published recipe reads — are unaffected.
 
 - **BREAKING: `metallic_recurrence` and `metallic_lookback` now REFUSE a
   seed their own lower bound would drop after quantization.** The seed is
