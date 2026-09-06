@@ -6,6 +6,43 @@ against their tags, and are not restated here.
 
 ## Unreleased
 
+### Added
+
+- **`returns.add_forward_excursions`: the best and worst an interval
+  reached, beside the return that only reads its end.** Adds
+  `forward_mfe_{method}_{H}` and `forward_mae_{method}_{H}`, relating the
+  highest `high` and the lowest `low` strictly after `t` and no later
+  than `t + H` to the close at `t`, on whichever scale `ReturnMethod`
+  names. Purely additive: no existing column, name or signature changes.
+- The two share ONE availability column,
+  `forward_excursion_{method}_{H}_available_at`, named after the pair
+  rather than after either column and deliberately distinct from the
+  forward return's twin, so a frame can carry the return and both
+  excursions over one horizon at once. Like the return's, it is total --
+  it states `close_time + H` on every row, including rows whose values
+  are null.
+- Unlike a return, this REQUIRES a hole-free grid at the stated cadence
+  and refuses anything else. A return finds its counterpart by close
+  time, so a missing row makes one value null and leaves the rest
+  correct; an extremum reads the interior of its interval, so a missing
+  row quietly removes a candidate and the answer that comes back is not
+  null but wrong. A bar inside the interval that states no price at all
+  nulls both columns rather than being skipped.
+- The typical sign is `mfe >= 0 >= mae` and it is NOT enforced. Price
+  that gaps down between the close at `t` and everything after it can
+  put every high in the interval below that close, and a negative
+  favorable excursion is the honest report of it; clamping would claim a
+  profit nobody could have taken.
+
+### Fixed
+
+- `tests/test_public_namespace.py` pins the environment of the
+  subprocesses it inspects instead of inheriting one. Those tests compare
+  a child's stdout exactly, and an ambient `LOG_LEVEL=DEBUG` -- which
+  this repository's own `.mise.toml` exports, so the documented local
+  command supplied one and CI did not -- made three of them fail locally
+  while passing in CI.
+
 ### Changed
 
 - **BREAKING: `phased_lookback` and `phased_lookback_reference` now REFUSE

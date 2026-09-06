@@ -93,3 +93,33 @@ def gapped_frame() -> pl.DataFrame:
 def gap_free_frame() -> pl.DataFrame:
     """Return the six-row fixture with every 1m tick present."""
     return return_frame(GAP_FREE_OFFSETS, GAP_FREE_CLOSES)
+
+
+def excursion_frame(
+    offsets: Sequence[int],
+    highs: Sequence[float | None],
+    lows: Sequence[float | None],
+    closes: Sequence[float | None],
+) -> pl.DataFrame:
+    """Build a window frame carrying the four columns an excursion reads.
+
+    Args:
+        offsets: Close-time offsets from :data:`TIME_BASE`, in seconds.
+        highs: One high per offset. ``None`` is a bar that reported no
+            price at all, which the engine emits for a window holding no
+            source candle.
+        lows: One low per offset, on the same convention.
+        closes: One close per offset, on the same convention.
+
+    Returns:
+        A four-column polars DataFrame in exactly the given row order.
+
+    """
+    return (
+        return_frame(offsets, closes)
+        .with_columns(
+            pl.Series("high", list(highs), dtype=pl.Float64),
+            pl.Series("low", list(lows), dtype=pl.Float64),
+        )
+        .select("close_time", "high", "low", "close")
+    )

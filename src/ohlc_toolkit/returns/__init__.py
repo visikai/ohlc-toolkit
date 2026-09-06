@@ -26,17 +26,25 @@ shifting a number of rows.
 from ohlc_toolkit.returns.primitives import (
     ReturnMethod,
     add_backward_returns,
+    add_forward_excursions,
     add_forward_returns,
     backward_return_column,
     forward_available_at_column,
+    forward_excursion_available_at_column,
+    forward_mae_column,
+    forward_mfe_column,
     forward_return_column,
 )
 
 __all__ = [
     "ReturnMethod",
     "add_backward_returns",
+    "add_forward_excursions",
     "add_forward_returns",
     "backward_return_column",
     "forward_available_at_column",
+    "forward_excursion_available_at_column",
+    "forward_mae_column",
+    "forward_mfe_column",
     "forward_return_column",
 ]

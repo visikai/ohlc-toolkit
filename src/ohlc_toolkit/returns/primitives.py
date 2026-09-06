@@ -1,10 +1,19 @@
-"""Returns over window frames, composed as columns onto a frame.
+"""Returns and excursions over window frames, composed as columns onto a frame.
 
-These are mechanisms, not a recipe. There is no default horizon, no
-horizon grid, no label, no barrier, and no position sizing anywhere in
-this module: a caller states one horizon and one formula per call, and
-gets back a new frame carrying one more column than it handed over.
+These are mechanisms, not a recipe. What is IN is values: the return
+over an interval, and the best and worst that interval reached. What
+stays OUT is every quantity built by deciding something about those
+values -- no label, no directional class, no barrier, no first-touch, no
+horizon grid, no default horizon, and no position sizing anywhere in
+this module. A caller states one horizon and one formula per call, and
+gets back a new frame carrying the columns that call computed.
 Composing several is composing several calls.
+
+First-touch is worth naming separately, because it looks like it belongs
+beside the excursions and does not: which of two barriers a path reached
+FIRST cannot be read off an extremum over the interval at all. It needs
+a primitive that scans the path in order, which this module has no shape
+for.
 
 Backward is the causal one
 --------------------------
@@ -131,8 +140,12 @@ import polars as pl
 from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.returns.alignment import (
     CLOSE_COLUMN,
+    HIGH_COLUMN,
+    LOW_COLUMN,
     counterpart_closes,
     require_alignable_frame,
+    require_extremum_columns,
+    require_total_grid,
     resolve_horizon,
     shifted_close_times,
 )
@@ -140,6 +153,7 @@ from ohlc_toolkit.temporal import (
     ConfigError,
     Duration,
     require_absent_columns,
+    validate_cadence,
     validate_horizon_duration,
 )
 
@@ -158,6 +172,11 @@ _AVAILABLE_AT_SUFFIX = "_available_at"
 # same thing.
 _NUMERATOR = "__numerator_close"
 _DENOMINATOR = "__denominator_close"
+
+# Column names used only inside the forward extremum, never returned.
+_EXTREMUM_INPUT = "__extremum_input"
+_MASKED_HIGH = "__masked_high"
+_MASKED_LOW = "__masked_low"
 
 
 @unique
@@ -464,4 +483,267 @@ def add_forward_returns(
     )
     return frame.with_columns(
         values.rename(value_column), available_at.rename(available_at_column)
+    )
+
+
+def _excursion_column(kind: str, method: ReturnMethod, horizon: Duration | str) -> str:
+    """Assemble an excursion column name from its kind, formula, and horizon.
+
+    Spelled from the same parts and in the same order as a return column,
+    so one glance separates the three quantities over one horizon.
+
+    Args:
+        kind: ``"mfe"`` or ``"mae"``.
+        method: The formula the column holds.
+        horizon: The horizon ``H``.
+
+    Returns:
+        The column name.
+
+    Raises:
+        ConfigError: If ``method`` is not a :class:`ReturnMethod`, or if
+            the horizon is not a strictly positive duration.
+
+    """
+    _require_method(method)
+    return f"forward_{kind}_{method.value}_{validate_horizon_duration(horizon)}"
+
+
+def forward_mfe_column(method: ReturnMethod, horizon: Duration | str) -> str:
+    """Name the maximum-favorable-excursion column.
+
+    Args:
+        method: The formula the column holds.
+        horizon: The horizon ``H``, as a
+            :class:`~ohlc_toolkit.temporal.Duration` or a compact
+            duration string.
+
+    Returns:
+        The column name, for example ``"forward_mfe_log_1h"``.
+
+    Raises:
+        ConfigError: If ``method`` is not a :class:`ReturnMethod`, or if
+            the horizon is not a strictly positive duration.
+
+    """
+    return _excursion_column("mfe", method, horizon)
+
+
+def forward_mae_column(method: ReturnMethod, horizon: Duration | str) -> str:
+    """Name the maximum-adverse-excursion column.
+
+    Args:
+        method: The formula the column holds.
+        horizon: The horizon ``H``, as a
+            :class:`~ohlc_toolkit.temporal.Duration` or a compact
+            duration string.
+
+    Returns:
+        The column name, for example ``"forward_mae_log_1h"``.
+
+    Raises:
+        ConfigError: If ``method`` is not a :class:`ReturnMethod`, or if
+            the horizon is not a strictly positive duration.
+
+    """
+    return _excursion_column("mae", method, horizon)
+
+
+def forward_excursion_available_at_column(
+    method: ReturnMethod, horizon: Duration | str
+) -> str:
+    """Name the availability column the two excursion columns share.
+
+    Named after the PAIR rather than after either column, for two
+    reasons. Both excursions are taken over one interval and so become
+    available at one instant, and a twin named after one of them would
+    make the other look like it had none. And the name has to differ from
+    :func:`forward_available_at_column`'s so a frame can carry the return
+    and the excursions over one horizon at once, which is the whole point
+    of composing them onto the same frame.
+
+    Args:
+        method: The formula the accompanied columns hold.
+        horizon: The horizon ``H``, as a
+            :class:`~ohlc_toolkit.temporal.Duration` or a compact
+            duration string.
+
+    Returns:
+        The shared availability column's name, for example
+        ``"forward_excursion_log_1h_available_at"``.
+
+    Raises:
+        ConfigError: If ``method`` is not a :class:`ReturnMethod`, or if
+            the horizon is not a strictly positive duration.
+
+    """
+    _require_method(method)
+    spelled = validate_horizon_duration(horizon)
+    return f"forward_excursion_{method.value}_{spelled}{_AVAILABLE_AT_SUFFIX}"
+
+
+def _masked_extremum_inputs(frame: pl.DataFrame) -> pl.DataFrame:
+    """Blank both extremum inputs on every row whose bar states no price.
+
+    An absent bar -- one the aggregator emitted with null prices because
+    nothing traded and nothing was carried -- must not be skipped over as
+    though the interval simply did not contain it. Nulling BOTH inputs
+    wherever EITHER is null is what makes an absent bar refuse the whole
+    interval rather than shrink it, and it makes the two columns agree
+    about which rows they cannot state.
+
+    Args:
+        frame: A frame carrying ``Float64`` ``high`` and ``low``.
+
+    Returns:
+        A two-column frame of the masked inputs, in ``frame``'s row order.
+
+    """
+    absent = pl.col(HIGH_COLUMN).is_null() | pl.col(LOW_COLUMN).is_null()
+    return frame.select(
+        pl.when(absent).then(None).otherwise(pl.col(HIGH_COLUMN)).alias(_MASKED_HIGH),
+        pl.when(absent).then(None).otherwise(pl.col(LOW_COLUMN)).alias(_MASKED_LOW),
+    )
+
+
+def _forward_extremum(values: pl.Series, *, rows: int, largest: bool) -> pl.Series:
+    """Take the extremum of the ``rows`` values that follow each position.
+
+    The window is the half-open interval the excursion is defined over:
+    it starts at the NEXT row and ends ``rows`` rows later, so the bar at
+    ``t`` itself never contributes and the bar closing at ``t + H``
+    always does. That is a shift by one composed with a backward window,
+    read in reverse -- the reversal is what turns a trailing window into
+    a leading one, and it is why this is one pass rather than ``rows``
+    shifted columns.
+
+    A position with fewer than ``rows`` values ahead of it, or with any
+    null among them, yields null: an extremum over part of an interval is
+    not an extremum over the interval.
+
+    Args:
+        values: One value per row, in row order.
+        rows: How many following rows the interval spans. Strictly
+            positive.
+        largest: Take the maximum when true, the minimum when false.
+
+    Returns:
+        One value per row, in row order, null where the interval is not
+        wholly present.
+
+    """
+    following = pl.col(_EXTREMUM_INPUT).shift(-1).reverse()
+    rolled = (
+        following.rolling_max(window_size=rows, min_samples=rows)
+        if largest
+        else following.rolling_min(window_size=rows, min_samples=rows)
+    )
+    return (
+        pl.DataFrame([values.rename(_EXTREMUM_INPUT)])
+        .select(rolled.reverse())
+        .to_series()
+    )
+
+
+def add_forward_excursions(
+    frame: pl.DataFrame,
+    *,
+    horizon: Duration | str,
+    cadence: Duration | str,
+    method: ReturnMethod,
+) -> pl.DataFrame:
+    """Add the best and worst the interval ``(t, t + H]`` reached, to a frame.
+
+    The maximum favorable excursion relates the highest ``high`` strictly
+    after ``t`` and no later than ``t + H`` to the close at ``t``; the
+    maximum adverse excursion relates the lowest ``low`` over the same
+    bars to the same close. Both use the formula :class:`ReturnMethod`
+    names, so each is on the same scale as the forward return over that
+    horizon and the three can be read together.
+
+    NEITHER VALUE IS AVAILABLE AT ``t``, for the same reason the forward
+    return is not, and more sharply: these read the INTERIOR of the
+    interval, so they know what happened at every instant between. The
+    one availability column states ``t + H`` on every row.
+
+    The interval excludes its start and includes its end. The bar closing
+    at ``t`` is the one whose close the excursion is measured FROM, so
+    letting its own high and low compete would guarantee
+    ``mfe >= 0 >= mae`` by construction rather than by observation.
+
+    Unlike a return, this REQUIRES a total grid at ``cadence``: see
+    :func:`~ohlc_toolkit.returns.alignment.require_total_grid` for why a
+    hole makes an extremum wrong rather than null.
+
+    Never mutates ``frame``, never sorts it, and never reads or alters
+    any column other than ``close_time``, ``close``, ``high`` and ``low``.
+
+    Args:
+        frame: A window frame such as
+            :func:`~ohlc_toolkit.windows.engine.compute_windows` produces,
+            carrying at least an ``Int64`` ``close_time`` and ``Float64``
+            ``close``, ``high`` and ``low``.
+        horizon: The horizon ``H``, as a
+            :class:`~ohlc_toolkit.temporal.Duration` or a compact
+            duration string. Strictly positive, and a whole multiple of
+            ``cadence``.
+        cadence: The cadence the frame's rows are emitted at, in the same
+            two spellings. Unlike a return's, this one IS verified
+            against the frame's actual row spacing.
+        method: Which formula to apply. Required: there is no default.
+
+    Returns:
+        A new frame: ``frame``'s columns unchanged and in their original
+        order, followed by the columns :func:`forward_mfe_column` and
+        :func:`forward_mae_column` name and then the one
+        :func:`forward_excursion_available_at_column` names.
+
+    Raises:
+        ConfigError: If ``method`` is not a :class:`ReturnMethod`, if the
+            horizon or cadence fails
+            :func:`~ohlc_toolkit.returns.alignment.resolve_horizon`, if
+            ``frame`` fails
+            :func:`~ohlc_toolkit.returns.alignment.require_alignable_frame`
+            or
+            :func:`~ohlc_toolkit.returns.alignment.require_extremum_columns`,
+            if ``frame`` is not a total grid at ``cadence``, or if
+            ``frame`` already carries a column this call would write.
+
+    """
+    _require_method(method)
+    resolved = resolve_horizon(horizon, cadence)
+    cadence_seconds = validate_cadence(cadence).total_seconds
+    mfe_column = forward_mfe_column(method, resolved)
+    mae_column = forward_mae_column(method, resolved)
+    available_at_column = forward_excursion_available_at_column(method, resolved)
+
+    require_alignable_frame(frame, offset_seconds=resolved.total_seconds)
+    require_extremum_columns(frame)
+    require_total_grid(frame, cadence_seconds=cadence_seconds)
+    require_absent_columns(
+        frame,
+        (mfe_column, mae_column, available_at_column),
+        remedy="adding them again would overwrite values this call did not compute.",
+    )
+
+    rows = resolved.total_seconds // cadence_seconds
+    masked = _masked_extremum_inputs(frame)
+    close = frame.get_column(CLOSE_COLUMN)
+    highest = _forward_extremum(
+        masked.get_column(_MASKED_HIGH), rows=rows, largest=True
+    )
+    lowest = _forward_extremum(masked.get_column(_MASKED_LOW), rows=rows, largest=False)
+    available_at = shifted_close_times(frame, offset_seconds=resolved.total_seconds)
+
+    logger.debug(
+        "Adding {!r}, {!r} and {!r} over {} row(s).",
+        mfe_column,
+        mae_column,
+        available_at_column,
+        frame.height,
+    )
+    return frame.with_columns(
+        _return_values(highest, close, method).rename(mfe_column),
+        _return_values(lowest, close, method).rename(mae_column),
+        available_at.rename(available_at_column),
     )
