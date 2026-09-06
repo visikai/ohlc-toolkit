@@ -250,6 +250,56 @@ def test_an_empty_lookback_schedule_is_refused() -> None:
         explicit_lookback([])
 
 
+@pytest.mark.parametrize(
+    ("minimum", "maximum", "grain", "refused"),
+    [
+        pytest.param(10, 100, 3, True, id="minimum-rounds-below-itself"),
+        pytest.param(12, 101, 3, True, id="maximum-rounds-above-itself"),
+        pytest.param(11, 99, 3, False, id="minimum-rounds-inward"),
+        pytest.param(12, 99, 3, False, id="both-ends-on-the-grain"),
+        pytest.param(10, 100, 1, False, id="a-grain-of-one-represents-all"),
+    ],
+)
+def test_the_count_path_applies_the_same_endpoint_rule(
+    minimum: int, maximum: int, grain: int, refused: bool
+) -> None:
+    """Its own test, in its own units, because two paths drift.
+
+    `log_spaced` and `log_spaced_lookback` build different specs and call
+    different resolvers; they share only the guard and the point
+    generator. The rule is stated once in `test_generators.py` and pinned
+    here in periods, so a change that fixed one path and not the other
+    fails here.
+
+    The reported defect, in this path's units:
+    `log_spaced_lookback(count=3, minimum=10, maximum=100, grain=3)`
+    returned `(33, 99)` -- three points asked for, two returned, the
+    named endpoint gone.
+    """
+    if refused:
+        with pytest.raises(ConfigError, match="outside the range it defines"):
+            log_spaced_lookback(count=3, minimum=minimum, maximum=maximum, grain=grain)
+        return
+    schedule = log_spaced_lookback(
+        count=3, minimum=minimum, maximum=maximum, grain=grain
+    )
+    assert len(schedule.periods) > 0
+
+
+def test_the_count_path_refusal_speaks_in_periods_not_durations() -> None:
+    """The two paths share a guard and must not share a vocabulary.
+
+    A lookback of 10 is ten PERIODS; rendering it as `10s` here would be
+    the duration path's units leaking through the shared helper.
+    """
+    with pytest.raises(ConfigError) as caught:
+        log_spaced_lookback(count=3, minimum=10, maximum=100, grain=3)
+
+    message = str(caught.value)
+    assert "10 quantizes to 9" in message
+    assert "10s" not in message
+
+
 def test_a_log_spaced_lookback_round_trips_through_its_own_reader() -> None:
     """The control's parameters survive a round trip, id and all."""
     schedule = log_spaced_lookback(count=3, minimum=7, maximum=28)
