@@ -686,7 +686,8 @@ def test_an_infinite_price_does_not_make_the_two_disagree(infinity: float) -> No
         (float("inf"), "inf"),
         (float("-inf"), "-inf"),
         (0.0, "zero"),
-        (7.961e-05, "dust"),
+        (7.961e-05, "smallest-real"),
+        (5e-324, "smallest-positive-double"),
     ],
     ids=lambda value: value if isinstance(value, str) else "",
 )
@@ -704,10 +705,15 @@ def test_the_two_engines_agree_on_traded_seconds_for_every_odd_volume(
 
     The infinities are here because they are the values a reader would
     assume behave like NaN and they do not: ``inf > 0`` is true in both
-    languages, so both count it. Zero and dust are the predicate's own
-    boundary, the one place an epsilon could hide: the smallest positive
-    volume anywhere in this corpus is 7.961e-05, so a guard written as
-    ``> 1e-12`` would pass every other test in the suite.
+    languages, so both count it.
+
+    The last three are the predicate's own boundary, which is the one
+    place an epsilon could hide. The rule is ``> 0``, not "> something
+    small": the smallest positive volume anywhere in this corpus is
+    7.961e-05, so a guard written ``> 1e-12`` passes every other test in
+    the suite AND the real-slice case. Only a value below any plausible
+    epsilon can say the boundary is zero, so the smallest positive double
+    is here to say it.
     """
     frame = _frame_with_volume(volume)
 
