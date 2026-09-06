@@ -825,8 +825,29 @@ class TestTheEmitTickGrid:
             .to_list()
         )
 
-    def test_both_endpoints_are_included(self) -> None:
-        """The first tick at or after the start, and the last at or before the end."""
+    def test_the_last_row_is_a_tick_when_it_sits_on_the_grid(self) -> None:
+        """The endpoint case, on a frame whose last row IS an emit tick.
+
+        This is the one that matters and the one a careless fixture
+        cannot see: `range(first, highest, E)` and
+        `range(first, highest + 1, E)` differ ONLY when `highest` is on
+        the grid. The default fixture's last row is not, so both spellings
+        agree on it and the off-by-one hides. Measured: with the frame
+        trimmed to end on the grid, dropping the endpoint fails here and
+        nowhere else -- and on a live frame that row is the newest and
+        most valuable answer the harness has.
+        """
+        frame = _default_frame(count=40)
+        closes = frame.get_column("close_time").to_list()
+        last_on_grid = max(close for close in closes if close % _THREE_MINUTES == 0)
+        trimmed = frame.filter(pl.col("close_time") <= last_on_grid)
+
+        ticks = self._ticks(trimmed, emit="3m")
+
+        assert ticks[-1] == last_on_grid
+
+    def test_the_grid_is_contiguous_between_its_endpoints(self) -> None:
+        """No tick is skipped in the middle, and the first is not before the start."""
         frame = _default_frame(count=40)
         closes = frame.get_column("close_time").to_list()
 
@@ -835,7 +856,6 @@ class TestTheEmitTickGrid:
         assert ticks[0] >= closes[0]
         assert ticks[0] - _THREE_MINUTES < closes[0]
         assert ticks[-1] <= closes[-1]
-        assert ticks[-1] + _THREE_MINUTES > closes[-1]
         assert ticks == list(range(ticks[0], ticks[-1] + 1, _THREE_MINUTES))
 
     def test_a_frame_starting_exactly_on_the_grid_keeps_its_first_row(self) -> None:
