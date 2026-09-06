@@ -18,7 +18,9 @@ import pytest
 
 from ohlc_toolkit.snapshot import (
     MANIFEST_ASSET_NAME,
+    SnapshotFetchResult,
     SnapshotIntegrityError,
+    SnapshotManifestError,
     read_snapshot_frame,
     verify_snapshot_on_disk,
 )
@@ -28,6 +30,7 @@ from ohlc_toolkit.temporal import ConfigError
 from tests.test_snapshot.factories import (
     HISTORY_ASSET,
     ReleaseFixture,
+    build_default_assets,
     build_release_fixture,
     sha256_hex,
 )
@@ -48,6 +51,21 @@ def _lay_out(fixture: ReleaseFixture, directory: Path) -> Path:
     return directory
 
 
+def _verify(directory: Path, fixture: ReleaseFixture) -> SnapshotFetchResult:
+    """Verify a laid-out fixture, naming the release the caller knows.
+
+    `repository` is required, so every call here states one. That is the
+    point of it being required: a function that fetched nothing knows
+    less about where the bytes came from than one that did, and a default
+    would be an invention recorded as provenance.
+    """
+    return verify_snapshot_on_disk(
+        directory,
+        repository=fixture.release.repository,
+        host=fixture.release.host,
+    )
+
+
 def test_every_declared_asset_is_verified_and_the_identity_is_returned(
     tmp_path: Path,
 ) -> None:
@@ -55,7 +73,7 @@ def test_every_declared_asset_is_verified_and_the_identity_is_returned(
     fixture = build_release_fixture()
     _lay_out(fixture, tmp_path)
 
-    result = verify_snapshot_on_disk(tmp_path)
+    result = _verify(tmp_path, fixture)
 
     assert set(result.assets) == set(fixture.assets)
     assert result.manifest_sha256 == sha256_hex(fixture.manifest_bytes)
@@ -65,23 +83,31 @@ def test_every_declared_asset_is_verified_and_the_identity_is_returned(
     assert read_snapshot_frame(result, asset_name=HISTORY_ASSET).height > 0
 
 
-def test_tampering_with_an_asset_that_is_not_the_first_is_refused(
-    tmp_path: Path,
+@pytest.mark.parametrize("asset", sorted(build_default_assets()))
+def test_tampering_with_any_declared_asset_is_refused(
+    tmp_path: Path, asset: str
 ) -> None:
-    """The finding a first-asset-only loop cannot make.
+    """Every declared asset, not a chosen two of them.
 
-    Truncating the verification to the manifest's first asset leaves this
-    file unread, and the run reports a verified snapshot with a
-    real-looking identity.
+    Position is what pins a loop body, and a count does not: a case on
+    the first asset and a case on the last are both satisfied by an
+    implementation that skips everything between. Measured on the version
+    this replaces -- skipping the middle asset passed the entire suite,
+    and the result object still reported it with its declared size,
+    declared digest and `was_downloaded=False`, having read none of it.
+
+    Parametrising over the fixture's own assets is what closes it for
+    good rather than moving it: a fourth asset adds a fourth case here
+    without anyone remembering to.
     """
     fixture = build_release_fixture()
     _lay_out(fixture, tmp_path)
-    swapped = bytearray(fixture.assets[_NOT_FIRST])
+    swapped = bytearray(fixture.assets[asset])
     swapped[-1] ^= 0xFF
-    (tmp_path / _NOT_FIRST).write_bytes(bytes(swapped))
+    (tmp_path / asset).write_bytes(bytes(swapped))
 
-    with pytest.raises(SnapshotIntegrityError, match=_NOT_FIRST):
-        verify_snapshot_on_disk(tmp_path)
+    with pytest.raises(SnapshotIntegrityError, match=asset):
+        _verify(tmp_path, fixture)
 
 
 def test_a_digest_differing_only_in_its_last_digits_is_refused(
@@ -106,7 +132,7 @@ def test_a_digest_differing_only_in_its_last_digits_is_refused(
     (tmp_path / MANIFEST_ASSET_NAME).write_bytes(edited)
 
     with pytest.raises(SnapshotIntegrityError) as caught:
-        verify_snapshot_on_disk(tmp_path)
+        _verify(tmp_path, fixture)
 
     assert real in str(caught.value)
     assert near_miss in str(caught.value)
@@ -120,7 +146,7 @@ def test_an_asset_of_the_wrong_length_is_refused(tmp_path: Path) -> None:
     (tmp_path / _NOT_FIRST).write_bytes(fixture.assets[_NOT_FIRST][:-1])
 
     with pytest.raises(SnapshotIntegrityError, match="bytes, not the"):
-        verify_snapshot_on_disk(tmp_path)
+        _verify(tmp_path, fixture)
 
 
 def test_an_asset_the_manifest_declares_but_disk_lacks_is_refused(
@@ -132,7 +158,7 @@ def test_an_asset_the_manifest_declares_but_disk_lacks_is_refused(
     (tmp_path / _NOT_FIRST).unlink()
 
     with pytest.raises(SnapshotIntegrityError, match="which is not at"):
-        verify_snapshot_on_disk(tmp_path)
+        _verify(tmp_path, fixture)
 
 
 def test_an_asset_path_that_is_not_a_regular_file_is_refused(
@@ -145,7 +171,7 @@ def test_an_asset_path_that_is_not_a_regular_file_is_refused(
     (tmp_path / _NOT_FIRST).mkdir()
 
     with pytest.raises(ConfigError, match="not a regular file"):
-        verify_snapshot_on_disk(tmp_path)
+        _verify(tmp_path, fixture)
 
 
 def test_a_missing_manifest_is_refused_rather_than_assumed(tmp_path: Path) -> None:
@@ -155,7 +181,7 @@ def test_a_missing_manifest_is_refused_rather_than_assumed(tmp_path: Path) -> No
     (tmp_path / MANIFEST_ASSET_NAME).unlink()
 
     with pytest.raises(ConfigError, match="No snapshot manifest"):
-        verify_snapshot_on_disk(tmp_path)
+        _verify(tmp_path, fixture)
 
 
 def test_a_manifest_declaring_no_assets_is_refused_here(
@@ -175,19 +201,71 @@ def test_a_manifest_declaring_no_assets_is_refused_here(
     monkeypatch.setattr(fetcher_module, "parse_manifest", lambda _raw: emptied)
 
     with pytest.raises(SnapshotIntegrityError, match="declares no assets"):
-        verify_snapshot_on_disk(tmp_path)
+        _verify(tmp_path, fixture)
 
 
-def test_the_history_asset_is_verified_too(tmp_path: Path) -> None:
-    """The first asset is not skipped either, which the others cannot say."""
+def test_the_release_identity_comes_from_the_caller_and_the_manifest(
+    tmp_path: Path,
+) -> None:
+    """Each field from the party that knows it, and none of them invented.
+
+    `repository` and `host` are the caller's, because a manifest does not
+    record where it was published. `tag` is the manifest's, because that
+    is the one field it does. Measured on the version this replaces:
+    defaulting the repository to this project's own and corrupting that
+    default to "totally/wrong-repo" passed 1548 tests at 100% coverage --
+    a default is run by every test and asserted by none.
+    """
     fixture = build_release_fixture()
     _lay_out(fixture, tmp_path)
-    swapped = bytearray(fixture.assets[HISTORY_ASSET])
-    swapped[-1] ^= 0xFF
-    (tmp_path / HISTORY_ASSET).write_bytes(bytes(swapped))
 
-    with pytest.raises(SnapshotIntegrityError, match=HISTORY_ASSET):
-        verify_snapshot_on_disk(tmp_path)
+    result = verify_snapshot_on_disk(
+        tmp_path, repository="example/somewhere-else", host="https://example.invalid"
+    )
+
+    assert result.release.repository == "example/somewhere-else"
+    assert result.release.host == "https://example.invalid"
+    assert result.release.tag == fixture.release.tag
+    # The consequence the field exists for: a URL that leads back to where
+    # the caller says these bytes came from, not to a real release with no
+    # relationship to them.
+    assert result.release.asset_url(HISTORY_ASSET).startswith(
+        "https://example.invalid/example/somewhere-else/"
+    )
+
+
+def test_the_repository_has_no_default(tmp_path: Path) -> None:
+    """Stating it is the caller's job, and the signature says so.
+
+    `fetch_snapshot` refuses to pick a directory on a caller's disk for
+    the same reason. This function knows LESS about provenance than that
+    one, having fetched nothing, so it is in no position to pick a
+    repository either.
+    """
+    fixture = build_release_fixture()
+    _lay_out(fixture, tmp_path)
+
+    with pytest.raises(TypeError, match="repository"):
+        verify_snapshot_on_disk(tmp_path)  # type: ignore[call-arg]
+
+
+def test_a_manifest_tag_the_release_grammar_refuses_is_a_manifest_problem(
+    tmp_path: Path,
+) -> None:
+    """Not a caller problem, and the exception class has to say which.
+
+    `parse_manifest` accepts any non-empty string as a tag;
+    `SnapshotRelease` applies the stricter grammar. Left alone, a tag of
+    `../../../etc/passwd` parsed, every asset verified, the success line
+    logged, and THEN a `ConfigError` escaped -- the class this module
+    documents as meaning the caller pointed at the wrong directory. The
+    caller pointed at the right one.
+    """
+    fixture = build_release_fixture(tag="v1", manifest_tag="../../../etc/passwd")
+    _lay_out(fixture, tmp_path)
+
+    with pytest.raises(SnapshotManifestError, match="usable release tag"):
+        verify_snapshot_on_disk(tmp_path, repository="example/dataset")
 
 
 if __name__ == "__main__":

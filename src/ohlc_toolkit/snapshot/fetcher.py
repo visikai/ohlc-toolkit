@@ -44,7 +44,6 @@ from ohlc_toolkit.snapshot.manifest import (
     parse_manifest,
 )
 from ohlc_toolkit.snapshot.release import (
-    BITSTAMP_BTCUSD_1M_REPOSITORY,
     DEFAULT_RELEASE_HOST,
     SnapshotRelease,
 )
@@ -217,7 +216,7 @@ def fetch_snapshot(
 def verify_snapshot_on_disk(
     directory: str | os.PathLike[str],
     *,
-    repository: str = BITSTAMP_BTCUSD_1M_REPOSITORY,
+    repository: str,
     host: str = DEFAULT_RELEASE_HOST,
 ) -> SnapshotFetchResult:
     """Verify a snapshot already on disk against the manifest beside it.
@@ -237,17 +236,39 @@ def verify_snapshot_on_disk(
     substitution is visible in the record rather than hidden by it.
     Pinning an expected identity is a separate feature and is not this.
 
+    Nor is containment. An asset that is a SYMLINK to a file outside the
+    directory verifies clean, exactly as it does on the fetch path: what
+    is checked is that the bytes reachable at each declared path are the
+    bytes the manifest declares, not where those bytes live. A directory
+    assembled by something hostile can therefore point outward and still
+    be internally consistent, which is worth knowing before treating a
+    clean verification as a statement about the filesystem.
+
     The result is the same type :func:`fetch_snapshot` returns, so
     :func:`~ohlc_toolkit.snapshot.continuity.read_snapshot_frame` consumes
     it unchanged. Every asset reports ``was_downloaded=False``, because
     nothing was.
 
+    The returned release is assembled from the two parties that each know
+    part of it: ``repository`` and ``host`` come from the caller, because
+    a manifest does not record where it was published, and the tag comes
+    from the manifest, because that is the one field it does record.
+    Neither is defaulted to this project's own release, which would be
+    the same mistake :func:`fetch_snapshot` avoids by refusing to pick a
+    directory on a caller's disk -- and this function knows LESS about
+    provenance than that one does, not more, since it fetched nothing.
+
     Args:
         directory: The directory holding the manifest and its assets.
-        repository: The repository to name in the returned release. It is
-            recorded, not contacted.
-        host: The release host to name in the returned release. Likewise
-            recorded, not contacted.
+        repository: The repository the snapshot came from, ``owner/name``.
+            Required and not defaulted: a repository this function
+            invented would be recorded as provenance by a caller who
+            trusted it, and its ``asset_url`` would resolve somewhere
+            with no relationship to the bytes just verified.
+        host: The release host. Defaults to
+            :data:`~ohlc_toolkit.snapshot.release.DEFAULT_RELEASE_HOST`,
+            which is the same default :class:`SnapshotRelease` itself
+            applies, so this adds no assumption of its own.
 
     Returns:
         The verified assets, the parsed manifest, and the snapshot
@@ -264,8 +285,10 @@ def verify_snapshot_on_disk(
             for the same findings, so one ``except`` covers both
             questions.
         SnapshotManifestError: If the manifest's own bytes do not parse
-            or fail its schema.
-        OSError: If an asset is present but cannot be read.
+            or fail its schema, or if the tag it declares is not a usable
+            release tag.
+        OSError: If the manifest or an asset is present but cannot be
+            read.
 
     """
     base = Path(directory)
@@ -306,8 +329,26 @@ def verify_snapshot_on_disk(
         manifest_sha256,
         manifest.tag,
     )
+    # `parse_manifest` reads the tag as any non-empty string, and
+    # `SnapshotRelease` applies the stricter release grammar. Checked here
+    # so a hostile tag is refused as what it is -- a manifest this cannot
+    # use -- rather than escaping as the ConfigError that means a caller
+    # pointed at the wrong directory. The caller pointed at the right one.
+    try:
+        release = SnapshotRelease(repository=repository, tag=manifest.tag, host=host)
+    except ConfigError as error:
+        logger.error(
+            "Manifest {} declares an unusable release tag: {}",
+            bounded_echo(manifest_sha256),
+            bounded_echo(manifest.tag),
+        )
+        raise SnapshotManifestError(
+            f"Manifest {bounded_echo(manifest_sha256)} declares the tag "
+            f"{bounded_echo(manifest.tag)}, which is not a usable release tag."
+        ) from error
+
     return SnapshotFetchResult(
-        release=SnapshotRelease(repository=repository, tag=manifest.tag, host=host),
+        release=release,
         directory=base,
         manifest=manifest,
         manifest_path=manifest_path,
@@ -523,7 +564,7 @@ def _verify_size(path: Path, record: AssetRecord, source: str) -> None:
     landed = path.stat().st_size
     if landed != record.size_bytes:
         logger.error(
-            "Asset {!r} from {} landed at {} bytes, not the declared {}.",
+            "Asset {!r} from {} is {} bytes, not the declared {}.",
             record.name,
             bounded_echo(source),
             landed,
