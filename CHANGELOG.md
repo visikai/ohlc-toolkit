@@ -169,7 +169,14 @@ recorded here because it is the reason the entries below are breaking.
     where the price SITS relative to it are different facts.
   A non-positive close is refused for both price ratios, on the same
   reasoning: a windowed candle's close is a traded price, so a zero one
-  is a violation upstream rather than a division to perform.
+  is a violation upstream rather than a division to perform. A non-finite
+  intermediate is refused in every primitive, checked on the values a
+  reading is assembled from rather than on the reading: an infinite
+  denominator gives a finite quotient that looks like an ordinary
+  reading.
+  The RSI's non-finite refusal MESSAGE changed with that unification --
+  it now names the intermediate rather than the change total, and the
+  exception type and the condition are unchanged.
 - **`ohlc_toolkit.indicators`**, a seventh subpackage, holding the phased
   lookback every indicator reads through: at each tick of the emit grid,
   the `L` non-overlapping windows of duration `W` ending at `t`, `t - W`,

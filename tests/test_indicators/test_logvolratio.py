@@ -14,10 +14,17 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from ohlc_toolkit.indicators import IndicatorPrimitive, LogVolumeRatio
+from ohlc_toolkit.indicators import (
+    IndicatorPrimitive,
+    LogVolumeRatio,
+    phased_lookback,
+)
 from ohlc_toolkit.temporal import ConfigError, DataValidationError
-from tests.test_indicators.factories import phased_from_fields
+from ohlc_toolkit.windows import ExplicitRange, compute_windows
+from tests.test_indicators.factories import BASE, phased_from_fields
+from tests.test_windows.factories import frame_from_rows, profile_for
 
+_MINUTE = 60
 _PERIOD = 3
 _LOOKBACK = _PERIOD + 1
 _RATIO = LogVolumeRatio()
@@ -85,8 +92,15 @@ def test_the_current_window_is_excluded_from_its_own_baseline() -> None:
     The same fixture: including the current 100 in the median moves it
     from 2 to 3, and the reading from `ln(50)` to `ln(100/3)`. The
     exclusion is one `list.slice(1)`, and this is what holds it there.
+
+    Asserted as an equality against the right answer rather than as an
+    inequality against the wrong one: any third number would satisfy
+    `!= ln(100/3)`.
     """
-    assert _reading(_SPIKE) != _INCLUDING_ITSELF
+    value = _reading(_SPIKE)
+
+    assert value == _AGAINST_THE_MEDIAN
+    assert value != _INCLUDING_ITSELF
 
 
 def test_an_even_period_averages_the_two_middle_volumes() -> None:
@@ -99,21 +113,32 @@ def test_a_volume_equal_to_its_baseline_reads_zero() -> None:
     assert _reading([2.0, 1.0, 2.0, 4.0]) == 0.0
 
 
+@pytest.mark.parametrize("period", [3, 4])
 @settings(max_examples=2_000, deadline=None)
-@given(
-    volumes=st.lists(
-        st.floats(min_value=1e-6, max_value=1e9, allow_nan=False, allow_infinity=False),
-        min_size=_LOOKBACK,
-        max_size=_LOOKBACK,
+@given(data=st.data())
+def test_the_primitive_equals_the_brute_force_oracle(
+    data: st.DataObject, period: int
+) -> None:
+    """One route through polars' median, one through a Python sort.
+
+    Both parities of the period: the even branch averages the two middle
+    volumes, and polars' quantile interpolation is where the two routes
+    could disagree. A single literal was the only thing exercising it.
+    """
+    volumes = data.draw(
+        st.lists(
+            st.floats(
+                min_value=1e-6, max_value=1e9, allow_nan=False, allow_infinity=False
+            ),
+            min_size=period + 1,
+            max_size=period + 1,
+        )
     )
-)
-def test_the_primitive_equals_the_brute_force_oracle(volumes: list[float]) -> None:
-    """One route through polars' median, one through a Python sort."""
-    value = _reading(volumes)
+    value = _reading(volumes, period=period)
 
     assert isinstance(value, float)
     assert math.isclose(
-        value, _oracle(volumes, _PERIOD), rel_tol=_TOLERANCE, abs_tol=_TOLERANCE
+        value, _oracle(volumes, period), rel_tol=_TOLERANCE, abs_tol=_TOLERANCE
     )
     assert math.isfinite(value)
 
@@ -170,6 +195,53 @@ def test_a_non_positive_volume_is_refused_rather_than_read_through(
     """
     with pytest.raises(DataValidationError, match="traded seconds"):
         _reading(volumes)
+
+
+def test_an_infinite_volume_is_refused_by_the_finiteness_guard() -> None:
+    """Its own test, because a guard wired into one caller protects one.
+
+    This primitive selects rather than computes -- a first element and a
+    median -- so no arithmetic here can overflow, and it would be easy to
+    conclude that the guard is unreachable. It is reachable, by one path:
+    an INFINITE volume passes the positivity guard, since `inf` is not
+    `<= 0`, and arrives at the finiteness check as the current volume.
+    The source layer refuses non-finite values, so this needs a
+    hand-built record -- which is exactly the threat model the guards
+    state.
+    """
+    with pytest.raises(DataValidationError, match="non-finite intermediate"):
+        _reading([math.inf, 1.0, 2.0, 4.0])
+
+
+def test_the_primitive_runs_over_real_harness_output() -> None:
+    """The median path meets a frame the harness really produced."""
+    rows = [
+        (
+            BASE + index * _MINUTE,
+            100.0 + index,
+            101.0 + index,
+            99.0 + index,
+            100.5 + index,
+            5.0 + index,
+        )
+        for index in range(60)
+    ]
+    frame = compute_windows(
+        frame_from_rows(rows),
+        profile_for(_MINUTE),
+        window="3m",
+        emit_every="1m",
+        materialization=ExplicitRange(start=BASE + 180, end=BASE + 60 * _MINUTE + 1),
+    )
+    phased = phased_lookback(frame, window="3m", emit_every="3m", lookback=_LOOKBACK)
+
+    values = _RATIO.values(phased, period=_PERIOD)
+
+    present = values.drop_nulls()
+    assert present.len() > 0
+    assert present.is_finite().all()
+    # Volume rises throughout, so every reading is above its own baseline.
+    assert (present > 0.0).all()
 
 
 def test_a_frame_resolved_for_another_lookback_is_refused() -> None:

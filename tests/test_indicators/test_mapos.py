@@ -19,6 +19,7 @@ from hypothesis import strategies as st
 from ohlc_toolkit.indicators import (
     IndicatorPrimitive,
     PriceToMovingAverage,
+    add_indicator,
     phased_lookback,
 )
 from ohlc_toolkit.temporal import ConfigError, DataValidationError
@@ -124,10 +125,49 @@ def test_a_null_among_the_closes_nulls_exactly_that_tick(position: int) -> None:
     assert values.to_list()[1] is None
 
 
-def test_a_non_positive_close_is_refused() -> None:
-    """The log's argument. A zero close is a violation upstream."""
+@pytest.mark.parametrize(
+    "closes",
+    [
+        pytest.param([4.0, 0.0, 1.0], id="a-zero-close"),
+        pytest.param([4.0, -1.0, 1.0], id="a-negative-close"),
+    ],
+)
+def test_a_non_positive_close_is_refused(closes: list[float]) -> None:
+    """The log's argument. Both branches, not only the zero one."""
     with pytest.raises(DataValidationError, match="traded price"):
-        _reading([4.0, 0.0, 1.0])
+        _reading(closes)
+
+
+def test_an_overflowing_mean_is_refused_rather_than_divided_into() -> None:
+    """Its own test, because a guard wired into one caller protects one.
+
+    Three closes at 1.7e308 are each finite and their sum is not, so the
+    mean is infinite while every input is a value the source layer would
+    accept. Dividing into it would read `-inf` or `0.0` depending on the
+    numerator, and AC4 forbids both.
+    """
+    enormous = 1.7e308
+
+    with pytest.raises(DataValidationError, match="non-finite intermediate"):
+        _reading([enormous, enormous, enormous])
+
+
+def test_the_writer_appends_this_primitive_too() -> None:
+    """`L = P` keeps it out of the chaining test, so it gets its own.
+
+    Every other primitive reaches `add_indicator` through the shared
+    chain; this one cannot, because its lookback differs. Without this
+    its collision-guarded write path is exercised structurally and never
+    for this indicator.
+    """
+    phased = phased_from_closes([[4.0, 1.0, 1.0]], lookback=_PERIOD)
+
+    written = add_indicator(phased, _MAPOS, period=_PERIOD)
+
+    assert written.frame.columns[-1] == "mapos_p3_w3m"
+    assert written.frame["mapos_p3_w3m"].to_list() == [math.log(2.0)]
+    with pytest.raises(ConfigError, match="already carries"):
+        add_indicator(written, _MAPOS, period=_PERIOD)
 
 
 def test_a_frame_resolved_for_another_lookback_is_refused() -> None:
@@ -167,11 +207,13 @@ def test_the_trend_quadrant_is_not_a_second_copy_of_a_backward_return(
     print two `null`s and look like agreement.
     """
     lookback = _PERIOD + 1
-    random.seed(20260906)
+    # A private generator, not `random.seed`: seeding the module-level one
+    # leaks that state to whatever test runs next.
+    walk = random.Random(20260906)
     price = 30_000.0
     rows = []
     for index in range(600):
-        price *= math.exp(random.gauss(0.0, 0.0015))
+        price *= math.exp(walk.gauss(0.0, 0.0015))
         rows.append(
             (
                 BASE + index * _MINUTE,

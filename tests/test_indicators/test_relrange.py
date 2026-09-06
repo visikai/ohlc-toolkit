@@ -13,10 +13,13 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from ohlc_toolkit.indicators import IndicatorPrimitive, RelativeRange
+from ohlc_toolkit.indicators import IndicatorPrimitive, RelativeRange, phased_lookback
 from ohlc_toolkit.temporal import ConfigError, DataValidationError
-from tests.test_indicators.factories import phased_from_fields
+from ohlc_toolkit.windows import ExplicitRange, compute_windows
+from tests.test_indicators.factories import BASE, phased_from_fields
+from tests.test_windows.factories import frame_from_rows, profile_for
 
+_MINUTE = 60
 _PERIOD = 3
 _LOOKBACK = _PERIOD + 1
 _RELRANGE = RelativeRange()
@@ -168,15 +171,24 @@ def test_a_null_tick_reads_null_and_its_neighbours_do_not() -> None:
 
 
 @pytest.mark.parametrize("field", ["high", "low", "close"])
-def test_a_null_in_any_field_it_reads_nulls_the_tick(field: str) -> None:
-    """All three fields are read, so a hole in any of them is a hole."""
+@pytest.mark.parametrize("position", range(_LOOKBACK))
+def test_a_null_in_any_field_it_reads_nulls_the_tick(field: str, position: int) -> None:
+    """All three fields are read, so a hole in any of them is a hole.
+
+    Every position, and position `L - 1` in particular: that window is a
+    PREDECESSOR ONLY -- its own true range is sliced off before the mean
+    -- so a rule that looked at the averaged values rather than at the
+    inputs would let a null there through. This is the one primitive with
+    a predecessor slice, which is why its siblings' single-position test
+    would not be enough here.
+    """
     fields: dict[str, list[list[float | None] | None]] = {
         "high": [[10.0] * _LOOKBACK],
         "low": [[6.0] * _LOOKBACK],
         "close": [[8.0] * _LOOKBACK],
     }
     holed = list(fields[field][0])  # type: ignore[arg-type]
-    holed[1] = None
+    holed[position] = None
     fields[field] = [holed]
 
     values = _RELRANGE.values(
@@ -186,10 +198,87 @@ def test_a_null_in_any_field_it_reads_nulls_the_tick(field: str) -> None:
     assert values.to_list() == [None]
 
 
-def test_a_non_positive_close_is_refused() -> None:
-    """The divisor. A zero close is a violation upstream, not a division."""
+@pytest.mark.parametrize(
+    "closes",
+    [
+        pytest.param([8.0, 0.0, 8.0, 8.0], id="a-zero-close"),
+        pytest.param([8.0, -8.0, 8.0, 8.0], id="a-negative-close"),
+    ],
+)
+def test_a_non_positive_close_is_refused(closes: list[float]) -> None:
+    """The divisor. Both branches of the guard, not only the zero one.
+
+    The guard is shared, so a fixture at `0.0` alone is killed by any
+    sibling's negative case today -- and stops being killed the moment
+    anyone specialises it for one primitive.
+    """
     with pytest.raises(DataValidationError, match="traded price"):
-        _reading([10.0] * _LOOKBACK, [6.0] * _LOOKBACK, [8.0, 0.0, 8.0, 8.0])
+        _reading([10.0] * _LOOKBACK, [6.0] * _LOOKBACK, closes)
+
+
+def test_an_overflowing_true_range_is_refused_rather_than_averaged() -> None:
+    """Its own test, because a guard wired into one caller protects one.
+
+    `close` is the only field this primitive constrains to be positive;
+    `high` and `low` are free, so a bar from -1.7e308 to 1.7e308 has an
+    infinite true range while every input is finite. Averaging it would
+    produce an infinite reading, which AC4 forbids.
+    """
+    enormous = 1.7e308
+
+    with pytest.raises(DataValidationError, match="non-finite intermediate"):
+        _reading([enormous, enormous], [-enormous, -enormous], [1.0, 1.0], period=1)
+
+
+def test_the_true_range_is_exact_where_the_arithmetic_form_is_not() -> None:
+    """The counter-example that rules out `clip(h - p, 0) + clip(p - l, 0)`.
+
+    That form computes `(high - prev) + (prev - low)` when the previous
+    close lies inside the bar, which can differ from `high - low` in the
+    last place. Here it returns ...407 where the exact answer is ...409.
+    The prohibition was a docstring until this test; substituting the
+    form left the suite green.
+    """
+    high = 99533.67442462409
+    previous = 24378.60928155538
+
+    # A close of 1.0 makes the reading the true range itself, undivided.
+    assert _reading([high, 1.0], [0.0, 1.0], [1.0, previous], period=1) == high
+
+
+def test_the_primitive_runs_over_real_harness_output() -> None:
+    """The packed-list path meets a frame the harness really produced.
+
+    Every other test here builds the record by hand, so the packing, the
+    newest-first order and the predecessor slice are only ever checked
+    against a fixture that shares their assumptions.
+    """
+    rows = [
+        (
+            BASE + index * _MINUTE,
+            100.0 + index,
+            101.0 + index,
+            99.0 + index,
+            100.5 + index,
+            5.0,
+        )
+        for index in range(60)
+    ]
+    frame = compute_windows(
+        frame_from_rows(rows),
+        profile_for(_MINUTE),
+        window="3m",
+        emit_every="1m",
+        materialization=ExplicitRange(start=BASE + 180, end=BASE + 60 * _MINUTE + 1),
+    )
+    phased = phased_lookback(frame, window="3m", emit_every="3m", lookback=_LOOKBACK)
+
+    values = _RELRANGE.values(phased, period=_PERIOD)
+
+    present = values.drop_nulls()
+    assert present.len() > 0
+    assert (present >= 0.0).all()
+    assert present.is_finite().all()
 
 
 def test_a_frame_resolved_for_another_lookback_is_refused() -> None:

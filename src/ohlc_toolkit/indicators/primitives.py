@@ -172,13 +172,7 @@ def require_phased_inputs(
         ConfigError: For any of the three.
 
     """
-    if isinstance(fields, str):
-        logger.warning("Rejecting a single field name passed as a bare str.")
-        raise ConfigError(
-            f"fields must be a collection of column names, not a single string; "
-            f"{bounded_echo(fields)} would be read one character at a time. Pass "
-            "a tuple, as in (name,)."
-        )
+    _require_collection(fields, parameter="fields")
     wanted = primitive.lookback(period)
     if phased.grid.lookback != wanted:
         logger.warning(
@@ -276,6 +270,32 @@ def add_indicator(
     return PhasedLookback(frame=phased.frame.with_columns(values), grid=phased.grid)
 
 
+def _require_collection(value: object, *, parameter: str) -> None:
+    """Refuse a bare ``str`` where a collection of names is expected.
+
+    A ``str`` IS a ``Collection[str]``, so no annotation makes this
+    unrepresentable and no type checker will catch it; passing one
+    iterates its CHARACTERS. Every such parameter in this package
+    refuses out loud rather than searching for a column named ``c``.
+
+    Args:
+        value: The argument as given.
+        parameter: Its name, for the refusal.
+
+    Raises:
+        ConfigError: If it is a string.
+
+    """
+    if not isinstance(value, str):
+        return
+    logger.warning("Rejecting a single name passed to {} as a bare str.", parameter)
+    raise ConfigError(
+        f"{parameter} must be a collection of column names, not a single string; "
+        f"{bounded_echo(value)} would be read one character at a time. Pass a "
+        "tuple, as in (name,)."
+    )
+
+
 def has_missing_input(*fields: str) -> pl.Expr:
     """Mark the ticks whose inputs are not all present.
 
@@ -320,9 +340,11 @@ def require_positive_inputs(
         reason: Why the contract says they are, quoted in the refusal.
 
     Raises:
+        ConfigError: If ``fields`` is a bare string.
         DataValidationError: If any present value is not positive.
 
     """
+    _require_collection(fields, parameter="fields")
     counts = phased.frame.select(
         (pl.col(field).list.eval(pl.element() <= 0.0).list.sum()).sum().alias(field)
         for field in fields
@@ -354,9 +376,11 @@ def require_finite_columns(
         computing: The column being computed, for the refusal.
 
     Raises:
+        ConfigError: If ``columns`` is a bare string.
         DataValidationError: If any is non-finite anywhere.
 
     """
+    _require_collection(columns, parameter="columns")
     offending = {
         name: int((~frame[name].drop_nulls().is_finite()).sum()) for name in columns
     }

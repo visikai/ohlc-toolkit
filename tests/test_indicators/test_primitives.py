@@ -6,6 +6,8 @@ named from, the three ways harness output can be wrong for the primitive
 holding it, and the one path that writes a column onto a frame.
 """
 
+from collections.abc import Callable
+
 import polars as pl
 import pytest
 
@@ -22,6 +24,13 @@ from ohlc_toolkit.indicators import (
     indicator_identity,
     phased_lookback,
     require_phased_inputs,
+)
+
+# Imported from the module rather than the package: these are shared
+# machinery for the primitives, deliberately absent from `__all__`.
+from ohlc_toolkit.indicators.primitives import (
+    require_finite_columns,
+    require_positive_inputs,
 )
 from ohlc_toolkit.temporal import ConfigError, Duration
 from ohlc_toolkit.windows import ExplicitRange, compute_windows
@@ -253,6 +262,50 @@ def test_three_primitives_chain_over_one_lookback() -> None:
     assert written.frame.select(pl.all().null_count()).row(0).count(0) == len(
         written.frame.columns
     )
+
+
+@pytest.mark.parametrize(
+    ("call", "parameter"),
+    [
+        pytest.param(
+            lambda phased: require_positive_inputs(
+                phased,
+                fields="close",  # type: ignore[arg-type]
+                reason="unused.",
+            ),
+            "fields",
+            id="require_positive_inputs",
+        ),
+        pytest.param(
+            lambda phased: require_finite_columns(
+                phased.frame,
+                "close",  # type: ignore[arg-type]
+                computing="unused",
+            ),
+            "columns",
+            id="require_finite_columns",
+        ),
+    ],
+)
+def test_a_bare_string_is_refused_by_every_collection_parameter(
+    call: Callable[[PhasedLookback], object], parameter: str
+) -> None:
+    """A `str` IS a `Collection[str]`, so the annotation cannot stop this.
+
+    Two sibling guards in this package already refuse it and these two
+    did not, which is the asymmetry that makes the next one a coin flip.
+    Without the refusal `require_finite_columns` raised a raw polars
+    `ColumnNotFoundError` naming a phantom column `c` -- loud, but about
+    the wrong thing.
+    """
+    phased = phased_from_closes([rising(_LOOKBACK)], lookback=_LOOKBACK)
+
+    with pytest.raises(ConfigError, match="not a single string") as caught:
+        call(phased)
+
+    # The message names WHICH parameter, so a caller passing two
+    # collections knows which one to fix.
+    assert str(caught.value).startswith(parameter)
 
 
 if __name__ == "__main__":
