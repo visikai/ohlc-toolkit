@@ -80,12 +80,14 @@ def test_two_lower_bounds_are_refused(tmp_path: Path) -> None:
         'requests>=2.33.0; python_version < "3.12"',
         "requests[socks]>=2.33.0",
         "loguru",
+        ">=2.33.0",
+        "requests>=2.33.0,",
     ],
 )
 def test_a_requirement_shape_it_does_not_recognise_is_refused(
     tmp_path: Path, requirement: str
 ) -> None:
-    """Extras, markers, URLs and bare names are refused, not skipped."""
+    """Extras, markers, URLs, bare names and empty halves are refused."""
     path = _pyproject(tmp_path, requirement)
 
     with pytest.raises(floors.FloorCheckError, match=r"cannot parse"):

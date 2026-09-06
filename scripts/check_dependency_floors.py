@@ -35,14 +35,18 @@ import sys
 import tomllib
 from pathlib import Path
 
-#: ``name>=1.2.3`` or ``name>=1.2.3,<2.0.0``. Deliberately narrow: extras,
-#: environment markers and URL requirements are not what this repository
-#: declares, and a shape this does not recognise is refused rather than
-#: skipped.
-_REQUIREMENT = re.compile(
-    r"^(?P<name>[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?)"
-    r"(?P<specifiers>(?:\s*[<>=!~]=?\s*[^,\s]+)(?:\s*,\s*[<>=!~]=?\s*[^,\s]+)*)$"
-)
+#: The name and each specifier are matched separately, and the split
+#: between them is a scan rather than a pattern. One expression spanning
+#: a comma-separated list needs a quantifier inside a quantifier, which is
+#: how a regular expression acquires a pathological backtracking case even
+#: when -- as here -- the only input is a file in this repository.
+_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+_SPECIFIER = re.compile(r"^[<>=!~]=?\s*[^,\s]+$")
+
+#: Where a requirement stops naming a distribution and starts constraining
+#: it. Extras, environment markers and URL requirements contain none of
+#: these before their first space, so they are refused rather than skipped.
+_OPERATORS = "<>=!~"
 
 _LOWER_BOUND = re.compile(r"^>=\s*(?P<version>[0-9]+(?:\.[0-9]+)*)$")
 
@@ -57,6 +61,31 @@ class FloorCheckError(Exception):
     """Raised when a declaration cannot be checked at all."""
 
 
+def _split(requirement: str) -> tuple[str, list[str]]:
+    """Separate a requirement into its distribution name and specifiers.
+
+    Refuses any shape it does not recognise, rather than returning a
+    partial reading of it: a dependency this cannot parse is a dependency
+    nothing checks, which is the gap the whole script exists to close.
+    """
+    start = next(
+        (index for index, char in enumerate(requirement) if char in _OPERATORS),
+        -1,
+    )
+    name = requirement[:start].strip() if start > 0 else ""
+    specifiers = (
+        [specifier.strip() for specifier in requirement[start:].split(",")]
+        if start > 0
+        else []
+    )
+    if not _NAME.match(name) or not all(
+        _SPECIFIER.match(specifier) for specifier in specifiers
+    ):
+        msg = f"cannot parse the requirement {requirement!r}"
+        raise FloorCheckError(msg)
+    return name, specifiers
+
+
 def declared_floors(pyproject: Path) -> dict[str, str]:
     """Read the lower bound of every runtime dependency.
 
@@ -67,14 +96,11 @@ def declared_floors(pyproject: Path) -> dict[str, str]:
     project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
     floors: dict[str, str] = {}
     for requirement in project["dependencies"]:
-        match = _REQUIREMENT.match(requirement.strip())
-        if match is None:
-            msg = f"cannot parse the requirement {requirement!r}"
-            raise FloorCheckError(msg)
+        name, specifiers = _split(requirement.strip())
         bounds = [
             bound.group("version")
-            for specifier in match.group("specifiers").split(",")
-            if (bound := _LOWER_BOUND.match(specifier.strip())) is not None
+            for specifier in specifiers
+            if (bound := _LOWER_BOUND.match(specifier)) is not None
         ]
         if len(bounds) != 1:
             msg = (
@@ -82,7 +108,7 @@ def declared_floors(pyproject: Path) -> dict[str, str]:
                 f"form >=N.N; exactly one is required"
             )
             raise FloorCheckError(msg)
-        floors[match.group("name")] = bounds[0]
+        floors[name] = bounds[0]
     return floors
 
 
