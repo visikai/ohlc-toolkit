@@ -23,6 +23,7 @@ from ohlc_toolkit.snapshot.fetcher import (
     FetchedAsset,
     SnapshotFetchResult,
     fetch_snapshot,
+    verify_snapshot_on_disk,
 )
 from ohlc_toolkit.snapshot.manifest import (
     MANIFEST_ASSET_NAME,
@@ -74,4 +75,5 @@ __all__ = [
     "parse_manifest",
     "read_snapshot_frame",
     "verify_snapshot_continuity",
+    "verify_snapshot_on_disk",
 ]

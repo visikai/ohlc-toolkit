@@ -366,6 +366,20 @@ manifest bytes — and accepts it back as `expected_manifest_sha256`, which
 refuses both a wholesale manifest swap and a release re-cut under the
 same tag.
 
+`verify_snapshot_on_disk` answers the other question. Fetching asks *did
+these bytes arrive intact*; this asks *are these still the bytes*, which
+is what a caller reading a snapshot it downloaded last week needs — a
+directory verified in August is not thereby a directory verified now, and
+nothing about a directory stops something else writing to it. It touches
+no network, checks presence, size and digest for every declared asset,
+and returns the same result type `read_snapshot_frame` consumes.
+
+What it proves is that the directory is internally consistent: these
+bytes are the bytes this manifest describes. It does not prove the
+manifest is the one you meant — a different, self-consistent release
+verifies clean and is reported as itself, which is the right behaviour,
+since the identity it returns is what you record.
+
 ## Development
 
 ```bash

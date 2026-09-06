@@ -22,6 +22,17 @@ recorded here because it is the reason the entries below are breaking.
 
 ### Added
 
+- **`snapshot.verify_snapshot_on_disk`**, which verifies a snapshot
+  already on disk against the manifest beside it: presence, size and
+  SHA-256 for every declared asset, no network, and the same
+  `SnapshotFetchResult` that `read_snapshot_frame` already consumes.
+  `fetch_snapshot` answers "did these bytes arrive intact"; this answers
+  "are these still the bytes", and neither implies the other. Byte-level
+  refusals raise `SnapshotIntegrityError`, the same class the fetch path
+  uses, so one `except` covers both questions. A manifest declaring no
+  assets is refused by this function itself rather than only by the
+  parser it calls: a verification that passes over zero assets is worse
+  than none, because it looks like one.
 - **A count-valued `LookbackSchedule`**, with `metallic_lookback`,
   `log_spaced_lookback` and `explicit_lookback`. Its members are period
   counts rather than durations: the same `21` is twenty-one minutes on a
