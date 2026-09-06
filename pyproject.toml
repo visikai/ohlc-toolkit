@@ -36,16 +36,23 @@ dependencies = [
     # Floor clears both advisories against requests; the lockfile alone
     # does not bind what a consumer resolves.
     "requests>=2.33.0,<3.0.0",
-    # Nothing here imports urllib3 or idna. They are declared because
-    # requests carries them into every install of this package, and its
-    # own ranges (urllib3<3,>=1.26 and idna<4,>=2.5) admit versions with
-    # published advisories against them, three of them high -- measured,
-    # a consumer pinning urllib3==1.26.20 and idna==2.5 resolves clean
-    # against this wheel.
+    # Nothing here imports urllib3, idna or certifi. They are declared
+    # because requests carries them into every install of this package,
+    # and its own ranges (urllib3<3,>=1.26, idna<4,>=2.5 and
+    # certifi>=2023.5.7) admit versions with published advisories
+    # against them, three of them high -- measured, a consumer pinning
+    # urllib3==1.26.20 and idna==2.5 resolves clean against this wheel,
+    # and certifi==2023.5.7 is both the version requests names as its
+    # own floor and the subject of PYSEC-2023-135 and PYSEC-2024-230.
     # A floor here is the only place that closes it, since the transitive
     # range is not ours to change and a lockfile binds only its own repo.
     "urllib3>=2.7.0,<3.0.0",
     "idna>=3.15,<4.0.0",
+    # No upper bound on certifi, unlike its neighbours: it is a dated
+    # snapshot of a root store on a CalVer scheme, so there is no major
+    # version to cap and pinning one away would leave a consumer on an
+    # expired bundle. requests declares it uncapped for the same reason.
+    "certifi>=2024.7.4",
 ]
 
 [project.urls]
