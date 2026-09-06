@@ -6,6 +6,8 @@ copies into one implementation is worth nothing if the wiring is what
 breaks.
 """
 
+from collections.abc import Callable
+
 import polars as pl
 import pytest
 
@@ -15,10 +17,17 @@ from ohlc_toolkit.returns import (
     add_forward_returns,
 )
 from ohlc_toolkit.temporal import ConfigError, require_absent_columns
+from ohlc_toolkit.temporal import columns as columns_module
+from ohlc_toolkit.temporal.echo import MAX_ECHO_CHARS
 from ohlc_toolkit.windows import annotate_windows
 
 _CADENCE = 60
 _BASE = 1_700_000_000
+# The ceiling the repository's other echo tests use: the fixed prose of a
+# refusal plus its echoes, with room to spare, and far below the length of
+# the argument that provoked it.
+_MAX_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
+_ENORMOUS_NAME_CHARS = 10_000
 
 
 def _window_frame(rows: int = 6) -> pl.DataFrame:
@@ -65,6 +74,27 @@ def test_the_guard_passes_when_nothing_collides() -> None:
     require_absent_columns(_window_frame(), ("brand", "new"), remedy="unused.")
 
 
+def _both_exits_bounded(trip: Callable[[], object]) -> None:
+    """Run ``trip`` expecting a refusal; hold message AND log under the ceiling.
+
+    Asserting only that the message is shorter than the argument would
+    pass at 9 999 characters. The ceiling is a constant derived from the
+    echo bound, so weakening the bound fails this.
+    """
+    logged: list[str] = []
+    sink_id = columns_module.logger.add(
+        logged.append, level="WARNING", format="{message}"
+    )
+    try:
+        with pytest.raises(ConfigError) as raised:
+            trip()
+    finally:
+        columns_module.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_REFUSAL_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_REFUSAL_CHARS
+
+
 def test_a_column_name_is_bounded_before_it_is_echoed() -> None:
     """A name comes from a caller and can be as long as a caller likes.
 
@@ -72,13 +102,40 @@ def test_a_column_name_is_bounded_before_it_is_echoed() -> None:
     is how a single bad argument turns one refusal into an unbounded
     message.
     """
-    enormous = "x" * 10_000
+    enormous = "x" * _ENORMOUS_NAME_CHARS
     frame = _window_frame().with_columns(pl.lit(1.0).alias(enormous))
 
-    with pytest.raises(ConfigError) as caught:
-        require_absent_columns(frame, (enormous,), remedy="unused.")
+    _both_exits_bounded(lambda: require_absent_columns(frame, (enormous,), remedy="u."))
 
-    assert len(str(caught.value)) < len(enormous)
+
+def test_a_bare_string_is_refused_rather_than_read_one_character_at_a_time() -> None:
+    """The mistake the type could not make unrepresentable.
+
+    A ``str`` IS a ``Collection[str]``, so ``require_absent_columns(frame,
+    "close", ...)`` type-checks, iterates the characters, finds no column
+    named ``c`` and returns -- a guard against overwriting passing while
+    the overwrite proceeds. It refuses out loud instead.
+    """
+    frame = _window_frame()
+    assert "close" in frame.columns
+
+    with pytest.raises(ConfigError, match="not a single string"):
+        require_absent_columns(
+            frame,
+            "close",  # type: ignore[arg-type]
+            remedy="unused.",
+        )
+
+
+def test_the_bare_string_refusal_is_bounded_on_both_exits() -> None:
+    """That echo is a caller's argument too, and just as unbounded."""
+    _both_exits_bounded(
+        lambda: require_absent_columns(
+            _window_frame(),
+            "x" * _ENORMOUS_NAME_CHARS,  # type: ignore[arg-type]
+            remedy="unused.",
+        )
+    )
 
 
 def test_the_backward_return_caller_is_wired_to_it() -> None:

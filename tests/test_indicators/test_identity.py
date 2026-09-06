@@ -5,24 +5,32 @@ its expectation from the same formula the code uses would agree with the
 code whatever the formula was.
 """
 
+from collections.abc import Callable
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from ohlc_toolkit.indicators import (
-    BANNED_NAME_PART,
     FeatureFamily,
     FeatureIdentity,
     NormalizationClass,
     effective_history,
     effective_n,
 )
+from ohlc_toolkit.indicators import identity as identity_module
+from ohlc_toolkit.indicators.identity import BANNED_NAME_PART
 from ohlc_toolkit.temporal import ConfigError, Duration
+from ohlc_toolkit.temporal.echo import MAX_ECHO_CHARS
 
 # One class for every fixture below: this file is about the NAME, and the
 # normalization class is the one identity field the name deliberately does
 # not carry.
 _CLASS = NormalizationClass.BOUNDED_BY_CONSTRUCTION
+# A phrase only the banned-part refusal produces, and one no input under
+# test contains. Matching on `BANNED_NAME_PART` instead would match the
+# echoed input whatever guard had fired.
+_BANNED_PART_PHRASE = "close_time is the time key"
 
 _PUBLISHED = [
     ("rsi", FeatureFamily.PHASED, 14, "21m", "rsi_p14_w21m"),
@@ -136,8 +144,8 @@ def test_two_identities_differing_anywhere_get_different_names(
         ("rsi_p14_wnotaduration", r"duration"),
         ("rsi_p14", r"not a feature column name"),
         ("rsi_p14_w21m_extra", r"duration"),
-        ("timestamp_p14_w21m", BANNED_NAME_PART),
-        ("rsi_p14_w21m_timestamp", BANNED_NAME_PART),
+        ("timestamp_p14_w21m", _BANNED_PART_PHRASE),
+        ("rsi_p14_w21m_timestamp", _BANNED_PART_PHRASE),
     ],
 )
 def test_a_name_that_could_not_have_been_derived_is_refused(
@@ -155,7 +163,7 @@ def test_a_name_that_could_not_have_been_derived_is_refused(
         ("log_vol", r"underscore"),
         ("14rsi", r"lowercase"),
         ("", r"lowercase"),
-        ("close_timestamp", BANNED_NAME_PART),
+        ("close_timestamp", _BANNED_PART_PHRASE),
     ],
 )
 def test_an_indicator_name_that_would_not_parse_back_is_refused(
@@ -430,6 +438,83 @@ def test_a_normalization_that_is_not_a_member_is_refused() -> None:
             period=14,
             window=Duration.parse("21m"),
             normalization="stationarized",  # type: ignore[arg-type]
+        )
+
+
+_ENORMOUS_CHARS = 10_000
+# The fixed prose of any refusal here plus its echoes, with room to
+# spare, and orders of magnitude below the argument that provokes it.
+_MAX_REFUSAL_CHARS = 6 * MAX_ECHO_CHARS
+
+
+def _both_exits_bounded(trip: Callable[[], object]) -> None:
+    """Run ``trip`` expecting a refusal; hold message AND log under the ceiling."""
+    logged: list[str] = []
+    sink_id = identity_module.logger.add(
+        logged.append, level="WARNING", format="{message}"
+    )
+    try:
+        with pytest.raises(ConfigError) as raised:
+            trip()
+    finally:
+        identity_module.logger.remove(sink_id)
+    assert len(str(raised.value)) < _MAX_REFUSAL_CHARS
+    assert logged, "the refusal logs before it raises; nothing was captured"
+    assert len(logged[-1]) < _MAX_REFUSAL_CHARS
+
+
+class TestEveryEchoIsBoundedAtItsOwnSite:
+    """One test per refusal that quotes something a caller supplied.
+
+    The rule these hold in place is stated in ``temporal/echo.py``:
+    enforced at each site by that site's own test, never by a truncating
+    sink. Without them, replacing every ``bounded_echo`` in this module
+    with ``repr`` leaves the suite green.
+    """
+
+    def test_an_unparsable_column_is_bounded(self) -> None:
+        """The whole column name is the caller's and has no length it must have."""
+        _both_exits_bounded(
+            lambda: FeatureIdentity.parse("!" * _ENORMOUS_CHARS, normalization=_CLASS)
+        )
+
+    def test_an_unknown_family_is_bounded(self) -> None:
+        """The family is one character, but the column carrying it is not.
+
+        The pattern caps what this site echoes at a single letter, so the
+        test cannot fail on today's code. It fails on the edit that would
+        matter: echoing the matched COLUMN here instead of the family.
+        """
+        column = f"{'a' * _ENORMOUS_CHARS}_z14_w21m"
+        _both_exits_bounded(lambda: FeatureIdentity.parse(column, normalization=_CLASS))
+
+    def test_an_unparsable_window_is_bounded(self) -> None:
+        """The window is the rest of the name after ``_w``, of any length."""
+        column = f"rsi_p14_w{'9' * _ENORMOUS_CHARS}"
+        _both_exits_bounded(lambda: FeatureIdentity.parse(column, normalization=_CLASS))
+
+    def test_a_malformed_indicator_is_bounded(self) -> None:
+        """A constructed identity takes its indicator straight from a caller."""
+        _both_exits_bounded(
+            lambda: FeatureIdentity(
+                indicator="X" * _ENORMOUS_CHARS,
+                family=FeatureFamily.PHASED,
+                period=14,
+                window=Duration.parse("21m"),
+                normalization=_CLASS,
+            )
+        )
+
+    def test_a_banned_indicator_is_bounded(self) -> None:
+        """The banned-part refusal quotes the name it banned."""
+        _both_exits_bounded(
+            lambda: FeatureIdentity(
+                indicator=BANNED_NAME_PART + "x" * _ENORMOUS_CHARS,
+                family=FeatureFamily.PHASED,
+                period=14,
+                window=Duration.parse("21m"),
+                normalization=_CLASS,
+            )
         )
 
 

@@ -21,7 +21,6 @@ from ohlc_toolkit.indicators.frames import (
     PhasedLookback,
 )
 from ohlc_toolkit.indicators.identity import (
-    BANNED_NAME_PART,
     FeatureFamily,
     FeatureIdentity,
     NormalizationClass,
@@ -35,8 +34,14 @@ from ohlc_toolkit.indicators.reference import phased_lookback_reference
 # it and neither caller does; exporting it would enlarge the published
 # contract with machinery that has no stated user, and a 2.0 name cannot
 # be withdrawn without another major.
+# `BANNED_NAME_PART` is out for the same reason. Its rule is enforced
+# wherever a name is validated and quoted in the refusal, so a caller
+# never needs to spell it; the only reader today is this package's own
+# test. Adding a published name later is a minor, withdrawing one is a
+# major, and that asymmetry decides it.
+# `NormalizationClass` IS here, because it is a required argument of
+# `FeatureIdentity`: a caller cannot construct the record without it.
 __all__ = [
-    "BANNED_NAME_PART",
     "MAX_LOOKBACK",
     "PHASED_COLUMNS",
     "REQUIRED_COLUMNS",
