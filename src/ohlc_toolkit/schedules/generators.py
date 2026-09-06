@@ -947,6 +947,19 @@ def require_endpoints_on_the_grain(
     a grain of 3 becomes 12, which is above the bound and survives. That
     is ordinary rounding, not a silent loss.
 
+    A third answer was weighed and rejected, recorded here because it is
+    the one a future reader is most likely to propose: SNAP the endpoints
+    inward to the grain before generating, so the count and the bounds
+    both survive. It substitutes a different first point without saying
+    so, which is the same class of defect this refusal exists to remove,
+    and it would mix rounding rules inside one schedule -- nearest for
+    the interior points, directed at the ends.
+
+    The verdict depends on ``rounding``: at a grain of 4, a minimum of 2
+    quantizes to 0 under ties-away and to 4 under ties-even, so the same
+    bounds refuse under one rule and resolve under the other. The rule is
+    threaded through rather than assumed.
+
     Args:
         minimum: The lower bound, which is also the first point.
         maximum: The upper bound, which is also the last point.

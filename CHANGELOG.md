@@ -321,11 +321,15 @@ recorded here because it is the reason the entries below are breaking.
   one is refused with a `ConfigError` rather than silently checked
   against one threshold. A caller that projects a frame down to what the
   step consults must keep all three.
-- **A log-spaced endpoint that quantizes outside its own range is now
-  REFUSED**, in both `log_spaced` and `log_spaced_lookback`. For every
-  other generator here `minimum` and `maximum` are pure bounds — filters
-  over terms a recurrence produced. For these two they are also the FIRST
-  and LAST POINTS, promised back to the caller. Quantization can move an
+- **BREAKING: a log-spaced endpoint that quantizes outside its own range
+  is now REFUSED**, in both `log_spaced` and `log_spaced_lookback`. A
+  call that returned a schedule now raises `ConfigError`, which is why
+  this is marked breaking. For these two generators `minimum` and
+  `maximum` are the FIRST and LAST POINTS as well as the bounds, promised
+  back to the caller. Elsewhere in this module they are bounds applied to
+  terms a recurrence produced — that is not a claim that no other
+  generator can lose a point a caller named, only that this change is
+  scoped to the two where the endpoints ARE the parameters. Quantization can move an
   endpoint out of the range it defines, and the bound then dropped the
   very point the caller named:
 
@@ -349,6 +353,16 @@ recorded here because it is the reason the entries below are breaking.
   `maximum` moves it ABOVE itself. An endpoint that quantizes INWARD is
   untouched — a minimum of 11 at a grain of 3 becomes 12, which is inside
   the bound and survives, as before.
+  **A stored schedule is not checked when it is read back.** `from_dict`
+  deserializes a recorded payload without re-applying this predicate, so
+  a schedule written before this change keeps its id and raises nothing.
+  If you hold stored schedules, the rule above applies verbatim to the
+  recorded spec: quantize the recorded `minimum` and `maximum` at the
+  recorded `grain` and rounding rule, and a payload is affected if either
+  lands outside the range it defines. Such a payload records bounds whose
+  endpoint is missing from its own members.
+  Some configurations that already raised now raise a DIFFERENT message
+  from the same `ConfigError` class, so an `except` clause is unaffected.
   **No resolved schedule changes its members, so no schedule id moves.**
   Measured over 22,090 configurations that resolved before the change:
   0 produced different members, and every configuration that now refuses

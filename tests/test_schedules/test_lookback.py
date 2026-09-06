@@ -19,7 +19,7 @@ from ohlc_toolkit.schedules import (
     WindowSchedule,
     metallic_recurrence,
 )
-from ohlc_toolkit.schedules.generators import recurrence_values
+from ohlc_toolkit.schedules.generators import RoundingRule, recurrence_values
 from ohlc_toolkit.schedules.lookback import (
     PERIOD_UNITS,
     ExplicitLookbackSpec,
@@ -255,7 +255,9 @@ def test_an_empty_lookback_schedule_is_refused() -> None:
     [
         pytest.param(10, 100, 3, True, id="minimum-rounds-below-itself"),
         pytest.param(12, 101, 3, True, id="maximum-rounds-above-itself"),
+        pytest.param(10, 101, 3, True, id="both-ends-leave-the-range"),
         pytest.param(11, 99, 3, False, id="minimum-rounds-inward"),
+        pytest.param(12, 100, 3, False, id="maximum-rounds-inward"),
         pytest.param(12, 99, 3, False, id="both-ends-on-the-grain"),
         pytest.param(10, 100, 1, False, id="a-grain-of-one-represents-all"),
     ],
@@ -284,6 +286,61 @@ def test_the_count_path_applies_the_same_endpoint_rule(
         count=3, minimum=minimum, maximum=maximum, grain=grain
     )
     assert len(schedule.periods) > 0
+
+
+def test_an_inward_rounding_endpoint_keeps_the_member_it_rounds_to() -> None:
+    """Keep the member an inward-rounding endpoint becomes.
+
+    "Some members came back" is satisfied by an implementation that
+    dropped the endpoint anyway and returned the interior points. A
+    minimum of 11 at a grain of 3 must become 12 and be THERE, which is
+    what the entry documents.
+    """
+    schedule = log_spaced_lookback(count=3, minimum=11, maximum=99, grain=3)
+
+    assert schedule.periods == (12, 33, 99)
+
+
+@pytest.mark.parametrize(
+    ("minimum", "maximum", "grain", "away", "even"),
+    [
+        pytest.param(2, 100, 4, (4, 16, 100), None, id="ties-away-resolves"),
+        pytest.param(4, 10, 4, None, (4, 8), id="ties-even-resolves"),
+    ],
+)
+def test_the_verdict_follows_the_rounding_rule_it_was_given(
+    minimum: int,
+    maximum: int,
+    grain: int,
+    away: tuple[int, ...] | None,
+    even: tuple[int, ...] | None,
+) -> None:
+    """Follow the tie rule the caller gave, since the guard quantizes.
+
+    Both rules were hardcodable without failing anything, and the two are
+    provably different: at a grain of 4 a minimum of 2 quantizes to 0
+    under ties-away and to 4 under ties-even, and a maximum of 10
+    quantizes to 12 under ties-away and to 8 under ties-even. Each row
+    resolves under one rule and refuses under the other.
+    """
+    for rule, expected in (
+        (RoundingRule.NEAREST_TIES_AWAY, away),
+        (RoundingRule.NEAREST_TIES_EVEN, even),
+    ):
+        if expected is None:
+            with pytest.raises(ConfigError, match="outside the range it defines"):
+                log_spaced_lookback(
+                    count=3,
+                    minimum=minimum,
+                    maximum=maximum,
+                    grain=grain,
+                    rounding=rule,
+                )
+            continue
+        schedule = log_spaced_lookback(
+            count=3, minimum=minimum, maximum=maximum, grain=grain, rounding=rule
+        )
+        assert schedule.periods == expected
 
 
 def test_the_count_path_refusal_speaks_in_periods_not_durations() -> None:
