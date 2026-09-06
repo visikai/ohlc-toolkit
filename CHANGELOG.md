@@ -22,6 +22,30 @@ recorded here because it is the reason the entries below are breaking.
 
 ### Added
 
+- **`ohlc_toolkit.indicators`**, a seventh subpackage, holding the phased
+  lookback every indicator reads through: at each tick of the emit grid,
+  the `L` non-overlapping windows of duration `W` ending at `t`, `t - W`,
+  `t - 2W`, and so on. `phased_lookback` is the fast path,
+  `phased_lookback_reference` the brute-force oracle it is checked
+  against.
+  The inputs are read from the window's SOURCE-cadence materialization,
+  not from its own `E`-cadence frame, because `{t - kW}` lies on the emit
+  grid only when `E` divides `W` -- which under the cadence rules this
+  package resolves, it frequently does not. At `W = 2h26m` and `E = 3m`
+  the emit frame holds none of the phases at all.
+  Lookups are exact equality on `close_time`, never a shift or an as-of
+  match. A window whose `traded_seconds` falls below the threshold is a
+  null input, applied by the harness itself whatever quality mode the
+  frame was written under -- report mode removes nothing. Any null among
+  the `L` inputs nulls the whole output row rather than leaving a list
+  with a hole in it, so no indicator downstream has to remember the rule.
+  The effective history `L * W` is reported by the harness rather than
+  left to callers to multiply.
+  A schema v1 frame is refused and named as one; so is a frame spanning a
+  different window, an emit cadence off the source grid, and an anchor
+  whose grid never lands on a row of the frame -- that last one would
+  otherwise answer "no data" to a question that was really "this anchor
+  does not belong to this frame".
 - **`snapshot.verify_snapshot_on_disk`**, which verifies a snapshot
   already on disk against the manifest beside it: presence, size and
   SHA-256 for every declared asset, no network, and the same

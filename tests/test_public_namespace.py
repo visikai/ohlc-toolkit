@@ -30,6 +30,7 @@ import ohlc_toolkit
 # than derived from the package directory: a test that discovers the
 # answer from the thing under test cannot notice the thing changing.
 EXPECTED_SUBPACKAGES = (
+    "indicators",
     "returns",
     "schedules",
     "snapshot",
@@ -79,7 +80,7 @@ def _run(source: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_all_is_exactly_the_six_subpackages() -> None:
+def test_all_is_exactly_the_declared_subpackages() -> None:
     """``__all__`` names the contract surface and nothing else."""
     assert tuple(ohlc_toolkit.__all__) == EXPECTED_SUBPACKAGES
 
@@ -108,7 +109,7 @@ def test_a_bare_import_reaches_every_subpackage() -> None:
     assert result.stdout.strip() == "ok"
 
 
-def test_a_star_import_binds_exactly_the_six() -> None:
+def test_a_star_import_binds_exactly_the_declared_subpackages() -> None:
     """``from ohlc_toolkit import *`` brings in the subpackages, no names.
 
     Cold again: a star import honours ``__all__``, so what it binds is
