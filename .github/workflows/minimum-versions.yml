@@ -1,0 +1,103 @@
+name: Minimum versions
+
+# Every other job here resolves at the NEWEST compatible version of
+# everything, which is the one resolution under which a wrong lower bound
+# is invisible: the suite passes whether orjson is floored at 3.11.6 or at
+# 3.10.15, because neither is what gets installed. That is how the
+# advisories behind the current floors stayed quiet for months -- the
+# lockfile pinned clear versions the whole time, and the exposure lived in
+# packaging metadata no test ever exercised.
+#
+# This lane installs at `--resolution lowest` instead, which is the
+# resolution a consumer of the published wheel is free to ask for, and
+# then makes three separate claims about it:
+#
+#   1. every declared floor is the version that actually installs, so a
+#      bound naming a yanked or unbuildable release cannot pass unseen;
+#   2. the runtime closure at those floors carries no known advisory;
+#   3. the suite passes there, so the floors are installable together and
+#      not merely satisfiable on paper.
+#
+# `--resolution lowest` rather than `lowest-direct`, measured: the whole
+# reason certifi is declared at all is that requests floors it at
+# 2023.5.7, a version with two advisories against it. `lowest-direct`
+# leaves an undeclared transitive at its newest -- today it would install
+# charset-normalizer 3.5.1 where this lane installs 2.0.0 -- so it is
+# blind to exactly the exposure that is worth catching.
+#
+# The job FAILS rather than reports. A lane that only reports repeats the
+# failure it exists to prevent, which was a true signal nobody was
+# obliged to read. It is deliberately not wired as a required status
+# check here; that is a branch-protection change and needs its own
+# ordering so open pull requests are not deadlocked mid-change.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  # A new advisory can land against a version already floored, with
+  # nothing in this repository changing. The weekly run catches that
+  # without waiting for someone to open a pull request.
+  schedule:
+    - cron: "43 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  minimum-versions:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The ends of `requires-python`. A floor with no wheel for the
+        # oldest or the newest supported interpreter fails on one end
+        # only, and the versions in between were measured to agree.
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          prune-cache: false
+          cache-python: true
+          python-version: ${{ matrix.python-version }}
+
+      # Runtime dependencies only, and no lockfile: the lockfile is this
+      # repository's environment, while the floors are what a consumer
+      # resolves against. Test tooling is added after the audit, so its
+      # own transitive closure cannot be mistaken for something this
+      # package ships.
+      - name: Install at the lowest resolution
+        run: |
+          uv venv .venv --python "${{ matrix.python-version }}"
+          uv pip install --python .venv --resolution lowest -e .
+
+      - name: Check the declared floors are the versions installed
+        run: .venv/bin/python scripts/check_dependency_floors.py
+
+      - name: Audit the runtime closure for known advisories
+        run: |
+          uv pip freeze --python .venv --exclude-editable > lowest-runtime.txt
+          cat lowest-runtime.txt
+          uvx pip-audit@2.9.0 --requirement lowest-runtime.txt --no-deps
+
+      # The floors have to survive sharing an environment with the test
+      # tooling; re-checking afterwards is what makes that a measurement
+      # rather than an assumption.
+      - name: Add the test tooling and re-check the floors
+        run: |
+          uv pip install --python .venv --resolution lowest --group dev
+          .venv/bin/python scripts/check_dependency_floors.py
+
+      - name: Run the tests against the floors
+        run: .venv/bin/python -m pytest
