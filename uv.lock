@@ -664,10 +664,12 @@ name = "ohlc-toolkit"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "idna" },
     { name = "loguru" },
     { name = "orjson" },
     { name = "polars" },
     { name = "requests" },
+    { name = "urllib3" },
 ]
 
 [package.dev-dependencies]
@@ -682,10 +684,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "idna", specifier = ">=3.15,<4.0.0" },
     { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
-    { name = "orjson", specifier = ">=3.10.15,<4.0.0" },
+    { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
     { name = "polars", specifier = ">=1.35.0,<2.0.0" },
-    { name = "requests", specifier = ">=2.32.3,<3.0.0" },
+    { name = "requests", specifier = ">=2.33.0,<3.0.0" },
+    { name = "urllib3", specifier = ">=2.7.0,<3.0.0" },
 ]
 
 [package.metadata.requires-dev]

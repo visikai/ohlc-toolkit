@@ -17,9 +17,27 @@ keywords = [
 ]
 dependencies = [
     "loguru>=0.7.3,<0.8.0",
-    "orjson>=3.10.15,<4.0.0",
+    # Floor is the first version clearing the high-severity advisory
+    # against orjson; anything lower is installable by a consumer of the
+    # published wheel. Stated as the advisory rather than as a GitHub
+    # alert number, because an alert can be dismissed and the advisory
+    # still holds -- these were dismissed on 2026-09-06 as stale, since
+    # they named a lockfile deleted in the move to uv.
+    "orjson>=3.11.6,<4.0.0",
     "polars>=1.35.0,<2.0.0",
-    "requests>=2.32.3,<3.0.0",
+    # Floor clears both advisories against requests; the lockfile alone
+    # does not bind what a consumer resolves.
+    "requests>=2.33.0,<3.0.0",
+    # Nothing here imports urllib3 or idna. They are declared because
+    # requests carries them into every install of this package, and its
+    # own ranges (urllib3<3,>=1.26 and idna<4,>=2.5) admit versions with
+    # published advisories against them, three of them high -- measured,
+    # a consumer pinning urllib3==1.26.20 and idna==2.5 resolves clean
+    # against this wheel.
+    # A floor here is the only place that closes it, since the transitive
+    # range is not ours to change and a lockfile binds only its own repo.
+    "urllib3>=2.7.0,<3.0.0",
+    "idna>=3.15,<4.0.0",
 ]
 
 [project.urls]
