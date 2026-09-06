@@ -45,6 +45,44 @@ recorded here because it is the reason the entries below are breaking.
   manifest that recorded it, and `FeatureIdentity.parse` takes it as a
   keyword argument rather than inventing a default for the one field the
   name cannot vouch for.
+- **`indicators.IndicatorPrimitive`**, the protocol every input
+  indicator satisfies: its short name, the lookback count `L` a period
+  `P` implies, the normalization class its values already carry, and one
+  column of values over harness output. A protocol rather than a base
+  class -- a primitive inherits no state and is only ever read
+  structurally. Two things are deliberately not the primitive's to state:
+  effective history, which is `L * W` and belongs to the grid the harness
+  resolved, and its own column name, which is derived from
+  `FeatureIdentity` so that the name and the manifest cannot disagree.
+  `require_phased_inputs` refuses harness output assembled for a
+  different lookback, missing a field the primitive reads, or carrying
+  lists that are not `L` long; `add_indicator` computes one and appends
+  it, refusing a frame that already carries the column.
+- **`indicators.CutlersRSI`**, the first primitive:
+  `100 - 100 / (1 + G / D)`, where `G` and `D` are the SIMPLE means of
+  the positive and negative close-to-close changes across the `P` changes
+  that `P + 1` phased windows hold, so `L = P + 1`. Bounded by
+  construction.
+  Cutler's and not Wilder's: Wilder's smoothing is a recursion with
+  infinite memory, so its value depends on where the series was seeded
+  and two artifacts built from different history starts disagree about
+  the same window. Cutler's reads exactly `P` changes, which is what
+  makes a window's value a function of that window's inputs and nothing
+  else. Wilder's may be added later as a separately named indicator
+  carrying its own warm-up and restart rule; it is never substituted.
+  Three boundary conventions, so that a reading is never undefined and
+  never non-finite: only rises reads `100`, only falls reads `0`, and
+  every one of the `P` changes exactly zero reads `50` -- the symmetric
+  limit, which is not the same as a window with too little trading in it,
+  and the harness has already turned that one into a null. Any null among
+  the `P + 1` inputs nulls that tick's reading and no other.
+  The implementation evaluates the closed form `100 * (G / (G + D))`,
+  which is the same number by algebra but divides by a sum of
+  non-negative means rather than by `D`, so the two one-sided conventions
+  are arithmetic rather than branches and no path can divide by zero. The
+  parenthesis is load-bearing: scaling before dividing rounds the product
+  first and returns `100.00000000000001` at `D = 0` and
+  `G = 256842.5 / 3`, outside the range the indicator claims.
 - **`indicators.effective_history`** and **`indicators.effective_n`**.
   The first is `L * W`. The second counts INDEPENDENT BLOCKS -- whole
   non-overlapping windows in a range, divided by the lookback -- and is
