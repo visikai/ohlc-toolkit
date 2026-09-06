@@ -25,6 +25,21 @@ import pytest
 _REPO_ROOT = Path(__file__).parents[1]
 _SCRIPT = _REPO_ROOT / "scripts" / "check_dependency_floors.py"
 
+# Census pin, in the shape tests/test_workflow_pins.py uses and for the same
+# reason: the checker reports "All N declared floors are the versions
+# installed" and exits 0 for ANY non-empty set, so a floor deleted from
+# [project.dependencies] disappears without a sound. Measured before pinning
+# it: drop the urllib3 and idna lines and the checker passes over five
+# floors while urllib3 1.26.0 and idna 2.5 are what a lowest resolution
+# installs. Update deliberately when a runtime dependency is added or
+# removed.
+_EXPECTED_FLOORS = 7
+
+# The floors that exist because a resolver would otherwise reach a version
+# with an advisory against it. Named rather than counted, because a count
+# survives a swap.
+_ADVISORY_FLOORS = frozenset({"orjson", "requests", "urllib3", "idna", "certifi"})
+
 
 def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("check_dependency_floors", _SCRIPT)
@@ -48,13 +63,26 @@ def _pyproject(tmp_path: Path, *dependencies: str) -> Path:
 
 
 def test_every_runtime_dependency_of_this_package_declares_one_numeric_floor() -> None:
-    """The real file parses, which is what the CI lane depends on."""
+    """The real file parses, and the set is the size it is supposed to be.
+
+    The count is the load-bearing half. Without it the checker passes over
+    whatever floors remain, so removing one for a reason unrelated to
+    advisories -- a dependency dropped, a line lost in a rebase -- reads as
+    a clean run. pip-audit backstops the cases that carry an advisory; this
+    is what covers the rest.
+    """
     declared = floors.declared_floors(_REPO_ROOT / "pyproject.toml")
 
+    assert len(declared) == _EXPECTED_FLOORS, sorted(declared)
+    assert _ADVISORY_FLOORS <= declared.keys(), sorted(
+        _ADVISORY_FLOORS - declared.keys()
+    )
     assert "polars" in declared
-    assert "certifi" in declared
-    for name, floor in declared.items():
-        assert floors._release(floor), f"{name} declares an empty floor"
+    for floor in declared.values():
+        # Calling this IS the assertion: it refuses a floor it cannot
+        # compare. Asserting on the result would not be, since the smallest
+        # tuple it returns is (0,), which is truthy.
+        floors._release(floor)
 
 
 def test_a_dependency_with_no_lower_bound_is_refused(tmp_path: Path) -> None:
@@ -77,7 +105,6 @@ def test_two_lower_bounds_are_refused(tmp_path: Path) -> None:
     "requirement",
     [
         "loguru @ https://example.invalid/loguru.whl",
-        'requests>=2.33.0; python_version < "3.12"',
         "requests[socks]>=2.33.0",
         "loguru",
         ">=2.33.0",
@@ -87,11 +114,76 @@ def test_two_lower_bounds_are_refused(tmp_path: Path) -> None:
 def test_a_requirement_shape_it_does_not_recognise_is_refused(
     tmp_path: Path, requirement: str
 ) -> None:
-    """Extras, markers, URLs, bare names and empty halves are refused."""
+    """Extras, URLs, bare names and empty halves are refused."""
     path = _pyproject(tmp_path, requirement)
 
     with pytest.raises(floors.FloorCheckError, match=r"cannot parse"):
         floors.declared_floors(path)
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        'requests>=2.33.0; python_version < "3.12"',
+        'pywin32>=306,<400;sys_platform=="win32"',
+    ],
+)
+def test_an_environment_marker_is_refused_on_the_marker_itself(
+    tmp_path: Path, requirement: str
+) -> None:
+    r"""Refused on the ``;``, not on the whitespace that used to catch it.
+
+    The second shape is the one that mattered. Every dependency in this
+    repository is capped, so a marker here rides the SECOND specifier,
+    where it was absorbed by ``[^,\s]+`` and dropped: the floor came back
+    as 306 with the platform condition gone, and the mismatch only
+    surfaced later as ``pywin32 is declared but not installed`` -- red CI
+    for a correct declaration, under a diagnostic pointing at a broken
+    one.
+    """
+    path = _pyproject(tmp_path, requirement)
+
+    with pytest.raises(floors.FloorCheckError, match=r"environment marker"):
+        floors.declared_floors(path)
+
+
+def test_a_distribution_declared_twice_is_refused(tmp_path: Path) -> None:
+    """The later floor would hide the earlier one and neither be checked."""
+    path = _pyproject(tmp_path, "polars>=1.38.1,<2.0.0", "polars>=1.0")
+
+    with pytest.raises(floors.FloorCheckError, match=r"declared more than once"):
+        floors.declared_floors(path)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("[project]\ndependencies = []\n", r"no runtime dependencies"),
+        ("[tool.other]\nx = 1\n", r"no \[project\] dependencies"),
+        ("[project\ndependencies = []\n", r"as TOML"),
+    ],
+)
+def test_a_file_with_nothing_to_check_is_refused_not_passed(
+    tmp_path: Path, body: str, expected: str
+) -> None:
+    """Zero floors is the vacuous guard at its widest, so it is an error.
+
+    Static analysis proposed ``max(..., default=0)`` for the formatting
+    width this used to crash on. Taking it would have turned the crash
+    into a clean run over an empty set, which is the failure this whole
+    lane exists to refuse.
+    """
+    path = tmp_path / "pyproject.toml"
+    path.write_text(body, encoding="utf-8")
+
+    with pytest.raises(floors.FloorCheckError, match=expected):
+        floors.declared_floors(path)
+
+
+def test_a_file_that_cannot_be_read_is_refused(tmp_path: Path) -> None:
+    """A missing file is not an environment with no floors to check."""
+    with pytest.raises(floors.FloorCheckError, match=r"cannot read"):
+        floors.declared_floors(tmp_path / "absent" / "pyproject.toml")
 
 
 def test_a_lower_bound_that_is_not_numeric_is_refused(tmp_path: Path) -> None:

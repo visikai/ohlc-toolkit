@@ -44,9 +44,18 @@ _NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
 _SPECIFIER = re.compile(r"^[<>=!~]=?\s*[^,\s]+$")
 
 #: Where a requirement stops naming a distribution and starts constraining
-#: it. Extras, environment markers and URL requirements contain none of
-#: these before their first space, so they are refused rather than skipped.
+#: it. Everything before the first of these has to be a bare name, which
+#: is what refuses an extra (``requests[socks]>=2.33.0``) and a URL
+#: requirement (``name @ https://...``, which carries no operator at all).
 _OPERATORS = "<>=!~"
+
+#: An environment marker is refused on this character rather than on the
+#: whitespace inside it. Leaving it to ``_SPECIFIER``'s ``[^,\s]+`` only
+#: caught a marker riding the SOLE specifier, and every dependency in this
+#: repository is capped, so ``pywin32>=306,<400;sys_platform=="win32"``
+#: parsed as a floor of 306 with the marker swallowed into the second
+#: specifier and silently dropped.
+_MARKER = ";"
 
 _LOWER_BOUND = re.compile(r"^>=\s*(?P<version>[0-9]+(?:\.[0-9]+)*)$")
 
@@ -68,6 +77,12 @@ def _split(requirement: str) -> tuple[str, list[str]]:
     partial reading of it: a dependency this cannot parse is a dependency
     nothing checks, which is the gap the whole script exists to close.
     """
+    if _MARKER in requirement:
+        msg = (
+            f"{requirement!r} carries an environment marker; which floor "
+            f"applies then depends on the platform, and this cannot say"
+        )
+        raise FloorCheckError(msg)
     start = next(
         (index for index, char in enumerate(requirement) if char in _OPERATORS),
         -1,
@@ -89,13 +104,29 @@ def _split(requirement: str) -> tuple[str, list[str]]:
 def declared_floors(pyproject: Path) -> dict[str, str]:
     """Read the lower bound of every runtime dependency.
 
-    Raises ``FloorCheckError`` for a requirement this cannot parse or one
-    that declares no lower bound, because an unchecked dependency is the
-    exact gap this script exists to close.
+    Raises ``FloorCheckError`` for a requirement this cannot parse, one
+    that declares no lower bound, one that repeats a distribution already
+    declared, and for a file with no dependencies in it at all -- because
+    an unchecked dependency is the exact gap this script exists to close,
+    and an empty set of them is the gap at its widest. In particular there
+    is no ``default=`` anywhere below: a reading that returns nothing must
+    never come back as a floor set that passed.
     """
-    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
+    try:
+        document = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        requirements = document["project"]["dependencies"]
+    except OSError as error:
+        msg = f"cannot read {pyproject}"
+        raise FloorCheckError(msg) from error
+    except tomllib.TOMLDecodeError as error:
+        msg = f"cannot parse {pyproject} as TOML"
+        raise FloorCheckError(msg) from error
+    except KeyError as error:
+        msg = f"{pyproject} has no [project] dependencies to check"
+        raise FloorCheckError(msg) from error
+
     floors: dict[str, str] = {}
-    for requirement in project["dependencies"]:
+    for requirement in requirements:
         name, specifiers = _split(requirement.strip())
         bounds = [
             bound.group("version")
@@ -108,7 +139,16 @@ def declared_floors(pyproject: Path) -> dict[str, str]:
                 f"form >=N.N; exactly one is required"
             )
             raise FloorCheckError(msg)
+        if name in floors:
+            msg = (
+                f"{name} is declared more than once; the later floor would "
+                f"hide the earlier one and neither would be checked"
+            )
+            raise FloorCheckError(msg)
         floors[name] = bounds[0]
+    if not floors:
+        msg = f"{pyproject} declares no runtime dependencies to check"
+        raise FloorCheckError(msg)
     return floors
 
 

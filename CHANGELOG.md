@@ -60,6 +60,25 @@ against their tags, and are not restated here.
   Measured: against 1.0.0 a consumer pinning `orjson==3.10.18`, or
   `urllib3==1.26.20` and `idna==2.5`, resolved cleanly with no conflict
   and no warning; against these floors the same pins are refused.
+- **`certifi` is now declared, at `>=2024.7.4`, and `polars`'s floor is
+  raised from `>=1.35.0` to `>=1.38.1`.** `certifi` is the fourth
+  dependency `requests` carries into every install, and its own
+  declaration is `certifi>=2023.5.7` -- the exact version PYSEC-2023-135
+  and PYSEC-2024-230 are against. It is declared without an upper bound,
+  unlike its neighbours, because it is a dated snapshot of a root store on
+  a CalVer scheme: there is no major version to cap, and capping one would
+  strand a consumer on an expired bundle. `polars>=1.35.0` was never a
+  usable bound -- 1.35.0 pins `polars-runtime-32==1.35.0`, which is
+  yanked -- and 1.35.1 through 1.37.1 raise `InvalidOperationError` out of
+  `windows.compute_windows` where later versions skip a null, so a
+  consumer resolving to any of them gets behaviour this library's own
+  tests contradict. Measured on 3.11 and 3.14, which agree.
+- **A `Minimum versions` workflow installs at `--resolution lowest` and
+  fails if the floors are not what a consumer would actually get.** It
+  checks that every declared floor is the version that installs, audits
+  that closure against the advisory database, and runs the suite there. No
+  other job had ever installed at the floors, which is why the exposure
+  above could sit in the metadata unnoticed.
 - `windows.compute_windows`'s documented equivalence with the reference
   oracle is stated as conditional on VALID input, in both places it was
   claimed. Neither function validates, so either can be handed a frame the
