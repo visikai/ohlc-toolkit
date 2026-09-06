@@ -144,7 +144,8 @@ def test_an_overflowing_mean_is_refused_rather_than_divided_into() -> None:
     Three closes at 1.7e308 are each finite and their sum is not, so the
     mean is infinite while every input is a value the source layer would
     accept. Dividing into it would read `-inf` or `0.0` depending on the
-    numerator, and AC4 forbids both.
+    numerator, and this indicator emits neither: a reading is finite or
+    it is null.
     """
     enormous = 1.7e308
 

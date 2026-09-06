@@ -222,7 +222,8 @@ def test_an_overflowing_true_range_is_refused_rather_than_averaged() -> None:
     `close` is the only field this primitive constrains to be positive;
     `high` and `low` are free, so a bar from -1.7e308 to 1.7e308 has an
     infinite true range while every input is finite. Averaging it would
-    produce an infinite reading, which AC4 forbids.
+    produce an infinite reading, and this indicator emits neither an
+    infinity nor a NaN.
     """
     enormous = 1.7e308
 

@@ -4,21 +4,37 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
-## Unreleased
+## 2.0.0 - 2026-09-06
 
-**This release is a major version.** The windowed-candle frame gains a
-tenth column, and "exactly N columns" is a shape every consumer sees and
-this repository's own tests pin. The alternative considered was an
-additive release with the column opt-in, keeping the default at nine.
-That was rejected on three counts: the default would then contradict the
-schema this release exists to ship; the quality-policy step now REQUIRES
-`traded_seconds`, so an opt-in would have to be threaded through two
-modules and the policy would need a mode meaning "no traded column",
-which is the v1-reinterpretation the schema explicitly rules out; and the
-only known consumer is already planning to move its own bound. A 2.0.0
-with one consumer is cheap now and expensive later. The version string is
-not bumped in this entry -- the release does that -- but the decision is
-recorded here because it is the reason the entries below are breaking.
+**Read this first if you are on 1.x.** The windowed-candle frame now has
+TEN columns rather than nine. The new one is `traded_seconds` (`Int64`):
+how many seconds inside a window actually saw a trade, counted as
+`volume > 0` over the source rows the window covers. Three consequences
+you have to act on:
+
+1. **Any code that asserts the frame's shape breaks.** "Exactly nine
+   columns", a positional unpack, or a schema equality check will fail.
+   The column order is stable and `traded_seconds` is appended last.
+2. **`apply_quality_policy` REQUIRES the column.** A frame without it is
+   refused with a `ConfigError` rather than silently checked against one
+   threshold. If you project a frame down to what the step consults, keep
+   `traded_seconds` alongside `coverage_seconds` and `src_count`.
+3. **`WindowQualityPolicy` gains `min_traded_seconds`, defaulting to
+   `0`.** The default preserves 1.x behaviour exactly: at zero, no window
+   is excluded for want of trading. Raising it is opt-in.
+
+Frames materialized under 1.x cannot be read as v2 frames. Re-materialize
+them, or keep them and pin `ohlc-toolkit>=1.0,<2.0`.
+
+**Why a major rather than an additive release.** The alternative was to
+ship the column opt-in with the default at nine. That was rejected on
+three counts: the default would then contradict the schema this release
+exists to ship; the quality-policy step now REQUIRES `traded_seconds`, so
+an opt-in would have to be threaded through two modules and the policy
+would need a mode meaning "no traded column", which is the
+v1-reinterpretation the schema explicitly rules out; and the only known
+consumer is already planning to move its own bound. A 2.0.0 with one
+consumer is cheap now and expensive later.
 
 ### Added
 
@@ -282,7 +298,10 @@ recorded here because it is the reason the entries below are breaking.
   either infinity in a declared price or volume column. It is kept distinct
   from `NULL_VALUES` because a null is an absent cell and a NaN is a present
   cell that is not a number, and nothing is coerced: making a NaN into a null
-  is a repair this validator does not perform.
+  is a repair this validator does not perform. The member is inserted
+  mid-order rather than appended; `FindingKind` is a plain `Enum` with
+  string values, so nothing depends on member position and the values
+  themselves are unchanged.
 
 ### Fixed
 
