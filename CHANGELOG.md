@@ -8,6 +8,52 @@ against their tags, and are not restated here.
 
 ### Changed
 
+- **BREAKING: `phased_lookback` and `phased_lookback_reference` now REFUSE
+  a frame whose measured cadence does not divide the window, where they
+  used to return a column that was null end to end.** Every phase is read
+  at `t - kW` by exact equality on `close_time`. Where the cadence does
+  not divide `W`, that address falls between two rows for every phase but
+  the newest, so every lookup after the first misses and the
+  all-or-nothing mask nulls every tick:
+
+      a 2h26m window materialized at 3m cadence, lookback 2
+        -> every tick null, and nothing raised
+      the same window at 1m cadence
+        -> every tick served, but for the warm-up
+
+  The existing rules could not catch it. `3m` divides a `6m` emit step
+  exactly, every row really does span `2h26m`, and the emit grid really
+  does sit on the frame's own phase; only `W` was unreachable.
+
+  **The rule, which is what you need to tell whether you are affected:**
+  the frame's cadence must divide `W`. The refusal names the cadence, the
+  window, the remainder and the two nearest windows the cadence does
+  divide.
+
+  It fires whatever the lookback, including 1 — where the frame is in
+  fact served correctly, because a lookback of 1 reads only phase zero
+  and phase zero is `t` itself. That case is refused deliberately: it is
+  the same wrong frame, and leaving it accepted meant a recipe validated
+  at a lookback of 1 turned silently into an all-null column when the
+  lookback was raised to 2.
+
+  Some configurations that already raised now raise a DIFFERENT message
+  from the same `ConfigError` class, so an `except` clause is unaffected:
+  this check runs before the emit-cadence one, so a 120s-cadence frame of
+  60s windows at `emit_every="60s"` moves from "The emit cadence must be a
+  whole multiple of the frame's 120s cadence" to "The frame's 120s cadence
+  must divide the window of 60s".
+
+  No refusal RATE is quoted here on purpose, for the reason the entry
+  below gives: a percentage over a grid of parameters nobody chose
+  measures the grid, not the change. The rule above is what tells you
+  whether a particular call is affected — and the lookback-1 paragraph
+  names the one class of caller that was getting a correct answer and
+  will now get a refusal.
+
+  Artifacts materialized at source cadence — what `compute_windows` writes
+  and what every published recipe reads — are unaffected.
+
 - **BREAKING: `metallic_recurrence` and `metallic_lookback` now REFUSE a
   seed their own lower bound would drop after quantization.** The seed is
   a POINT — the term the recurrence starts from and the first member of
