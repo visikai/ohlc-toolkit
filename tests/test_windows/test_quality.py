@@ -3,7 +3,7 @@
 Every scenario here starts from a genuinely engine-produced window frame
 -- built with :func:`~ohlc_toolkit.windows.engine.compute_windows` over
 the same hand-written factories the rest of ``tests/test_windows`` uses
--- rather than a hand-crafted nine-column frame, so these tests exercise
+-- rather than a hand-crafted ten-column frame, so these tests exercise
 the real output shape the policy composes after.
 """
 
@@ -124,25 +124,35 @@ def _assert_ohlcv_untouched(before: pl.DataFrame, after: pl.DataFrame) -> None:
         )
 
 
-def _quality_frame_from_coverages(coverages: Sequence[int]) -> pl.DataFrame:
+def _quality_frame_from_coverages(
+    coverages: Sequence[int], traded: Sequence[int] | None = None
+) -> pl.DataFrame:
     """Build a minimal frame carrying only the columns this step reads.
 
-    Real engine output always carries the full nine columns, but the
-    filter and gate logic here reads only three of them, so a test that
+    Real engine output always carries the full ten columns, but the
+    filter and gate logic here reads only four of them, so a test that
     varies coverage alone does not need to fabricate plausible OHLCV
     values to stay honest about what is under test.
+
+    ``traded`` defaults to a copy of ``coverages`` -- every window fully
+    traded -- which is the state under which the traded threshold cannot
+    bind, so a coverage test stays a coverage test. A test that means to
+    exercise the second threshold passes its own.
     """
     return pl.DataFrame(
         {
             "close_time": [_TIME_BASE + i for i in range(len(coverages))],
             "src_count": [c // 10 for c in coverages],
             "coverage_seconds": coverages,
+            "traded_seconds": list(coverages) if traded is None else list(traded),
         }
     ).with_columns(
-        # Both casts matter for the empty frame: a [] column infers Null,
-        # and the engine emits Int64 for these columns even at height 0.
+        # All three casts matter for the empty frame: a [] column infers
+        # Null, and the engine emits Int64 for these columns even at
+        # height 0.
         pl.col("close_time").cast(pl.Int64),
         pl.col("coverage_seconds").cast(pl.Int64),
+        pl.col("traded_seconds").cast(pl.Int64),
     )
 
 
@@ -214,9 +224,15 @@ class TestWindowQualityPolicyIdentity:
         assert policy.to_dict() == {
             "mode": "gate",
             "min_coverage": 0.75,
+            "min_traded_seconds": 0,
             "gate_mode": "report",
         }
-        assert list(policy.to_dict().keys()) == ["mode", "min_coverage", "gate_mode"]
+        assert list(policy.to_dict().keys()) == [
+            "mode",
+            "min_coverage",
+            "min_traded_seconds",
+            "gate_mode",
+        ]
 
     def test_round_trip_through_dict_reproduces_an_equal_policy(self) -> None:
         """from_dict(to_dict(p)) == p for every field combination."""
@@ -560,8 +576,14 @@ class TestGateStrict:
                 "close_time": [_TIME_BASE + 300, _TIME_BASE + 100, _TIME_BASE + 200],
                 "src_count": [6, 3, 10],
                 "coverage_seconds": [60, 30, 100],
+                # Fully traded throughout, so the only offence here is
+                # the coverage one this test is about.
+                "traded_seconds": [60, 30, 100],
             }
-        ).with_columns(pl.col("coverage_seconds").cast(pl.Int64))
+        ).with_columns(
+            pl.col("coverage_seconds").cast(pl.Int64),
+            pl.col("traded_seconds").cast(pl.Int64),
+        )
 
         with pytest.raises(WindowCoverageError) as caught:
             apply_quality_policy(
@@ -755,6 +777,7 @@ def _frame_with_a_null_coverage() -> pl.DataFrame:
             "close_time": [_TIME_BASE, _TIME_BASE + 10, _TIME_BASE + 20],
             "src_count": [10, 0, 10],
             "coverage_seconds": [100, None, 100],
+            "traded_seconds": [100, 100, 100],
         },
         schema_overrides={"coverage_seconds": pl.Int64},
     )
@@ -846,13 +869,15 @@ class TestBoundaryConditions:
             )
 
     def test_a_frame_carrying_only_the_columns_read_is_accepted(self) -> None:
-        """Nothing beyond close_time and coverage_seconds is required.
+        """Nothing beyond the three columns the checks read is required.
 
         A caller who has projected an engine frame down to what this
         step actually consults is not doing anything wrong, and must not
         be refused for dropping a column no check reads.
         """
-        frame = _ramping_coverage_frame().select("close_time", "coverage_seconds")
+        frame = _ramping_coverage_frame().select(
+            "close_time", "coverage_seconds", "traded_seconds"
+        )
         assert "src_count" not in frame.columns
 
         result = apply_quality_policy(
@@ -861,7 +886,11 @@ class TestBoundaryConditions:
             window=_WINDOW,
         )
 
-        assert result.frame.columns == ["close_time", "coverage_seconds"]
+        assert result.frame.columns == [
+            "close_time",
+            "coverage_seconds",
+            "traded_seconds",
+        ]
         assert result.frame.height == result.report.rows_checked - (
             result.report.offending_count
         )
@@ -1327,6 +1356,191 @@ def test_filter_keeps_exactly_the_rows_meeting_the_threshold(
     assert isinstance(result, QualityPolicyResult)
     expected = [c for c in coverages if c >= threshold]
     assert result.frame.get_column("coverage_seconds").to_list() == expected
+
+
+class TestTradedThreshold:
+    """The second threshold: whether the rows the source had held trades.
+
+    Every frame here is FULLY COVERED. That is the point of the class --
+    a window can be complete and completely dead, and before
+    ``traded_seconds`` nothing in the output could tell the two apart, so
+    a test that also varied coverage would not be testing this threshold
+    at all.
+    """
+
+    @staticmethod
+    def _fully_covered(traded: Sequence[int]) -> pl.DataFrame:
+        return _quality_frame_from_coverages(
+            [_WINDOW_SECONDS] * len(traded), traded=traded
+        )
+
+    def test_the_default_admits_a_window_that_never_traded(self) -> None:
+        """A recipe that named no traded threshold gets none.
+
+        ``min_traded_seconds`` defaults to 0, so a fully covered window
+        with no trades at all passes a strict gate. This is what stops
+        every policy recorded before the threshold existed from acquiring
+        one.
+        """
+        frame = self._fully_covered([0, 0, 0])
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.STRICT),
+            window=_WINDOW,
+        )
+
+        assert result.report.passed is True
+        assert result.report.traded_offending_count == 0
+        assert result.report.traded_threshold_seconds == 0
+
+    def test_one_second_admits_a_window_exactly_when_something_traded(self) -> None:
+        """The lowest useful setting, and the reason it is a duration.
+
+        ``traded_seconds`` is a sum of whole interval durations, so the
+        smallest positive value it can take is one interval. A threshold
+        of 1 therefore admits a row exactly when at least one included
+        interval traded -- exactly, not approximately, which a fraction of
+        the window could not manage: as a fraction the same bar is
+        ``d / W``, a number this policy cannot compute because it does not
+        record ``W``, and one that is not representable anyway.
+        """
+        frame = self._fully_covered([0, 1, _WINDOW_SECONDS])
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_traded_seconds=1),
+            window=_WINDOW,
+        )
+
+        assert result.frame.get_column("traded_seconds").to_list() == [
+            1,
+            _WINDOW_SECONDS,
+        ]
+        assert result.report.traded_offending_count == 1
+
+    def test_the_strict_gate_names_the_traded_threshold_that_failed(self) -> None:
+        """The message names which bar was missed.
+
+        "Quality gate failed" with one number behind it is what sends a
+        reader to the wrong column.
+        """
+        frame = self._fully_covered([_WINDOW_SECONDS, 0])
+
+        with pytest.raises(WindowCoverageError) as caught:
+            apply_quality_policy(
+                frame,
+                WindowQualityPolicy(
+                    mode=QualityMode.GATE,
+                    gate_mode=GateMode.STRICT,
+                    min_traded_seconds=10,
+                ),
+                window=_WINDOW,
+            )
+
+        message = str(caught.value)
+        assert "traded_seconds" in message
+        assert "minimum of 10s" in message
+        # The coverage half is not mentioned, because it did not bite.
+        assert "coverage_seconds" not in message
+        assert caught.value.report.coverage_offending_count == 0
+        assert caught.value.report.traded_offending_count == 1
+
+    def test_a_row_failing_both_thresholds_is_counted_under_both(self) -> None:
+        """The two counts overlap, and the offending count is the union.
+
+        Summing the two would double-count this row, which is why the
+        report carries three numbers rather than two.
+        """
+        frame = _quality_frame_from_coverages([_WINDOW_SECONDS, 10], traded=[100, 0])
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(
+                mode=QualityMode.GATE,
+                gate_mode=GateMode.REPORT,
+                min_traded_seconds=1,
+            ),
+            window=_WINDOW,
+        )
+
+        report = result.report
+        assert report.coverage_offending_count == 1
+        assert report.traded_offending_count == 1
+        assert report.offending_count == 1
+
+    def test_a_null_traded_seconds_offends_even_at_a_zero_threshold(self) -> None:
+        """Fail closed, the same way a null coverage does.
+
+        A row that states no traded seconds has not been shown to meet
+        any bar, and a threshold of 0 is still a bar it has not cleared.
+        """
+        frame = _quality_frame_from_coverages(
+            [_WINDOW_SECONDS, _WINDOW_SECONDS]
+        ).with_columns(
+            pl.Series("traded_seconds", [_WINDOW_SECONDS, None], dtype=pl.Int64)
+        )
+
+        result = apply_quality_policy(
+            frame,
+            WindowQualityPolicy(mode=QualityMode.GATE, gate_mode=GateMode.REPORT),
+            window=_WINDOW,
+        )
+
+        assert result.report.null_traded_count == 1
+        assert result.report.traded_offending_count == 1
+        assert result.report.passed is False
+
+    @pytest.mark.parametrize(
+        ("value", "match"),
+        [
+            (1.0, r"must be an int"),
+            ("1", r"must be an int"),
+            (True, r"must be an int"),
+            (-1, r"must not be negative"),
+        ],
+    )
+    def test_an_unusable_traded_threshold_is_refused(
+        self, value: object, match: str
+    ) -> None:
+        """Whole, non-negative seconds or nothing.
+
+        ``True`` is rejected despite being an ``int`` subtype, for the
+        same reason ``min_coverage`` rejects it: a boolean that silently
+        became a threshold of 1 would be a policy nobody wrote.
+        """
+        with pytest.raises(ConfigError, match=match):
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_traded_seconds=value)  # type: ignore[arg-type]
+
+    def test_a_policy_recorded_before_this_threshold_reads_back_unbound(self) -> None:
+        """The compatibility case, stated as its own test.
+
+        A recipe serialized before ``min_traded_seconds`` existed has no
+        such key. Reading it must produce the policy that was written, not
+        a stricter one -- a recorded pipeline that silently acquired a
+        binding threshold would start dropping rows nobody asked it to
+        drop.
+        """
+        recorded_before = {
+            "mode": "filter",
+            "min_coverage": 0.9,
+            "gate_mode": "strict",
+        }
+
+        policy = WindowQualityPolicy.from_dict(recorded_before)
+
+        assert policy.min_traded_seconds == 0
+        assert policy == WindowQualityPolicy(
+            mode=QualityMode.FILTER, min_coverage=0.9, gate_mode=GateMode.STRICT
+        )
+
+    def test_a_recorded_traded_threshold_round_trips(self) -> None:
+        """from_dict(to_dict(p)) == p, with the new field carried."""
+        original = WindowQualityPolicy(
+            mode=QualityMode.GATE, min_coverage=0.5, min_traded_seconds=42
+        )
+
+        assert WindowQualityPolicy.from_dict(original.to_dict()) == original
 
 
 if __name__ == "__main__":

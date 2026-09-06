@@ -76,12 +76,22 @@ def _draw_scenario(
     grid_index = data.draw(st.integers(min_value=3, max_value=40), label="grid_index")
     first_open = phase + cadence * grid_index
 
+    # The third flag is whether the candle TRADED. A present candle with
+    # zero volume is a real shape on the public minute grid -- an outage
+    # appears as a flat zero-volume row, not as a missing one -- and it is
+    # the only input under which `traded_seconds` and `coverage_seconds`
+    # can differ. Drawing volumes that were always positive would leave
+    # every property below true of a column that simply copied coverage.
     slots = data.draw(
         st.lists(
-            st.tuples(st.booleans(), st.integers(min_value=-8, max_value=8)),
+            st.tuples(
+                st.booleans(),
+                st.integers(min_value=-8, max_value=8),
+                st.booleans(),
+            ),
             min_size=1,
             max_size=24,
-        ).filter(lambda drawn: any(is_present for is_present, _ in drawn)),
+        ).filter(lambda drawn: any(is_present for is_present, _, _ in drawn)),
         label="slots",
     )
     rows = tuple(
@@ -91,9 +101,9 @@ def _draw_scenario(
             110.0 + jitter,
             90.0 + jitter,
             105.0 + jitter,
-            float(index + 1),
+            float(index + 1) if has_trades else 0.0,
         )
-        for index, (is_present, jitter) in enumerate(slots)
+        for index, (is_present, jitter, has_trades) in enumerate(slots)
         if is_present
     )
 
@@ -181,6 +191,7 @@ def _naive_row(scenario: _Scenario, tick: int) -> tuple[object, ...]:
             None,
             0,
             0,
+            0,
         )
 
     earliest = min(included, key=lambda row: row[0])
@@ -195,6 +206,10 @@ def _naive_row(scenario: _Scenario, tick: int) -> tuple[object, ...]:
         sum(row[5] for row in included),
         len(included),
         cadence * len(included),
+        # Recomputed from the raw rows rather than derived from coverage,
+        # so a `traded_seconds` that quietly became a copy of
+        # `coverage_seconds` fails here.
+        cadence * sum(1 for row in included if row[5] > 0),
     )
 
 
@@ -316,6 +331,55 @@ def test_coverage_seconds_is_the_exact_sum_of_included_durations(
 
 @_SETTINGS
 @given(data=st.data())
+def test_traded_seconds_never_exceeds_coverage_and_never_goes_negative(
+    data: st.DataObject,
+) -> None:
+    """``0 <= traded_seconds <= coverage_seconds``, on every drawn input.
+
+    The upper bound is the one worth stating: the traded candles are a
+    SUBSET of the included ones, so their summed duration cannot exceed
+    the whole. An implementation that summed the wrong set, or that
+    counted a candle twice, breaks this without breaking any of the
+    coverage properties above.
+    """
+    scenario = _draw_scenario(data)
+    result = _run(scenario)
+
+    for traded, coverage in result.select(
+        "traded_seconds", "coverage_seconds"
+    ).iter_rows():
+        assert 0 <= traded <= coverage
+
+
+@_SETTINGS
+@given(data=st.data())
+def test_traded_seconds_is_zero_exactly_when_no_included_candle_traded(
+    data: st.DataObject,
+) -> None:
+    """The predicate is volume, restated against the raw rows.
+
+    Both directions are asserted, because only one of them is the
+    interesting failure: a window whose candles all sat at zero volume
+    must report zero, and a window with even one traded candle must not.
+    A tick that included nothing at all falls out of the first direction
+    -- an empty set has no traded member -- which is the
+    ``src_count = 0 implies traded_seconds = 0`` rule the contract states
+    separately.
+    """
+    scenario = _draw_scenario(data)
+    result = _run(scenario)
+
+    for tick, traded, src_count in result.select(
+        "close_time", "traded_seconds", "src_count"
+    ).iter_rows():
+        included = _naive_included(scenario, tick)
+        assert (traded == 0) is all(row[5] == 0 for row in included)
+        if src_count == 0:
+            assert traded == 0
+
+
+@_SETTINGS
+@given(data=st.data())
 def test_price_and_volume_are_null_exactly_when_no_candle_was_included(
     data: st.DataObject,
 ) -> None:
@@ -329,6 +393,7 @@ def test_price_and_volume_are_null_exactly_when_no_candle_was_included(
             assert (row[column] is None) is is_empty
         if is_empty:
             assert row["coverage_seconds"] == 0
+            assert row["traded_seconds"] == 0
 
 
 @_SETTINGS
@@ -376,6 +441,7 @@ def test_the_output_schema_never_varies(data: st.DataObject) -> None:
         "volume",
         "src_count",
         "coverage_seconds",
+        "traded_seconds",
     ]
     assert result.dtypes == [
         pl.Int64,
@@ -386,6 +452,7 @@ def test_the_output_schema_never_varies(data: st.DataObject) -> None:
         pl.Float64,
         pl.Float64,
         pl.UInt32,
+        pl.Int64,
         pl.Int64,
     ]
 

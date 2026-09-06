@@ -104,6 +104,7 @@ def _build_rows(  # noqa: PLR0913 - one keyword per independent grid knob
     cadence_seconds: int,
     slot_count: int,
     missing_slots: frozenset[int] = frozenset(),
+    untraded_slots: frozenset[int] = frozenset(),
     extra_rows: Sequence[SourceRow] = (),
 ) -> tuple[SourceRow, ...]:
     """Generate one family's rows over a fixed grid of candle slots.
@@ -114,6 +115,10 @@ def _build_rows(  # noqa: PLR0913 - one keyword per independent grid knob
         cadence_seconds: The spacing between consecutive slots.
         slot_count: How many slots the grid spans, present or missing.
         missing_slots: Slot indices to leave out, producing gaps.
+        untraded_slots: Slot indices whose volume is forced to an exact
+            ``0.0``, leaving the drawn prices alone. A present candle that
+            traded nothing, which is what an outage looks like on a
+            complete-by-construction grid.
         extra_rows: Additional rows to merge in, used by the family that
             deliberately places candles off the declared grid.
 
@@ -131,6 +136,8 @@ def _build_rows(  # noqa: PLR0913 - one keyword per independent grid knob
         open_price, high, low, close_price, volume = _draw_candle(rng)
         if index in missing_slots:
             continue
+        if index in untraded_slots:
+            volume = 0.0
         rows.append(
             (
                 first_open + index * cadence_seconds,
@@ -191,6 +198,35 @@ def _multi_gap_1m() -> SyntheticFamily:
                 cadence_seconds=_MINUTE,
                 slot_count=_MINUTE_SLOT_COUNT,
                 missing_slots=frozenset({1, 2, 13, 22, 23, 24, 25, 38}),
+            )
+        ),
+    )
+
+
+def _untraded_run_1m() -> SyntheticFamily:
+    """Build a complete minute grid with an interior run that traded nothing.
+
+    The prices are the drawn ones and only the volume is forced to zero,
+    which is physically odd and deliberately so: a run that was both flat
+    and untraded would let a `high != low` predicate agree with the volume
+    predicate, and this family exists precisely where the two disagree.
+    The other direction -- flat prices with real volume -- is pinned by a
+    hand-written golden, since a seeded draw is unlikely to produce it.
+
+    Without this family every committed golden reports `traded_seconds`
+    byte-identical to `coverage_seconds`, and an implementation that
+    simply copied one to the other would reproduce all of them.
+    """
+    return SyntheticFamily(
+        name="untraded_run_1m",
+        profile=profile_for(_MINUTE),
+        frame=frame_from_rows(
+            _build_rows(
+                seed=11_000_006,
+                first_open=_MINUTE_BASE_OPEN,
+                cadence_seconds=_MINUTE,
+                slot_count=_MINUTE_SLOT_COUNT,
+                untraded_slots=frozenset({7, 8, 9, 10, 11, 12}),
             )
         ),
     )
@@ -278,6 +314,7 @@ _FAMILY_BUILDERS: dict[str, Callable[[], SyntheticFamily]] = {
     "complete_grid_1m": _complete_grid_1m,
     "single_gap_1m": _single_gap_1m,
     "multi_gap_1m": _multi_gap_1m,
+    "untraded_run_1m": _untraded_run_1m,
     "complete_grid_1s": _complete_grid_1s,
     "phased_grid_1m": _phased_grid_1m,
     "straddling_1m": _straddling_1m,
@@ -336,6 +373,19 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
         family="complete_grid_1m",
         window="5m",
         emit_every="5m",
+        anchor="0s",
+        materialization=_SKIP_WARMUP,
+    ),
+    # A run of present-but-untraded candles, at a window short enough that
+    # some windows fall wholly inside the run and some straddle its edge.
+    # This is the only case whose `traded_seconds` differs from its
+    # `coverage_seconds`, and it is what makes the ten-column goldens pin
+    # ten columns rather than nine and a copy.
+    GoldenCase(
+        label="untraded_run_1m_rolling_3m_every_1m",
+        family="untraded_run_1m",
+        window="3m",
+        emit_every="1m",
         anchor="0s",
         materialization=_SKIP_WARMUP,
     ),

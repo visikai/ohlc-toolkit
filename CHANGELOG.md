@@ -6,7 +6,55 @@ against their tags, and are not restated here.
 
 ## Unreleased
 
+**This release is a major version.** The windowed-candle frame gains a
+tenth column, and "exactly N columns" is a shape every consumer sees and
+this repository's own tests pin. The alternative considered was an
+additive release with the column opt-in, keeping the default at nine.
+That was rejected on three counts: the default would then contradict the
+schema this release exists to ship; the quality-policy step now REQUIRES
+`traded_seconds`, so an opt-in would have to be threaded through two
+modules and the policy would need a mode meaning "no traded column",
+which is the v1-reinterpretation the schema explicitly rules out; and the
+only known consumer is already planning to move its own bound. A 2.0.0
+with one consumer is cheap now and expensive later. The version string is
+not bumped in this entry -- the release does that -- but the decision is
+recorded here because it is the reason the entries below are breaking.
+
 ### Added
+
+- `windows` output gains **`traded_seconds`** (Int64), the tenth column:
+  the summed duration of the included source intervals whose `volume` is
+  greater than zero. `coverage_seconds` says the source had rows;
+  `traded_seconds` says those rows held trades. On a
+  complete-by-construction grid coverage is full everywhere, so nothing
+  in the first nine columns could tell a dead window from a quiet one.
+  The predicate is volume, never `high != low` -- on the public
+  one-minute grid 13.71% of traded minutes trade at a single price, and a
+  flatness test would report every one of them as untraded. A null volume
+  is not a trade, and neither is a NaN -- polars answers `NaN > 0` with
+  True where Python answers False, so the fast path and the reference
+  oracle are made to agree explicitly rather than by luck. An INFINITE
+  volume is counted as a trade by both, because `inf > 0` is true in
+  either language; it is invalid source data and validation is where it
+  is refused.
+- `WindowQualityPolicy` gains **`min_traded_seconds`** (int, default
+  `0`), a second threshold consuming `traded_seconds` with the same
+  modes, the same fail-closed null handling and the same single mask. It
+  is a DURATION and not a fraction of the window: the lowest useful
+  setting must admit a window exactly when at least one included interval
+  traded, which as a fraction is `d / W` for the source cadence `d` -- a
+  number the policy cannot compute, since it does not record `W`, and one
+  that is not exactly representable anyway. As a duration that setting is
+  `1`. The default of `0` admits everything, and `from_dict` treats the
+  key as optional, so a policy recorded before this threshold existed
+  reads back exactly as it was written rather than acquiring a bar nobody
+  chose.
+- `QualityReport` gains `traded_threshold_seconds`,
+  `coverage_offending_count`, `traded_offending_count` and
+  `null_traded_count`. The two offending counts overlap -- a row can miss
+  both bars -- so they can sum past `offending_count`, which is the union
+  the gate refuses. The strict-gate message names the threshold that bit
+  and omits the one that did not.
 
 - `windows.annotate_windows`, `windows.read_annotations`,
   `windows.AnnotationColumns` and `windows.AnnotationValidationError`: join
@@ -49,6 +97,26 @@ against their tags, and are not restated here.
 
 ### Changed
 
+- **BREAKING: `compute_windows` and `compute_reference_windows` return
+  ten columns, not nine.** Anything asserting the exact column list, or
+  reading columns positionally, changes. A v1 nine-column artifact is
+  superseded rather than reinterpreted: no reader invents a
+  `traded_seconds` for it.
+- **BREAKING: `apply_quality_policy` requires `traded_seconds`.** The
+  step reads three of the ten columns now, and a frame without the new
+  one is refused with a `ConfigError` rather than silently checked
+  against one threshold. A caller that projects a frame down to what the
+  step consults must keep all three.
+- **BREAKING: positional construction of `WindowQualityPolicy` and
+  `QualityReport` changes.** `min_traded_seconds` is inserted between
+  `min_coverage` and `gate_mode` rather than appended, so
+  `WindowQualityPolicy(QualityMode.GATE, 0.9, GateMode.REPORT)` -- legal
+  at 1.0.0 -- now raises `ConfigError: min_traded_seconds must be an int,
+  got GateMode`. `QualityReport` likewise gains four fields at interior
+  positions. Both fail loudly rather than silently mis-assigning, and
+  keyword construction is unaffected; the fields are ordered by what they
+  mean rather than by when they were added, because the order is part of
+  a public dataclass for as long as the major version lasts.
 - **Dependency floors are raised so the published wheel cannot carry a
   version with a published advisory against it.** `orjson` to `>=3.11.6` and `requests`
   to `>=2.33.0`, the first versions clearing the advisories against them;

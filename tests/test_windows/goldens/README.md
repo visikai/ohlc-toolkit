@@ -20,4 +20,20 @@ overlapping their neighbours. It exists to pin two behaviours that a
 strictly valid source can never exercise: whole-candle exclusion at a
 window boundary, and unclamped coverage accounting. Its
 `coverage_seconds` values exceeding the window duration are intentional,
-not a bug in the fixture.
+not a bug in the fixture, and so are the `traded_seconds` values that
+exceed it alongside them.
+
+## `untraded_run_1m_*`
+
+This family forces a run of present-but-untraded candles: real prices,
+volume exactly `0.0`. It is the only case whose `traded_seconds` differs
+from its `coverage_seconds`, and without it every file here would report
+the two columns byte-identical -- which an implementation that simply
+copied one to the other would reproduce exactly.
+
+The committed real minute slice contributes nothing here either: it holds
+0 zero-volume rows in 20160, so every window over it reports
+`traded_seconds` equal to `coverage_seconds`. That is worth stating
+because the public grid is around 19% untraded overall, which would lead a
+reader to assume a real slice must exercise the distinction. This one does
+not.
