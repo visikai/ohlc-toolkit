@@ -410,5 +410,45 @@ def test_a_lookback_longer_than_the_cap_is_refused() -> None:
         explicit_lookback(range(1, MAX_RESOLVED_WINDOWS + 2))
 
 
+@pytest.mark.parametrize(
+    ("grain", "refused"),
+    [
+        pytest.param(1, False, id="a-grain-of-one-represents-every-seed"),
+        pytest.param(3, True, id="a-seed-the-grain-moves-below-its-floor"),
+    ],
+)
+def test_the_count_path_applies_the_same_seed_rule(grain: int, refused: bool) -> None:
+    """Its own test, in its own units, because two paths drift.
+
+    The count-valued twin was checked for this shape rather than assumed
+    free of it, and it had it: at a grain of 3 a seed of 10 quantized to
+    9 and the schedule began at 27, with the spec still recording
+    `seed: 10`. At a grain of 1 every seed is representable and nothing
+    can be dropped, which is why that row is here too -- "unreachable at
+    grain 1" is a claim, and this is the test of it.
+    """
+    if refused:
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            metallic_lookback(
+                coefficient=1.618, seed=10, grain=grain, minimum=10, maximum=100
+            )
+        return
+    schedule = metallic_lookback(
+        coefficient=1.618, seed=10, grain=grain, minimum=10, maximum=100
+    )
+
+    assert schedule.periods == (10, 26, 52)
+
+
+def test_the_count_path_seed_refusal_speaks_in_periods_not_durations() -> None:
+    """The two paths share a guard and must not share a vocabulary."""
+    with pytest.raises(ConfigError) as caught:
+        metallic_lookback(coefficient=1.618, seed=10, grain=3, minimum=10, maximum=100)
+
+    message = str(caught.value)
+    assert "The seed 10 is at or above the minimum 10" in message
+    assert "10s" not in message
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

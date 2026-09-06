@@ -9,6 +9,7 @@ with the arithmetic would still be caught.
 import math
 import sys
 from fractions import Fraction
+from functools import partial
 
 import pytest
 
@@ -643,6 +644,131 @@ class TestLogSpaced:
         schedule = log_spaced(count=5, minimum="1h", maximum="1h", grain="1m")
         assert schedule.windows == (Duration.parse("1h"),)
         assert schedule.spec.limiting_ratio == pytest.approx(1.0, abs=1e-12)
+
+
+class TestTheSeedSurvivesItsOwnFloor:
+    """A seed the caller's own lower bound would drop is refused.
+
+    The seed is a POINT -- the term the recurrence starts from and the
+    first member of the schedule. A minimum is a FILTER over the terms
+    that follow, and seeding BELOW one on purpose is a documented use:
+    run the recurrence from a small term and keep only the large ones.
+
+    What is not a use is a seed at or above the bound that quantization
+    moves below it. Then one number was named twice, as the point to
+    start from and as the floor, and neither was honoured.
+    """
+
+    def test_the_reported_case_is_refused(self) -> None:
+        """Seed and minimum both `10s`, and the schedule began at `27s`.
+
+        The record would have said `seed: 10s` beside a first member of
+        `27s` -- the self-contradicting artifact the log-spaced endpoints
+        were made to refuse, alive in the generator that one scoped out.
+        """
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            metallic_recurrence(
+                coefficient=1.618,
+                seed="10s",
+                grain="3s",
+                minimum="10s",
+                maximum="5m",
+            )
+
+    def test_the_same_call_without_a_minimum_is_unchanged(self) -> None:
+        """No bound, nothing to be dropped by: the quantized seed stands.
+
+        `10s` still quantizes to `9s` here and that is not a defect --
+        it is what a grain does to a point. The five members are the
+        literal this change must not move.
+        """
+        schedule = metallic_recurrence(
+            coefficient=1.618, seed="10s", grain="3s", maximum="5m"
+        )
+
+        assert [str(window) for window in schedule.windows] == [
+            "9s",
+            "27s",
+            "51s",
+            "1m51s",
+            "3m51s",
+        ]
+
+    def test_a_seed_genuinely_below_the_minimum_still_trims(self) -> None:
+        """The documented pattern: seed small, keep the large terms.
+
+        The comparison is against the seed AS GIVEN, not as quantized,
+        precisely so this keeps working. A guard that quantized first
+        would refuse it.
+        """
+        schedule = metallic_recurrence(
+            coefficient=1.618, seed="9s", grain="3s", minimum="12s", maximum="5m"
+        )
+
+        assert [str(window) for window in schedule.windows] == [
+            "24s",
+            "48s",
+            "1m39s",
+            "3m30s",
+        ]
+
+    def test_a_seed_the_grain_represents_is_untouched(self) -> None:
+        """`12s` on a `3s` grain quantizes to itself, so nothing is dropped."""
+        schedule = metallic_recurrence(
+            coefficient=1.618, seed="12s", grain="3s", minimum="12s", maximum="5m"
+        )
+
+        assert str(schedule.windows[0]) == "12s"
+
+    def test_a_term_rounding_past_the_maximum_is_still_dropped(self) -> None:
+        """The bounds are NOT endpoints here, and this is the evidence.
+
+        For the log-spaced generators `minimum` and `maximum` are the
+        first and last POINTS, so a bound quantizing outside its own
+        range drops something the caller named and is refused. For this
+        generator they are filters over terms a recurrence produced: a
+        `1m30s` maximum on a `1m` grain quantizes to `2m`, and the
+        intended behaviour is to DROP the term rather than refuse the
+        schedule. Applying the log-spaced rule here would have broken
+        this.
+        """
+        schedule = metallic_recurrence(
+            coefficient=1.0, seed="45s", grain="1m", maximum="1m30s"
+        )
+
+        assert schedule.windows == (Duration.parse("1m"),)
+
+    @pytest.mark.parametrize(
+        ("rounding", "refused"),
+        [
+            (RoundingRule.NEAREST_TIES_AWAY, False),
+            (RoundingRule.NEAREST_TIES_EVEN, True),
+        ],
+    )
+    def test_the_verdict_follows_the_rounding_rule(
+        self, rounding: RoundingRule, refused: bool
+    ) -> None:
+        """The guard quantizes, so the tie rule decides which side it lands.
+
+        A seed of `10s` on a `4s` grain is an exact tie: ties-away takes
+        it to `12s`, which clears a `10s` minimum, and ties-even takes it
+        to `8s`, which does not. Hard-coding either rule would pass every
+        other case here.
+        """
+        call = partial(
+            metallic_recurrence,
+            coefficient=1.618,
+            seed="10s",
+            grain="4s",
+            minimum="10s",
+            maximum="5m",
+            rounding=rounding,
+        )
+        if refused:
+            with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+                call()
+            return
+        assert call().windows[0] == Duration.parse("12s")
 
 
 class TestEndpointsMustSurviveTheirOwnGrain:
