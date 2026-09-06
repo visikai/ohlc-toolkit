@@ -297,6 +297,40 @@ print(WindowSchedule.from_dict(schedule.to_dict()) == schedule)
 True
 ```
 
+A **lookback** schedule is the count-valued twin: its members are period
+counts, not durations, so the same `21` is twenty-one minutes on a 1m
+frame and twenty-one weeks on a 1w one. It is a separate type rather than
+a setting, because a lookback borrowed from a window schedule would be
+silently coupled to it. The arithmetic is shared — the same recurrence,
+the same log-spaced placement, the same quantize/bound/dedup rule — and
+only the unit differs.
+
+```python
+import math
+
+from ohlc_toolkit.schedules import metallic_lookback
+
+lookback = metallic_lookback(
+    coefficient=math.sqrt(math.e + math.sqrt(5)),
+    seed=1,
+    grain=1,
+    minimum=3,
+    maximum=21,
+)
+print(lookback.periods)
+print(lookback.schedule_id)
+```
+
+```text
+(3, 8, 21)
+2b7c4fa642bfd96d9727e10ea28438ffcbb7756b9a5809e8e57a56339cc9b0b4
+```
+
+The two identities cannot collide. A lookback records its members under
+`periods` and a window schedule under `windows`, and `3` is not `"3m"`,
+so `{1, 3, 8}` and `{1m, 3m, 8m}` hash differently and each reader
+refuses the other's payload rather than reading it as its own.
+
 A payload whose recorded `schedule_id` does not match its content is
 refused rather than repaired, so a schedule read back from disk is the
 one that was written.

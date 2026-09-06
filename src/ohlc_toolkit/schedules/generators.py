@@ -83,7 +83,7 @@ range IS a meaningful statement about a stretch of time.
 
 import math
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from enum import Enum, unique
@@ -116,7 +116,11 @@ logger = get_logger(__name__)
 # one: a two-term recurrence with a vanishing coefficient does still
 # terminate, but only after billions of terms, and a generator that
 # hangs is worse than one that refuses. One number for every kind, so
-# there is a single answer to "how long can a schedule be".
+# there is a single answer to "how long can a schedule be" -- including
+# the count-valued lookback schedule, whose members are period counts
+# rather than durations and whose refusal therefore reads "at most 512
+# period counts". The name says windows because that is what it capped
+# first; it caps any resolved schedule.
 MAX_RESOLVED_WINDOWS = 512
 
 # The largest recurrence coefficient whose square is still a float: the
@@ -874,6 +878,102 @@ def _quantize(value: Fraction, grain_seconds: int, rounding: RoundingRule) -> in
     return whole * grain_seconds
 
 
+@dataclass(frozen=True, slots=True)
+class ScheduleUnits:
+    """How one resolved list describes itself when it refuses.
+
+    The quantize/bound/dedup rule below is shared between the
+    duration-valued window schedule and the count-valued lookback
+    schedule, because two copies of a rounding rule are two rounding
+    rules. What differs is only the prose: a window that quantizes away
+    is "0s at a 1m grain", a lookback that does is "0 periods at a grain
+    of 1". This carries that difference so the arithmetic does not have
+    to.
+
+    Attributes:
+        noun: What one member is called, singular.
+        render: How to write one resolved member for a human.
+        render_grain: How to write the grain.
+
+    """
+
+    noun: str
+    render: Callable[[int], str]
+    render_grain: Callable[[int], str]
+
+
+DURATION_UNITS = ScheduleUnits(
+    noun="window",
+    render=lambda seconds: f"{Duration(seconds)}",
+    render_grain=lambda seconds: f"{Duration(seconds)}",
+)
+
+
+def resolve_values(  # noqa: PLR0913 - one keyword per resolution rule
+    values: list[Fraction],
+    *,
+    grain: int,
+    rounding: RoundingRule,
+    minimum: int | None,
+    maximum: int,
+    units: ScheduleUnits,
+) -> tuple[int, ...]:
+    """Quantize, bound, and deduplicate a generator's real-valued output.
+
+    The single place ANY generated list is resolved, whichever unit it is
+    in, so the rules cannot drift apart between generators or between
+    schedule types. Works in whole units throughout; the caller wraps the
+    result in whatever type it names.
+
+    Args:
+        values: The generated values, exact and unrounded.
+        grain: The quantization grain, in whole units.
+        rounding: The tie rule.
+        minimum: The optional lower bound, applied after quantization.
+        maximum: The upper bound, applied after quantization.
+        units: How to describe a member when refusing.
+
+    Returns:
+        The resolved values, in generated order.
+
+    Raises:
+        ConfigError: If a value quantizes to nothing, or if the bounds
+            leave no value at all.
+
+    """
+    lower = 0 if minimum is None else minimum
+
+    kept: list[int] = []
+    for value in values:
+        resolved = _quantize(value, grain, rounding)
+        if resolved == 0:
+            logger.warning(
+                "Rejecting a term of {} that quantizes to nothing at a {} grain.",
+                float(value),
+                units.render_grain(grain),
+            )
+            raise ConfigError(
+                f"A generated {units.noun} of {float(value)} quantizes to "
+                f"{units.render(0)} at a {units.render_grain(grain)} grain; every "
+                f"scheduled {units.noun} must be strictly positive, so choose a "
+                f"finer grain or larger values."
+            )
+        if lower <= resolved <= maximum and resolved not in kept:
+            kept.append(resolved)
+
+    if not kept:
+        logger.warning(
+            "Rejecting a schedule whose bounds excluded all {} generated value(s).",
+            len(values),
+        )
+        raise ConfigError(
+            f"The bounds left no {units.noun}s: all {len(values)} generated "
+            f"value(s) fall outside [{units.render(lower)}, "
+            f"{units.render(maximum)}]."
+        )
+    return tuple(kept)
+
+
 def _resolve_windows(
     values: list[Fraction],
     *,
@@ -904,37 +1004,15 @@ def _resolve_windows(
             leave no value at all.
 
     """
-    grain_seconds = grain.total_seconds
-    minimum_seconds = 0 if minimum is None else minimum.total_seconds
-    maximum_seconds = maximum.total_seconds
-
-    kept: list[int] = []
-    for value in values:
-        seconds = _quantize(value, grain_seconds, rounding)
-        if seconds == 0:
-            logger.warning(
-                "Rejecting a term of {}s that quantizes to nothing at a {} grain.",
-                float(value),
-                grain,
-            )
-            raise ConfigError(
-                f"A generated duration of {float(value)}s quantizes to 0s at a "
-                f"{grain} grain; every scheduled window must be strictly "
-                "positive, so choose a finer grain or longer durations."
-            )
-        if minimum_seconds <= seconds <= maximum_seconds and seconds not in kept:
-            kept.append(seconds)
-
-    if not kept:
-        logger.warning(
-            "Rejecting a schedule whose bounds excluded all {} generated value(s).",
-            len(values),
-        )
-        raise ConfigError(
-            f"The bounds left no windows: all {len(values)} generated duration(s) "
-            f"fall outside [{minimum or Duration(0)}, {maximum}]."
-        )
-    return tuple(Duration(seconds) for seconds in kept)
+    seconds = resolve_values(
+        values,
+        grain=grain.total_seconds,
+        rounding=rounding,
+        minimum=None if minimum is None else minimum.total_seconds,
+        maximum=maximum.total_seconds,
+        units=DURATION_UNITS,
+    )
+    return tuple(Duration(value) for value in seconds)
 
 
 def _recurrence_terms(spec: MetallicRecurrenceSpec) -> list[Fraction]:
@@ -954,25 +1032,78 @@ def _recurrence_terms(spec: MetallicRecurrenceSpec) -> list[Fraction]:
             maximum, which a coefficient near zero will do.
 
     """
-    coefficient = Fraction(spec.coefficient)
-    maximum_seconds = spec.maximum.total_seconds
-    seed = Fraction(spec.seed.total_seconds)
+    return recurrence_values(
+        coefficient=spec.coefficient,
+        seed=spec.seed.total_seconds,
+        maximum=spec.maximum.total_seconds,
+        units=DURATION_UNITS,
+    )
 
-    terms = [seed, seed]
+
+def recurrence_values(
+    *, coefficient: float, seed: int, maximum: int, units: ScheduleUnits
+) -> list[Fraction]:
+    """Run the two-term recurrence in exact rationals, bounded by the maximum.
+
+    Unit-free, so the duration-valued and count-valued schedules run the
+    same recurrence rather than two that could drift.
+
+    Args:
+        coefficient: The validated recurrence coefficient.
+        seed: The first two terms, in whole units.
+        maximum: The upper bound, in whole units. Generation stops before
+            the first term that exceeds it.
+        units: How to describe a member when refusing.
+
+    Returns:
+        The real terms, starting with two copies of the seed and
+        stopping before the first term that would exceed the maximum.
+
+    Raises:
+        ConfigError: If the recurrence produces more than
+            :data:`MAX_RESOLVED_WINDOWS` terms before reaching the
+            maximum, which a coefficient near zero will do.
+
+    """
+    ratio = Fraction(coefficient)
+    first = Fraction(seed)
+
+    terms = [first, first]
     while True:
-        following = coefficient * terms[-1] + terms[-2]
-        if following > maximum_seconds:
+        following = ratio * terms[-1] + terms[-2]
+        if following > maximum:
+            # The first term past the maximum is GENERATED, not dropped
+            # here, because the bound belongs to resolution and
+            # resolution rounds first. A term of 21.434 against a maximum
+            # of 21 quantizes to exactly 21, which is inside the bound;
+            # stopping on the raw value excluded a member the caller
+            # asked for.
+            #
+            # One extra term is ENOUGH, and the reason is an error bound
+            # plus dedup rather than monotonicity. Many further terms can
+            # round back inside -- measured, a coefficient of 1/100 with
+            # seed 100, grain 100 and a maximum of 300 puts 31 of them
+            # there. But round-nearest moves a value by at most g/2, so
+            # every past-maximum term that lands inside lands on the SAME
+            # multiple of the grain: a second, smaller in-bound multiple
+            # would be at most M - g, and no term rounding down by g/2 or
+            # less can reach it from above M. They collapse to one value
+            # and DedupRule.DROP_LATER_REPEATS keeps one.
+            #
+            # A rounding rule whose error can reach a full grain would
+            # break that, and would need more than one extra term.
+            terms.append(following)
             return terms
         if len(terms) >= MAX_RESOLVED_WINDOWS:
             logger.warning(
                 "Rejecting a recurrence still below {} after {} terms.",
-                spec.maximum,
+                units.render(maximum),
                 len(terms),
             )
             raise ConfigError(
                 f"The recurrence produced more than {MAX_RESOLVED_WINDOWS} terms "
-                f"without reaching {spec.maximum}; a coefficient of "
-                f"{spec.coefficient} grows too slowly to bound the schedule."
+                f"without reaching {units.render(maximum)}; a coefficient of "
+                f"{coefficient} grows too slowly to bound the schedule."
             )
         terms.append(following)
 
@@ -1052,20 +1183,36 @@ def _log_spaced_terms(spec: LogSpacedSpec) -> list[Fraction]:
         The points in seconds, ascending, endpoints included.
 
     """
-    minimum_seconds = spec.minimum.total_seconds
+    return log_spaced_values(
+        count=spec.count,
+        minimum=spec.minimum.total_seconds,
+        maximum=spec.maximum.total_seconds,
+    )
+
+
+def log_spaced_values(*, count: int, minimum: int, maximum: int) -> list[Fraction]:
+    """Place the log-spaced points between the bounds, in exact rationals.
+
+    Unit-free, for the same reason :func:`recurrence_values` is.
+
+    Args:
+        count: How many points, endpoints included.
+        minimum: The lower bound, in whole units.
+        maximum: The upper bound, in whole units.
+
+    Returns:
+        The points, ascending, endpoints included.
+
+    """
     with localcontext() as context:
         context.prec = _DECIMAL_DIGITS
-        span = _log_span(spec.minimum, spec.maximum)
-        low = Decimal(minimum_seconds)
-        steps = spec.count - 1
+        span = (Decimal(maximum) / Decimal(minimum)).ln()
+        low = Decimal(minimum)
+        steps = count - 1
         interior = [
             Fraction(low * (span * step / steps).exp()) for step in range(1, steps)
         ]
-    return [
-        Fraction(minimum_seconds),
-        *interior,
-        Fraction(spec.maximum.total_seconds),
-    ]
+    return [Fraction(minimum), *interior, Fraction(maximum)]
 
 
 def log_spaced(

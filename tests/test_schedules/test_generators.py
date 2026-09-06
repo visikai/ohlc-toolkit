@@ -23,6 +23,7 @@ from ohlc_toolkit.schedules import (
     log_spaced,
     metallic_recurrence,
 )
+from ohlc_toolkit.schedules.generators import DURATION_UNITS, recurrence_values
 from ohlc_toolkit.temporal import ConfigError, Duration
 
 _MINUTE_SECONDS = 60
@@ -887,6 +888,53 @@ class TestRecordedRules:
                 maximum=Duration.parse("1d"),
                 dedup="drop_later_repeats",  # type: ignore[arg-type]
             )
+
+
+def test_a_term_that_rounds_back_inside_the_maximum_is_kept() -> None:
+    """The bound is applied to the quantized value, not the raw one.
+
+    The recurrence's fifth term here is 21.434 minutes against a maximum
+    of 21m. It belongs in the schedule because it quantizes to exactly
+    21m, which is inside the bound; the raw value it was previously
+    compared against is a number the schedule never uses. Generation
+    therefore produces the first term past the bound and lets resolution
+    decide.
+
+    One extra term is enough because of an error bound and dedup, not
+    because of monotonicity: many further terms CAN round back inside,
+    but round-nearest moves a value by at most half a grain, so they all
+    land on the same multiple and the dedup rule keeps one.
+    """
+    schedule = metallic_recurrence(
+        coefficient=math.sqrt(math.e + math.sqrt(5)),
+        seed="1m",
+        grain="1m",
+        minimum="3m",
+        maximum="21m",
+    )
+
+    assert [str(window) for window in schedule.windows] == ["3m", "8m", "21m"]
+
+
+def test_only_one_term_past_the_maximum_is_generated() -> None:
+    """The generated list itself, not the schedule it resolves to.
+
+    Asserting on the resolved windows cannot say this: extra terms past
+    the bound are dropped by resolution, so a generator emitting four of
+    them produces the same schedule as one emitting one -- measured, a
+    mutant doing exactly that passed the whole suite. The count of terms
+    above the maximum is what has to be checked, and it is checked here
+    against the generator's own output.
+    """
+    maximum_seconds = 9 * 60
+    terms = recurrence_values(
+        coefficient=math.sqrt(math.e + math.sqrt(5)),
+        seed=60,
+        maximum=maximum_seconds,
+        units=DURATION_UNITS,
+    )
+
+    assert sum(1 for term in terms if term > maximum_seconds) == 1
 
 
 if __name__ == "__main__":
