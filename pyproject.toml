@@ -24,6 +24,15 @@ dependencies = [
     # Floor clears the two requests advisories (alerts #2 and #12); the
     # lockfile alone does not bind what a consumer resolves.
     "requests>=2.33.0,<3.0.0",
+    # Nothing here imports urllib3 or idna. They are declared because
+    # requests carries them into every install of this package, and its
+    # own ranges (urllib3<3,>=1.26 and idna<4,>=2.5) admit versions with
+    # open advisories against them -- measured, a consumer pinning
+    # urllib3==1.26.20 and idna==2.5 resolves clean against this wheel.
+    # A floor here is the only place that closes it, since the transitive
+    # range is not ours to change and a lockfile binds only its own repo.
+    "urllib3>=2.7.0,<3.0.0",
+    "idna>=3.15,<4.0.0",
 ]
 
 [project.urls]

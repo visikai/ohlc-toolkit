@@ -49,15 +49,17 @@ against their tags, and are not restated here.
 
 ### Changed
 
-- **The declared floors for `orjson` and `requests` are raised**, to
-  `>=3.11.6` and `>=2.33.0`, the first versions clearing the advisories
-  open against them. The previous floors admitted versions those
-  advisories name: a consumer pinning `orjson==3.10.18` alongside
-  `ohlc-toolkit==1.0.0` resolved cleanly, and that version is the subject
-  of a high-severity advisory. The lockfile in this repository was never
-  affected -- it pins later versions -- but a lockfile binds only this
-  repository, and what a consumer of the published wheel may install is
-  decided by these floors.
+- **Dependency floors are raised so the published wheel cannot carry a
+  version with an open advisory.** `orjson` to `>=3.11.6` and `requests`
+  to `>=2.33.0`, the first versions clearing the advisories against them;
+  and `urllib3 >=2.7.0` and `idna >=3.15` are now declared, though
+  nothing here imports either. `requests` carries them into every install
+  and its own ranges (`urllib3<3,>=1.26`, `idna<4,>=2.5`) admit versions
+  with open advisories, three of them high. None of this was visible in
+  the lockfile, which pins clear versions and binds only this repository.
+  Measured: against 1.0.0 a consumer pinning `orjson==3.10.18`, or
+  `urllib3==1.26.20` and `idna==2.5`, resolved cleanly with no conflict
+  and no warning; against these floors the same pins are refused.
 - `windows.compute_windows`'s documented equivalence with the reference
   oracle is stated as conditional on VALID input, in both places it was
   claimed. Neither function validates, so either can be handed a frame the
