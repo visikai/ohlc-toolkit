@@ -255,6 +255,41 @@ def test_an_absent_bar_inside_the_interval_nulls_both_excursions() -> None:
     assert mae[3] == _ROW3_MAE
 
 
+def test_a_bar_stating_only_one_of_its_prices_nulls_both_excursions() -> None:
+    """Refuse the interval for a HALF-absent bar, not only a wholly absent one.
+
+    A wholly absent bar nulls both columns whether or not anything masks
+    it, because a rolling extremum over a window containing a null is
+    null anyway. This is the case that tells the two apart: a bar whose
+    high is missing while its low is present. Without the mask the
+    adverse excursion is computed from the lows regardless, quietly
+    reporting a minimum over an interval it has just been told it cannot
+    fully see, while the favorable one goes null -- two columns over one
+    interval disagreeing about whether that interval is knowable.
+    """
+    half_absent = excursion_frame(
+        _OFFSETS,
+        (130.0, 160.0, None, 96.0, 112.0, 40.0),
+        (120.0, 128.0, 144.0, 64.0, 80.0, 16.0),
+        (128.0, 160.0, 256.0, 80.0, 96.0, 32.0),
+    )
+    out = add_forward_excursions(
+        half_absent, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
+    )
+    mfe = out.get_column(forward_mfe_column(ReturnMethod.SIMPLE, _HORIZON))
+    mae = out.get_column(forward_mae_column(ReturnMethod.SIMPLE, _HORIZON))
+
+    # Rows 0 and 1 both have the half-absent bar at t=120 in their interval.
+    assert mfe[0] is None
+    assert mae[0] is None, (
+        "the adverse excursion was stated over an interval containing a bar "
+        "that reported no high: both columns read the same interval, so "
+        "either both can be stated or neither can."
+    )
+    assert mfe[1] is None
+    assert mae[1] is None
+
+
 def test_a_frame_missing_a_row_is_refused_rather_than_read_through() -> None:
     """Refuse a hole, because an extremum over a hole is wrong, not null."""
     gapped = excursion_frame(
