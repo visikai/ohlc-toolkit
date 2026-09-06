@@ -1,6 +1,6 @@
 """A Polars-native toolkit for OHLC market data.
 
-The public surface is six subpackages, and this module imports each one
+The public surface is seven subpackages, and this module imports each one
 so that a bare ``import ohlc_toolkit`` reaches all of them:
 
 - :mod:`ohlc_toolkit.temporal` -- the ``Duration`` value type, its
@@ -14,7 +14,11 @@ so that a bare ``import ohlc_toolkit`` reaches all of them:
 - :mod:`ohlc_toolkit.returns` -- backward and forward returns, with the
   instant a forward value becomes available carried beside it.
 - :mod:`ohlc_toolkit.snapshot` -- fetching a published dataset release,
-  refusing any byte that does not match its manifest.
+  refusing any byte that does not match its manifest, and re-checking one
+  already on disk.
+- :mod:`ohlc_toolkit.indicators` -- the phased lookback every indicator
+  reads through, with a fast path and the brute-force oracle it is
+  checked against.
 
 Names are NOT flattened into this namespace. ``ohlc_toolkit.Duration``
 does not exist and is not meant to: the surface is roughly ninety public
@@ -40,9 +44,18 @@ gone, with no alias and no deprecation shim. 0.4.x remains installable
 from PyPI for code that wants it.
 """
 
-from ohlc_toolkit import returns, schedules, snapshot, source, temporal, windows
+from ohlc_toolkit import (
+    indicators,
+    returns,
+    schedules,
+    snapshot,
+    source,
+    temporal,
+    windows,
+)
 
 __all__ = [
+    "indicators",
     "returns",
     "schedules",
     "snapshot",

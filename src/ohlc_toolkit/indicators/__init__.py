@@ -1,0 +1,34 @@
+"""Phased lookback machinery, and the indicators built on it.
+
+An indicator in this package reads a windowed-candle frame materialized
+at SOURCE cadence and emits on the window's own ``E`` grid. What sits
+between the two is the phased lookback: at each emit tick, the ``L``
+non-overlapping windows of duration ``W`` ending at ``t``, ``t - W``,
+``t - 2W``, and so on.
+
+The phase set is anchored at the emit tick, not at the window's anchor,
+and ``{t - kW}`` lies on the ``E`` grid only when ``E`` divides ``W`` --
+which under the cadence rules this package resolves, it frequently does
+not. Reading from the source-cadence materialization is what makes every
+``t - kW`` a legal lookup rather than a near miss.
+"""
+
+from ohlc_toolkit.indicators.frames import (
+    PHASED_COLUMNS,
+    REQUIRED_COLUMNS,
+    PhasedGrid,
+    PhasedLookback,
+    resolve_phased_grid,
+)
+from ohlc_toolkit.indicators.phased import phased_lookback
+from ohlc_toolkit.indicators.reference import phased_lookback_reference
+
+__all__ = [
+    "PHASED_COLUMNS",
+    "REQUIRED_COLUMNS",
+    "PhasedGrid",
+    "PhasedLookback",
+    "phased_lookback",
+    "phased_lookback_reference",
+    "resolve_phased_grid",
+]

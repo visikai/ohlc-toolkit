@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 import pytest
 
+from ohlc_toolkit.indicators import frames as phased_frames
 from ohlc_toolkit.returns import primitives
 from ohlc_toolkit.schedules import cadence, generators, identity, registry
 from ohlc_toolkit.schedules.generators import DedupRule, RoundingRule
@@ -93,6 +94,16 @@ _SITES = (
         quality.logger,
         lambda: quality._validated_min_traded_seconds(_LOUD),
         "min_traded_seconds",
+    ),
+    Site(
+        phased_frames.logger,
+        lambda: phased_frames._validated_lookback(_LOUD),
+        "lookback",
+    ),
+    Site(
+        phased_frames.logger,
+        lambda: phased_frames._validated_threshold(_LOUD),
+        "phased min_traded_seconds",
     ),
     Site(primitives.logger, lambda: primitives._require_method(_LOUD), "return method"),
     Site(
@@ -186,7 +197,7 @@ _SITES = (
 # `min_traded_seconds` was added to the package and not to this tuple; the
 # suite stayed green, because a list nothing counts cannot be short.
 # Update deliberately when a type-refusing guard is added or removed.
-_EXPECTED_SITES = 30
+_EXPECTED_SITES = 32
 
 
 def test_the_site_census_is_pinned() -> None:
