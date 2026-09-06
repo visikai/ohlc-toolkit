@@ -193,7 +193,9 @@ class FeatureIdentity:
         try:
             family = FeatureFamily(match["family"])
         except ValueError as error:
-            logger.warning("Rejecting unknown feature family: {}", match["family"])
+            logger.warning(
+                "Rejecting unknown feature family: {}", bounded_echo(match["family"])
+            )
             raise ConfigError(
                 f"{bounded_echo(match['family'])} names no feature family; the "
                 f"families are {[member.value for member in FeatureFamily]}."

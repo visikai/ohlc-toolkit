@@ -489,8 +489,14 @@ class TestEveryEchoIsBoundedAtItsOwnSite:
         _both_exits_bounded(lambda: FeatureIdentity.parse(column, normalization=_CLASS))
 
     def test_an_unparsable_window_is_bounded(self) -> None:
-        """The window is the rest of the name after ``_w``, of any length."""
-        column = f"rsi_p14_w{'9' * _ENORMOUS_CHARS}"
+        """The window is the rest of the name after ``_w``, of any length.
+
+        The digits need a unit to reach this site: without one the
+        duration pattern refuses first, inside ``coerce_duration``, which
+        bounds its own echo. With one, the integer-parsing limit trips
+        and the refusal is this module's.
+        """
+        column = f"rsi_p14_w{'9' * _ENORMOUS_CHARS}m"
         _both_exits_bounded(lambda: FeatureIdentity.parse(column, normalization=_CLASS))
 
     def test_a_malformed_indicator_is_bounded(self) -> None:
