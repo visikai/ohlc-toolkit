@@ -1,12 +1,17 @@
 """A window quality-policy step, composed after the aggregator.
 
 This module is not part of the engine or the oracle: it consumes their
-nine-column output (:mod:`ohlc_toolkit.windows.engine`,
+ten-column output (:mod:`ohlc_toolkit.windows.engine`,
 :mod:`ohlc_toolkit.windows.reference`) as an independent, later step, and
-never feeds back into either. It reads exactly two of those nine columns
--- ``coverage_seconds``, and ``close_time`` for naming an offending row.
-It never reads or alters ``open``, ``high``, ``low``, ``close``,
-``volume``, ``open_time``, or ``src_count``.
+never feeds back into either. It reads exactly three of those ten columns
+-- ``coverage_seconds``, ``traded_seconds``, and ``close_time`` for
+naming an offending row. It never reads or alters ``open``, ``high``,
+``low``, ``close``, ``volume``, ``open_time``, or ``src_count``.
+
+Two thresholds, measuring two different things. ``min_coverage`` asks
+whether the source had rows; ``min_traded_seconds`` asks whether those
+rows contained trades. A window can be fully covered and completely
+untraded, and only the second threshold can see it.
 
 A :class:`WindowQualityPolicy` is a frozen, JSON-round-trippable identity
 -- a recipe can record it the same way it records a schedule -- and
@@ -21,8 +26,8 @@ mode's findings are thrown away:
   recorded step, useful so a recipe can name "no quality policy" the same
   way it names any other choice. Its report still measures the frame, so
   a recorded no-op records what it declined to act on.
-- ``FILTER`` drops rows whose ``coverage_seconds`` falls below the
-  policy's threshold -- and rows that state no coverage at all -- and
+- ``FILTER`` drops rows that fail EITHER threshold -- below the coverage
+  minimum, below the traded minimum, or stating neither at all -- and
   returns a new frame. The input is never mutated, row order is
   otherwise preserved, and no OHLCV value is touched. The report
   accounts for exactly the rows dropped: both come from one mask, so
@@ -134,7 +139,7 @@ logger = get_logger(__name__)
 # with what is here -- an engine window's coverage is its source count
 # times the cadence -- and this step has no cadence with which to read
 # it back the other way, so there is nothing it could add to a report.
-_REQUIRED_COLUMNS = ("close_time", "coverage_seconds")
+_REQUIRED_COLUMNS = ("close_time", "coverage_seconds", "traded_seconds")
 
 # What an Int64 means in each column, so refusing one by loop still says
 # the specific thing a hand-written guard per column used to say.
@@ -212,6 +217,21 @@ class WindowQualityPolicy:
         min_coverage: The minimum fraction of the window duration a row's
             ``coverage_seconds`` must reach, in ``[0, 1]``. ``1.0``
             requires full coverage. Defaults to ``1.0``.
+        min_traded_seconds: The minimum ``traded_seconds`` a row must
+            reach, as a whole number of SECONDS rather than a fraction of
+            ``W``. Defaults to ``0``, which admits everything and is
+            therefore not a threshold a recipe acquires by accident.
+
+            A duration and not a fraction, deliberately, and the name
+            carries the unit because its neighbour does not. The lowest
+            useful setting has to admit a window exactly when at least one
+            included interval traded, and as a fraction that is ``d / W``
+            for the source's cadence ``d`` -- a number this policy cannot
+            compute, since it deliberately does not record ``W``, and one
+            that is not exactly representable anyway (``1/604800`` for a
+            one-second source over a one-week window). As a duration the
+            same setting is ``1``: exact, an integer, and independent of
+            both ``W`` and ``d``.
         gate_mode: For ``GATE``, whether a violation raises or is
             reported. Ignored by ``PASS_THROUGH`` and ``FILTER``.
             Defaults to :attr:`GateMode.STRICT`.
@@ -220,6 +240,7 @@ class WindowQualityPolicy:
 
     mode: QualityMode
     min_coverage: float = 1.0
+    min_traded_seconds: int = 0
     gate_mode: GateMode = GateMode.STRICT
 
     def __post_init__(self) -> None:
@@ -227,9 +248,10 @@ class WindowQualityPolicy:
 
         Raises:
             ConfigError: If ``mode`` is not a :class:`QualityMode`,
-                ``gate_mode`` is not a :class:`GateMode`, or
+                ``gate_mode`` is not a :class:`GateMode`,
                 ``min_coverage`` is not a non-NaN ``int``/``float`` in
-                ``[0, 1]``.
+                ``[0, 1]``, or ``min_traded_seconds`` is not a
+                non-negative ``int``.
 
         """
         if not isinstance(self.mode, QualityMode):
@@ -247,6 +269,7 @@ class WindowQualityPolicy:
                 f"gate_mode must be a GateMode, got {type(self.gate_mode).__name__}"
             )
         _validated_min_coverage(self.min_coverage)
+        _validated_min_traded_seconds(self.min_traded_seconds)
 
     def to_dict(self) -> dict[str, str | float]:
         """Serialize this identity to a deterministic, JSON-compatible dict.
@@ -259,13 +282,15 @@ class WindowQualityPolicy:
 
         Returns:
             A dict with exactly the keys ``"mode"``, ``"min_coverage"``,
-            and ``"gate_mode"``, using only ``str`` and ``float`` values,
-            in that fixed key order.
+            ``"min_traded_seconds"``, and ``"gate_mode"``, using only
+            ``str``, ``float`` and ``int`` values, in that fixed key
+            order.
 
         """
         return {
             "mode": self.mode.value,
             "min_coverage": self.min_coverage,
+            "min_traded_seconds": self.min_traded_seconds,
             "gate_mode": self.gate_mode.value,
         }
 
@@ -274,8 +299,11 @@ class WindowQualityPolicy:
         """Reconstruct a policy identity from its :meth:`to_dict` form.
 
         Args:
-            data: A mapping holding ``"mode"``, ``"min_coverage"``, and
+            data: A mapping holding ``"mode"``, ``"min_coverage"`` and
                 ``"gate_mode"``, as produced by :meth:`to_dict`.
+                ``"min_traded_seconds"`` is optional and defaults to
+                ``0``: policies recorded before that threshold existed
+                are read back exactly as they were written.
 
         Returns:
             The reconstructed policy.
@@ -283,7 +311,8 @@ class WindowQualityPolicy:
         Raises:
             ConfigError: If a required key is missing, ``"mode"`` or
                 ``"gate_mode"`` does not name a known member, or
-                ``min_coverage`` fails its own validation.
+                ``min_coverage`` or ``min_traded_seconds`` fails its own
+                validation.
 
         """
         missing = [
@@ -302,7 +331,51 @@ class WindowQualityPolicy:
         gate_mode = enum_from_payload(GateMode, data["gate_mode"], label="gate_mode")
 
         min_coverage = _validated_min_coverage(data["min_coverage"])
-        return cls(mode=mode, min_coverage=min_coverage, gate_mode=gate_mode)
+        # Absent rather than required, alone among the fields: a policy
+        # recorded before this threshold existed has no such key, and it
+        # must read back as the recipe wrote it. The default is the
+        # non-binding 0, so a recipe cannot acquire a threshold it never
+        # chose by the act of being read.
+        min_traded_seconds = _validated_min_traded_seconds(
+            data.get("min_traded_seconds", 0)
+        )
+        return cls(
+            mode=mode,
+            min_coverage=min_coverage,
+            min_traded_seconds=min_traded_seconds,
+            gate_mode=gate_mode,
+        )
+
+
+def _validated_min_traded_seconds(value: object) -> int:
+    """Return a ``min_traded_seconds`` as an int, rejecting anything unusable.
+
+    Whole seconds only. A fractional threshold would be a bar no
+    ``traded_seconds`` can sit exactly on -- the column is an ``Int64``
+    sum of whole interval durations -- so accepting one would invite a
+    policy whose boundary is unreachable, and the rounding it needed
+    would be one more thing to explain.
+
+    Args:
+        value: The candidate ``min_traded_seconds``, of any type.
+
+    Returns:
+        ``value`` as an ``int``.
+
+    Raises:
+        ConfigError: If ``value`` is not an ``int`` (``bool`` is rejected
+            too, even though it is an ``int`` subtype) or is negative.
+
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        logger.warning("Rejecting non-int min_traded_seconds: {}", type(value).__name__)
+        raise ConfigError(
+            f"min_traded_seconds must be an int, got {type(value).__name__}"
+        )
+    if value < 0:
+        logger.warning("Rejecting negative min_traded_seconds: {}", value)
+        raise ConfigError(f"min_traded_seconds must not be negative, got {value}.")
+    return value
 
 
 def _validated_min_coverage(value: object) -> float:
@@ -358,14 +431,23 @@ class QualityReport:
             rather than the nearest double to it: a caller re-deriving a
             verdict from this value gets the same answer the policy gave.
             It compares directly against ``int`` and ``float``.
-        offending_count: How many rows failed to meet
-            ``threshold_seconds`` -- rows below it, plus rows that stated
-            no coverage at all.
-        null_coverage_count: How many of those offending rows had a null
-            ``coverage_seconds``. Always ``<= offending_count``. Reported
-            separately because "below the bar" and "no measurement" are
-            different problems with different fixes, even though the gate
-            refuses both.
+        traded_threshold_seconds: The minimum ``traded_seconds`` a row had
+            to reach, in whole seconds, straight from the policy. ``0``
+            means the threshold admitted everything.
+        offending_count: How many rows failed EITHER threshold -- below
+            one of them, or stating no measurement at all. This is the
+            count ``FILTER`` drops and the gate refuses.
+        coverage_offending_count: How many rows failed the coverage
+            threshold.
+        traded_offending_count: How many rows failed the traded
+            threshold. The two counts overlap, so they can sum to more
+            than ``offending_count``: a row can fail both, and reporting
+            them separately is what says WHICH bar a frame is missing.
+        null_coverage_count: How many rows had a null
+            ``coverage_seconds``. Reported separately because "below the
+            bar" and "no measurement" are different problems with
+            different fixes, even though the gate refuses both.
+        null_traded_count: The same, for ``traded_seconds``.
         first_offending_close_time: The ``close_time`` of the first
             offending row, in ROW order -- the frame is never sorted and
             no sortedness is assumed, so on an out-of-order frame this
@@ -377,13 +459,17 @@ class QualityReport:
 
     rows_checked: int
     threshold_seconds: Fraction
+    traded_threshold_seconds: int
     offending_count: int
+    coverage_offending_count: int
+    traded_offending_count: int
     null_coverage_count: int
+    null_traded_count: int
     first_offending_close_time: int | None
 
     @property
     def passed(self) -> bool:
-        """Report whether every row met the coverage threshold."""
+        """Report whether every row met both thresholds."""
         return self.offending_count == 0
 
 
@@ -536,8 +622,8 @@ def _least_passing_seconds(threshold_seconds: Fraction) -> int:
     return -(-threshold_seconds.numerator // threshold_seconds.denominator)
 
 
-def _offending_mask(frame: pl.DataFrame, minimum_seconds: int) -> pl.Series:
-    """Return the row mask of coverages that do not meet the threshold.
+def _below_mask(frame: pl.DataFrame, column: str, minimum_seconds: int) -> pl.Series:
+    """Return the row mask of one column's values that miss a minimum.
 
     Never mutates ``frame``. Every mode decides from this one mask --
     what ``FILTER`` drops is what the report counts -- so the returned
@@ -553,17 +639,36 @@ def _offending_mask(frame: pl.DataFrame, minimum_seconds: int) -> pl.Series:
     said. :mod:`ohlc_toolkit.source.validation` treats a null in a column
     it reads the same way, for the same reason.
     """
-    return (frame.get_column("coverage_seconds") < minimum_seconds).fill_null(
-        value=True
-    )
+    return (frame.get_column(column) < minimum_seconds).fill_null(value=True)
 
 
-def _build_report(
-    frame: pl.DataFrame, mask: pl.Series, threshold_seconds: Fraction
+def _offending_mask(
+    frame: pl.DataFrame, minimum_seconds: int, minimum_traded_seconds: int
+) -> tuple[pl.Series, pl.Series, pl.Series]:
+    """Return the coverage mask, the traded mask, and their union.
+
+    The union is what every mode acts on, so a row failing either bar is
+    dropped by ``FILTER`` and refused by the gate. The two component
+    masks travel back with it because the report has to say WHICH bar was
+    missed: a frame that is fully covered and entirely untraded fails for
+    a reason no coverage count could name.
+    """
+    coverage_mask = _below_mask(frame, "coverage_seconds", minimum_seconds)
+    traded_mask = _below_mask(frame, "traded_seconds", minimum_traded_seconds)
+    return coverage_mask, traded_mask, coverage_mask | traded_mask
+
+
+def _build_report(  # noqa: PLR0913 - one argument per measured quantity
+    frame: pl.DataFrame,
+    *,
+    mask: pl.Series,
+    coverage_mask: pl.Series,
+    traded_mask: pl.Series,
+    threshold_seconds: Fraction,
+    traded_threshold_seconds: int,
 ) -> QualityReport:
-    """Summarize an offending-row mask into a bounded report."""
+    """Summarize the offending-row masks into a bounded report."""
     offending_count = int(mask.sum())
-    null_coverage_count = frame.get_column("coverage_seconds").null_count()
 
     first_offending_close_time: int | None = None
     if offending_count > 0:
@@ -575,10 +680,37 @@ def _build_report(
     return QualityReport(
         rows_checked=frame.height,
         threshold_seconds=threshold_seconds,
+        traded_threshold_seconds=traded_threshold_seconds,
         offending_count=offending_count,
-        null_coverage_count=null_coverage_count,
+        coverage_offending_count=int(coverage_mask.sum()),
+        traded_offending_count=int(traded_mask.sum()),
+        null_coverage_count=frame.get_column("coverage_seconds").null_count(),
+        null_traded_count=frame.get_column("traded_seconds").null_count(),
         first_offending_close_time=first_offending_close_time,
     )
+
+
+def _threshold_breakdown(report: QualityReport, minimum_seconds: int) -> str:
+    """Name which threshold each offending row missed.
+
+    Both thresholds are named whenever both bit, because "the quality
+    gate failed" with one number behind it is what sends a reader to the
+    wrong column. A threshold that admitted everything is not mentioned:
+    ``min_traded_seconds`` defaults to 0, and most frames will never have
+    it bind.
+    """
+    parts = []
+    if report.coverage_offending_count:
+        parts.append(
+            f"{report.coverage_offending_count} miss the coverage_seconds "
+            f"minimum of {minimum_seconds}s"
+        )
+    if report.traded_offending_count:
+        parts.append(
+            f"{report.traded_offending_count} miss the traded_seconds "
+            f"minimum of {report.traded_threshold_seconds}s"
+        )
+    return "; ".join(parts) if parts else "no threshold was missed"
 
 
 def _gate_failure_message(report: QualityReport, minimum_seconds: int) -> str:
@@ -589,15 +721,21 @@ def _gate_failure_message(report: QualityReport, minimum_seconds: int) -> str:
     traceback, never the only way to reach a finding.
     """
     unstated = (
-        f" {report.null_coverage_count} of those state no coverage at all."
+        f" {report.null_coverage_count} state no coverage at all."
         if report.null_coverage_count
+        else ""
+    )
+    unmeasured = (
+        f" {report.null_traded_count} state no traded seconds at all."
+        if report.null_traded_count
         else ""
     )
     return (
         f"Window quality gate failed: {report.offending_count}/"
-        f"{report.rows_checked} row(s) do not meet the required "
-        f"coverage_seconds minimum of {minimum_seconds}s; first offending "
-        f"close_time={report.first_offending_close_time}.{unstated}"
+        f"{report.rows_checked} row(s) offend -- "
+        f"{_threshold_breakdown(report, minimum_seconds)}; first offending "
+        f"close_time={report.first_offending_close_time}."
+        f"{unstated}{unmeasured}"
     )
 
 
@@ -660,8 +798,17 @@ def apply_quality_policy(
         policy.min_coverage, window_duration.total_seconds
     )
     minimum_seconds = _least_passing_seconds(threshold_seconds)
-    mask = _offending_mask(frame, minimum_seconds)
-    report = _build_report(frame, mask, threshold_seconds)
+    coverage_mask, traded_mask, mask = _offending_mask(
+        frame, minimum_seconds, policy.min_traded_seconds
+    )
+    report = _build_report(
+        frame,
+        mask=mask,
+        coverage_mask=coverage_mask,
+        traded_mask=traded_mask,
+        threshold_seconds=threshold_seconds,
+        traded_threshold_seconds=policy.min_traded_seconds,
+    )
 
     if policy.mode is QualityMode.PASS_THROUGH:
         logger.debug("Quality policy pass-through: {} row(s) unchanged.", frame.height)
@@ -670,33 +817,32 @@ def apply_quality_policy(
     if policy.mode is QualityMode.FILTER:
         filtered = frame.filter(~mask)
         logger.debug(
-            "Quality policy filter: kept {}/{} row(s) at >= {}s coverage.",
+            "Quality policy filter: kept {}/{} row(s) at >= {}s coverage "
+            "and >= {}s traded.",
             filtered.height,
             frame.height,
             minimum_seconds,
+            policy.min_traded_seconds,
         )
         return QualityPolicyResult(frame=filtered, report=report)
 
     if policy.gate_mode is GateMode.REPORT:
         if not report.passed:
             logger.warning(
-                "Quality gate (report): {}/{} row(s) miss the {}s coverage "
-                "minimum ({} state none at all).",
+                "Quality gate (report): {}/{} row(s) offend -- {}.",
                 report.offending_count,
                 report.rows_checked,
-                minimum_seconds,
-                report.null_coverage_count,
+                _threshold_breakdown(report, minimum_seconds),
             )
         return QualityPolicyResult(frame=frame, report=report)
 
     if not report.passed:
         logger.error(
-            "Quality gate (strict): {}/{} row(s) miss the {}s coverage minimum "
-            "({} state none at all); first offending close_time={}.",
+            "Quality gate (strict): {}/{} row(s) offend -- {}; first offending "
+            "close_time={}.",
             report.offending_count,
             report.rows_checked,
-            minimum_seconds,
-            report.null_coverage_count,
+            _threshold_breakdown(report, minimum_seconds),
             report.first_offending_close_time,
         )
         raise WindowCoverageError(
@@ -704,8 +850,10 @@ def apply_quality_policy(
         )
 
     logger.debug(
-        "Quality gate (strict): all {} row(s) meet the {}s coverage minimum.",
+        "Quality gate (strict): all {} row(s) meet the {}s coverage minimum "
+        "and the {}s traded minimum.",
         report.rows_checked,
         minimum_seconds,
+        policy.min_traded_seconds,
     )
     return QualityPolicyResult(frame=frame, report=report)
