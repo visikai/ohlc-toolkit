@@ -6,6 +6,7 @@ flattened into that namespace: spell them ``ohlc_toolkit.temporal.X``, or
 import them from here.
 """
 
+from ohlc_toolkit.temporal.columns import require_absent_columns
 from ohlc_toolkit.temporal.duration import (
     Duration,
     coerce_duration,
@@ -28,6 +29,7 @@ __all__ = [
     "Duration",
     "bounded_echo",
     "coerce_duration",
+    "require_absent_columns",
     "validate_cadence",
     "validate_horizon_duration",
     "validate_window_duration",

@@ -47,7 +47,12 @@ from pathlib import Path
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.temporal import ConfigError, DataValidationError, bounded_echo
+from ohlc_toolkit.temporal import (
+    ConfigError,
+    DataValidationError,
+    bounded_echo,
+    require_absent_columns,
+)
 
 logger = get_logger(__name__)
 
@@ -208,7 +213,11 @@ def annotate_windows(
     _require_window_bounds(frame)
     intervals = _require_annotations(annotations, columns)
     flags_column, overlap_column = _output_columns(prefix)
-    _require_absent_columns(frame, (flags_column, overlap_column))
+    require_absent_columns(
+        frame,
+        (flags_column, overlap_column),
+        remedy="choose another prefix rather than overwriting them.",
+    )
 
     open_name, close_name = _WINDOW_BOUND_COLUMNS
     open_time = pl.col(open_name)
@@ -520,23 +529,6 @@ def _output_columns(prefix: object) -> tuple[str, str]:
         logger.warning("Rejecting an empty annotation prefix.")
         raise ConfigError("Annotation column prefix must not be empty.")
     return f"{prefix}_{_FLAGS_SUFFIX}", f"{prefix}_{_OVERLAP_SUFFIX}"
-
-
-def _require_absent_columns(frame: pl.DataFrame, names: tuple[str, str]) -> None:
-    """Refuse to write over a column the frame already carries.
-
-    Raises:
-        ConfigError: If ``frame`` already has either of ``names``.
-
-    """
-    present = [name for name in names if name in frame.columns]
-    if present:
-        echoed = ", ".join(bounded_echo(name) for name in present)
-        logger.warning("Refusing to overwrite existing column(s): {}", echoed)
-        raise ConfigError(
-            f"The frame already carries column(s) {echoed}; choose another "
-            "prefix rather than overwriting them."
-        )
 
 
 def _touches(start: int, end: int) -> pl.Expr:

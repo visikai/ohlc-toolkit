@@ -401,6 +401,20 @@ hole in it, so no indicator downstream has to remember the rule. The
 effective history `L × W` comes back with the result rather than being
 left to callers to multiply.
 
+A feature column's name is derived from its identity, never passed beside
+it: `{indicator}_{family}{period}_w{window}` — `rsi_p14_w21m`,
+`logvolratio_p14_w2h26m` — with the window spelled the same way parquet
+filenames and manifest fields spell it. What varies within a frame is in
+the name; what is constant across the artifact is in the manifest, so the
+two cannot disagree. The name parses back to the record it came from.
+
+Every feature reports two counts. Effective history is `L × W`, the span
+one value is computed from. Effective-N counts *independent blocks* —
+whole non-overlapping windows in the range, divided by the lookback — and
+is deliberately not a statistical effective sample size, which accounts
+for autocorrelation and is smaller. They have different names because
+reading one as the other overstates the evidence.
+
 ## Development
 
 ```bash

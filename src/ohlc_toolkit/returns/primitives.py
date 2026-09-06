@@ -136,7 +136,12 @@ from ohlc_toolkit.returns.alignment import (
     resolve_horizon,
     shifted_close_times,
 )
-from ohlc_toolkit.temporal import ConfigError, Duration, validate_horizon_duration
+from ohlc_toolkit.temporal import (
+    ConfigError,
+    Duration,
+    require_absent_columns,
+    validate_horizon_duration,
+)
 
 logger = get_logger(__name__)
 
@@ -284,34 +289,6 @@ def forward_available_at_column(method: ReturnMethod, horizon: Duration | str) -
     return f"{forward_return_column(method, horizon)}{_AVAILABLE_AT_SUFFIX}"
 
 
-def _require_absent_columns(frame: pl.DataFrame, columns: tuple[str, ...]) -> None:
-    """Refuse to write over a column the frame already carries.
-
-    Overwriting is never the intent here and would be undetectable after
-    the fact: the replaced column keeps its name, its dtype, and its
-    plausibility, having lost whatever the caller put there. The two
-    horizons and the two formulas already name distinct columns, so the
-    only way to reach this is to repeat a call or to have named a column
-    the same thing by hand -- both of which are better reported than
-    absorbed.
-
-    Args:
-        frame: The frame about to be written to.
-        columns: The column names this call would add.
-
-    Raises:
-        ConfigError: If ``frame`` already carries any of ``columns``.
-
-    """
-    present = [name for name in columns if name in frame.columns]
-    if present:
-        logger.warning("Rejecting frame that already carries column(s): {}", present)
-        raise ConfigError(
-            f"The frame already carries the column(s) {present}; adding them again "
-            "would overwrite values this call did not compute."
-        )
-
-
 def _return_values(
     numerator: pl.Series, denominator: pl.Series, method: ReturnMethod
 ) -> pl.Series:
@@ -398,7 +375,11 @@ def add_backward_returns(
     resolved = resolve_horizon(horizon, cadence)
     column = backward_return_column(method, resolved)
     require_alignable_frame(frame, offset_seconds=-resolved.total_seconds)
-    _require_absent_columns(frame, (column,))
+    require_absent_columns(
+        frame,
+        (column,),
+        remedy="adding it again would overwrite values this call did not compute.",
+    )
 
     counterpart = counterpart_closes(frame, offset_seconds=-resolved.total_seconds)
     values = _return_values(frame.get_column(CLOSE_COLUMN), counterpart, method)
@@ -465,7 +446,11 @@ def add_forward_returns(
     value_column = forward_return_column(method, resolved)
     available_at_column = forward_available_at_column(method, resolved)
     require_alignable_frame(frame, offset_seconds=resolved.total_seconds)
-    _require_absent_columns(frame, (value_column, available_at_column))
+    require_absent_columns(
+        frame,
+        (value_column, available_at_column),
+        remedy="adding them again would overwrite values this call did not compute.",
+    )
 
     counterpart = counterpart_closes(frame, offset_seconds=resolved.total_seconds)
     values = _return_values(counterpart, frame.get_column(CLOSE_COLUMN), method)

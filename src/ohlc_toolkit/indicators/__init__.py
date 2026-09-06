@@ -20,6 +20,14 @@ from ohlc_toolkit.indicators.frames import (
     PhasedGrid,
     PhasedLookback,
 )
+from ohlc_toolkit.indicators.identity import (
+    BANNED_NAME_PART,
+    FeatureFamily,
+    FeatureIdentity,
+    NormalizationClass,
+    effective_history,
+    effective_n,
+)
 from ohlc_toolkit.indicators.phased import phased_lookback
 from ohlc_toolkit.indicators.reference import phased_lookback_reference
 
@@ -28,11 +36,17 @@ from ohlc_toolkit.indicators.reference import phased_lookback_reference
 # contract with machinery that has no stated user, and a 2.0 name cannot
 # be withdrawn without another major.
 __all__ = [
+    "BANNED_NAME_PART",
     "MAX_LOOKBACK",
     "PHASED_COLUMNS",
     "REQUIRED_COLUMNS",
+    "FeatureFamily",
+    "FeatureIdentity",
+    "NormalizationClass",
     "PhasedGrid",
     "PhasedLookback",
+    "effective_history",
+    "effective_n",
     "phased_lookback",
     "phased_lookback_reference",
 ]

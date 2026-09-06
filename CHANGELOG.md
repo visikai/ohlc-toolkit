@@ -22,6 +22,36 @@ recorded here because it is the reason the entries below are breaking.
 
 ### Added
 
+- **`indicators.FeatureIdentity`**, the record a feature column's name is
+  DERIVED from: `{indicator}_{family}{period}_w{window}`, as in
+  `rsi_p14_w21m`. A field that varies within a frame goes in the name; a
+  field constant across the artifact goes in the manifest. Deriving the
+  name rather than passing it beside the record means the two cannot
+  disagree -- there is nowhere for a second spelling to live. The name
+  parses back to the identity it came from, and refuses one it could not
+  have produced.
+  One exception to the varies/constant rule, made deliberately: the
+  family character is in the name even though an artifact carries one
+  family, so that shipping the dense family renames no phased column. A
+  rename breaks every consumer holding a stored frame.
+- **`indicators.NormalizationClass`**, three members: bounded by
+  construction, stationarized, empirically normalized. A primitive
+  declares its own class, because the answer follows from how the number
+  is built rather than from how one sample looks.
+- **`indicators.effective_history`** and **`indicators.effective_n`**.
+  The first is `L * W`. The second counts INDEPENDENT BLOCKS -- whole
+  non-overlapping windows in a range, divided by the lookback -- and is
+  explicitly not a statistical effective sample size, which accounts for
+  autocorrelation and is smaller. They carry different names because
+  reading one as the other overstates how much independent evidence a
+  feature has.
+- **`temporal.require_absent_columns`**, one guard against writing over a
+  column a frame already carries. It existed twice before, in
+  `returns.primitives` and `windows.annotations`, and the two copies had
+  already diverged: one echoed caller-supplied column names unbounded and
+  the other bounded them. Now one implementation with three callers, each
+  keeping its own remedy sentence -- the finding is shared, the advice
+  about it is not. The unbounded echo is closed as a side effect.
 - **`ohlc_toolkit.indicators`**, a seventh subpackage, holding the phased
   lookback every indicator reads through: at each tick of the emit grid,
   the `L` non-overlapping windows of duration `W` ending at `t`, `t - W`,
