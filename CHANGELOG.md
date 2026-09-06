@@ -50,12 +50,12 @@ against their tags, and are not restated here.
 ### Changed
 
 - **Dependency floors are raised so the published wheel cannot carry a
-  version with an open advisory.** `orjson` to `>=3.11.6` and `requests`
+  version with a published advisory against it.** `orjson` to `>=3.11.6` and `requests`
   to `>=2.33.0`, the first versions clearing the advisories against them;
   and `urllib3 >=2.7.0` and `idna >=3.15` are now declared, though
   nothing here imports either. `requests` carries them into every install
   and its own ranges (`urllib3<3,>=1.26`, `idna<4,>=2.5`) admit versions
-  with open advisories, three of them high. None of this was visible in
+  with published advisories, three of them high. None of this was visible in
   the lockfile, which pins clear versions and binds only this repository.
   Measured: against 1.0.0 a consumer pinning `orjson==3.10.18`, or
   `urllib3==1.26.20` and `idna==2.5`, resolved cleanly with no conflict
