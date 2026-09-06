@@ -54,10 +54,18 @@ recorded here because it is the reason the entries below are breaking.
   effective history, which is `L * W` and belongs to the grid the harness
   resolved, and its own column name, which is derived from
   `FeatureIdentity` so that the name and the manifest cannot disagree.
-  `require_phased_inputs` refuses harness output assembled for a
-  different lookback, missing a field the primitive reads, or carrying
-  lists that are not `L` long; `add_indicator` computes one and appends
-  it, refusing a frame that already carries the column.
+  `require_phased_inputs` refuses harness output four ways: assembled for
+  a different lookback, missing a field the primitive reads, carrying a
+  field whose element dtype is not the one the harness declares, or
+  carrying lists that are not `L` long. The dtype way is not a failure but
+  a different NUMBER -- `Float32` closes near `1.678e7` put the
+  differences below the type's resolution and read 75.0 where `Float64`
+  reads 80.0, with nothing logged. A bare `str` passed as `fields` is
+  refused rather than read one character at a time.
+  `add_indicator` computes one and appends it, refusing a frame that
+  already carries the column, and returns the record rather than a bare
+  frame so that a recipe computing four primitives over one lookback
+  chains them instead of unwrapping and rewrapping three times.
 - **`indicators.CutlersRSI`**, the first primitive:
   `100 - 100 / (1 + G / D)`, where `G` and `D` are the SIMPLE means of
   the positive and negative close-to-close changes across the `P` changes
@@ -78,11 +86,20 @@ recorded here because it is the reason the entries below are breaking.
   the `P + 1` inputs nulls that tick's reading and no other.
   The implementation evaluates the closed form `100 * (G / (G + D))`,
   which is the same number by algebra but divides by a sum of
-  non-negative means rather than by `D`, so the two one-sided conventions
-  are arithmetic rather than branches and no path can divide by zero. The
-  parenthesis is load-bearing: scaling before dividing rounds the product
-  first and returns `100.00000000000001` at `D = 0` and
-  `G = 256842.5 / 3`, outside the range the indicator claims.
+  non-negative totals rather than by `D`, so the two one-sided
+  conventions are arithmetic rather than branches and no path can divide
+  by zero. The parenthesis is load-bearing: scaling before dividing
+  rounds the product first and returns `100.00000000000001` at `D = 0`
+  and `G = 256842.5`, outside the range the indicator claims.
+  The means' common divisor cancels in that form, so the implementation
+  sums and never divides by `P`; what the period really fixes is the
+  NUMBER of changes, which the lookback guard checks. The two one-sided
+  conventions are exact at their boundaries and are not symmetric just
+  beyond them: `G = 1.0` with `D = 1.11e-16` reads exactly `100.0`, while
+  `G = 5e-324` with `D = 1.0` reads `4.94e-322` rather than `0.0`.
+  An infinite change total is refused before it can be read through: a
+  finite up total over an infinite down total is `0.0`, which is in
+  range, finite, and indistinguishable from the only-falls convention.
 - **`indicators.effective_history`** and **`indicators.effective_n`**.
   The first is `L * W`. The second counts INDEPENDENT BLOCKS -- whole
   non-overlapping windows in a range, divided by the lookback -- and is

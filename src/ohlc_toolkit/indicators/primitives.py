@@ -24,7 +24,7 @@ from typing import Protocol
 import polars as pl
 
 from ohlc_toolkit.config.logging import get_logger
-from ohlc_toolkit.indicators.frames import PhasedLookback
+from ohlc_toolkit.indicators.frames import PHASED_COLUMNS, PhasedLookback
 from ohlc_toolkit.indicators.identity import (
     FeatureFamily,
     FeatureIdentity,
@@ -135,24 +135,30 @@ def require_phased_inputs(
 ) -> int:
     """Check the frame really carries what the primitive is about to read.
 
-    Three ways harness output can be wrong for a primitive, refused
-    together because a primitive that checked one and assumed the other
-    two would compute a number rather than refuse:
+    Four ways harness output can be wrong for a primitive, refused
+    together because a primitive that checked one and assumed the rest
+    would compute a number rather than refuse:
 
     1. The grid was resolved for a different lookback. A frame assembled
-       at ``L = 14`` handed to an indicator that needs 15 would take
-       fourteen differences and divide by fifteen.
-    2. A field the primitive reads is absent.
-    3. A list is not ``L`` long. The harness only ever emits a complete
+       at ``L = 14`` handed to an indicator that needs 15 gives it
+       fourteen changes where its period says there are fifteen -- the
+       wrong NUMBER of inputs, which no later arithmetic can detect.
+    2. A field the primitive reads is absent, or is not a phased field at
+       all.
+    3. A field's element dtype is not the one the harness declares.
+       ``Float32`` closes near ``1.678e7`` put the differences below the
+       type's resolution and return a different number with nothing
+       logged: 75.0 where Float64 reads 80.0.
+    4. A list is not ``L`` long. The harness only ever emits a complete
        list or a null one, but a :class:`PhasedLookback` is a plain
-       record a caller can build, and a short list would be averaged over
-       the length the primitive expected rather than the length it got.
+       record a caller can build.
 
     Args:
         primitive: The primitive about to read the frame.
         phased: The harness output.
         period: The period ``P``.
-        fields: The phased fields the primitive reads.
+        fields: The phased fields the primitive reads. A bare ``str`` is
+            refused rather than read one character at a time.
 
     Returns:
         The lookback the grid and the primitive agree on.
@@ -161,6 +167,13 @@ def require_phased_inputs(
         ConfigError: For any of the three.
 
     """
+    if isinstance(fields, str):
+        logger.warning("Rejecting a single field name passed as a bare str.")
+        raise ConfigError(
+            f"fields must be a collection of column names, not a single string; "
+            f"{bounded_echo(fields)} would be read one character at a time. Pass "
+            "a tuple, as in (name,)."
+        )
     wanted = primitive.lookback(period)
     if phased.grid.lookback != wanted:
         logger.warning(
@@ -174,13 +187,33 @@ def require_phased_inputs(
             f"phased window(s); this frame was resolved for "
             f"{phased.grid.lookback}. Re-run the lookback with lookback={wanted}."
         )
-    missing = [field for field in fields if field not in phased.frame.columns]
+    missing = [
+        field
+        for field in fields
+        if field not in phased.frame.columns or field not in PHASED_COLUMNS
+    ]
     if missing:
         echoed = ", ".join(bounded_echo(field) for field in missing)
         logger.warning("Rejecting harness output missing field(s): {}", echoed)
         raise ConfigError(
             f"{bounded_echo(primitive.name)} reads column(s) {echoed}, which this "
-            f"frame does not carry."
+            f"frame does not carry as phased field(s)."
+        )
+    wrong_dtype = [
+        field
+        for field in fields
+        if phased.frame.schema[field] != pl.List(PHASED_COLUMNS[field])
+    ]
+    if wrong_dtype:
+        echoed = ", ".join(
+            f"{bounded_echo(field)} is {bounded_echo(phased.frame.schema[field])}, "
+            f"not {bounded_echo(pl.List(PHASED_COLUMNS[field]))}"
+            for field in wrong_dtype
+        )
+        logger.warning("Rejecting phased field(s) of the wrong dtype: {}", echoed)
+        raise ConfigError(
+            f"Every phased list carries the element type the harness declares; "
+            f"{echoed}."
         )
     ragged = [
         field
@@ -205,12 +238,14 @@ def require_phased_inputs(
 
 def add_indicator(
     phased: PhasedLookback, primitive: IndicatorPrimitive, *, period: int
-) -> pl.DataFrame:
-    """Append one primitive's column to the harness frame it was computed from.
+) -> PhasedLookback:
+    """Append one primitive's column to the harness output it was computed from.
 
-    The frame keeps its list columns: a second primitive reading the same
-    lookback appends beside the first, and the collision guard refuses the
-    same one twice rather than overwriting a column a caller may already
+    The frame keeps its list columns and the record keeps its grid, so
+    the result is the input to the next call: a recipe computing four
+    primitives over one lookback chains them rather than unwrapping and
+    rewrapping the record three times. The collision guard refuses the
+    same column twice rather than overwriting one a caller may already
     have written.
 
     Args:
@@ -219,7 +254,7 @@ def add_indicator(
         period: The period ``P``.
 
     Returns:
-        The harness frame with one column appended.
+        The same record with one column appended to its frame.
 
     Raises:
         ConfigError: If the frame already carries the column, if the grid
@@ -233,4 +268,4 @@ def add_indicator(
         (values.name,),
         remedy="compute this indicator once, or write it to a frame of its own.",
     )
-    return phased.frame.with_columns(values)
+    return PhasedLookback(frame=phased.frame.with_columns(values), grid=phased.grid)

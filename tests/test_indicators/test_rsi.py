@@ -27,10 +27,14 @@ _LOOKBACK = _PERIOD + 1
 # a caller would.
 _RSI = CutlersRSI()
 
-# Both algebraic routes to the same number agree to far better than this;
-# the tolerance exists because they are different routes, not because
-# either is approximate.
-_TOLERANCE = 1e-9
+# Both algebraic routes to the same number agree to far better than this:
+# the worst disagreement measured over 200,000 samples across five
+# generators -- uniform prices, tiny prices, large prices, a three-value
+# alternation and a lognormal -- is 2.8e-14. The tolerance exists because
+# they are different routes, not because either is approximate, so it
+# sits just above what was measured rather than at a round number five
+# orders of magnitude away.
+_TOLERANCE = 1e-13
 
 # The conventions, as literals in this file rather than as names imported
 # from the module under test: an expectation that read its value from the
@@ -39,6 +43,7 @@ _ONLY_RISES = 100.0
 _ONLY_FALLS = 0.0
 _ALL_UNCHANGED = 50.0
 _HAND_COMPUTED_MIXED = 62.5
+_TWO_GAIN_SIZES = 75.0
 _LOOKBACK_AT_FOURTEEN = 15
 _LOOKBACK_AT_ONE = 2
 
@@ -129,7 +134,23 @@ def test_a_mixed_run_matches_the_hand_computed_number() -> None:
     assert _reading([3.0, 1.0, 4.0, 1.0]) == _HAND_COMPUTED_MIXED
 
 
-@settings(max_examples=250, deadline=None)
+def test_a_mixed_run_with_two_gain_sizes_pins_the_averaging_scheme() -> None:
+    """The literal the other four cannot be: two gains of DIFFERENT sizes.
+
+    Strictly rising, strictly falling, identical closes and the bound
+    literal all have changes of one sign and one magnitude, so any
+    weighted average of the gains returns the same number as the simple
+    one and none of them says anything about the mean.
+
+    Closes newest first `[104, 102, 104, 100]` are `100, 104, 102, 104`
+    in time, so the three changes are `+4, -2, +2`. The gains are 4 and
+    2 -- a scheme that weighted the recent one differently would move the
+    answer. `G = 6/3`, `D = 2/3`, and `100 - 100 / (1 + 3) = 75`.
+    """
+    assert _reading([104.0, 102.0, 104.0, 100.0]) == _TWO_GAIN_SIZES
+
+
+@settings(max_examples=2_000, deadline=None)
 @given(
     closes=st.lists(
         st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
@@ -162,21 +183,31 @@ def test_a_null_tick_reads_null_and_its_neighbours_do_not() -> None:
     assert values.to_list() == [_ONLY_RISES, None, _ONLY_RISES]
 
 
-def test_one_null_among_the_inputs_nulls_exactly_that_tick() -> None:
+@pytest.mark.parametrize("position", range(_LOOKBACK))
+def test_one_null_among_the_inputs_nulls_exactly_that_tick(position: int) -> None:
     """A hole in a list is not an average over what is left.
+
+    Every position, not just one: a check that dropped nulls before
+    differencing would still be correct at the ends and wrong in the
+    middle, and one that looked only at the first element would pass a
+    fixture that holed the first. The tick before and the tick after are
+    complete, so "no other" is checked in both directions.
 
     The harness emits a complete list or a null one, so this shape only
     reaches a primitive from a caller that built the record by hand --
-    and dropping the null would divide `P - 1` changes by `P`.
+    and dropping the null would take `P - 1` changes where the period
+    says there are `P`.
     """
     holed: list[float | None] = [*rising(_LOOKBACK)]
-    holed[1] = None
+    holed[position] = None
     values = _RSI.values(
-        phased_from_closes([rising(_LOOKBACK), holed], lookback=_LOOKBACK),
+        phased_from_closes(
+            [rising(_LOOKBACK), holed, rising(_LOOKBACK)], lookback=_LOOKBACK
+        ),
         period=_PERIOD,
     )
 
-    assert values.to_list() == [_ONLY_RISES, None]
+    assert values.to_list() == [_ONLY_RISES, None, _ONLY_RISES]
 
 
 def test_the_column_is_float64_and_named_from_the_identity() -> None:
@@ -190,12 +221,49 @@ def test_the_column_is_float64_and_named_from_the_identity() -> None:
     assert values.dtype == pl.Float64
 
 
-def test_a_non_finite_reading_is_refused_rather_than_written() -> None:
-    """Unreachable from finite closes, which is why it refuses out loud."""
-    enormous = [1e308, -1e308, 1e308, -1e308]
+def test_the_window_in_the_name_comes_from_the_grid() -> None:
+    """The one component of the name the primitive does not know.
 
-    with pytest.raises(DataValidationError, match="non-finite"):
-        _RSI.values(phased_from_closes([enormous], lookback=_LOOKBACK), period=_PERIOD)
+    Every other test here runs at `W = 3m`, so a `values()` that ignored
+    the grid and hard-coded `rsi_p3_w3m` would satisfy all of them. This
+    one runs the same primitive over the same closes at `W = 2h26m`.
+    """
+    values = _RSI.values(
+        phased_from_closes(
+            [rising(_LOOKBACK)], lookback=_LOOKBACK, window_seconds=8760
+        ),
+        period=_PERIOD,
+    )
+
+    assert values.name == "rsi_p3_w2h26m"
+
+
+@pytest.mark.parametrize(
+    "closes",
+    [
+        pytest.param([math.inf, 100.0, 100.0, 100.0], id="both-totals-infinite"),
+        pytest.param([-math.inf, 100.0, 100.0, 100.0], id="only-the-down-total"),
+        pytest.param([0.0, 1.0, -1.7e308, 1.7e308], id="a-difference-that-overflows"),
+        pytest.param([1e308, -1e308, 1e308, -1e308], id="alternating-extremes"),
+    ],
+)
+def test_a_non_finite_change_total_is_refused_rather_than_read_through(
+    closes: list[float],
+) -> None:
+    """Unreachable from finite closes, which is why it refuses out loud.
+
+    Checked on the TOTALS rather than on the reading, because three of
+    these four never reach the output as a non-finite value: a finite up
+    total over an infinite down total is `0.0`, which is in range, finite,
+    and exactly the only-falls convention. A guard that inspected the
+    result would have seen nothing wrong with any of them.
+
+    The third case has finite closes throughout -- it is the DIFFERENCE
+    that overflows -- so checking the inputs would not have caught it
+    either.
+    """
+    with pytest.raises(DataValidationError, match="non-finite change total"):
+        _RSI.values(phased_from_closes([closes], lookback=_LOOKBACK), period=_PERIOD)
 
 
 def test_the_derived_name_survives_a_round_trip_through_parquet(
@@ -203,21 +271,36 @@ def test_the_derived_name_survives_a_round_trip_through_parquet(
 ) -> None:
     """The first time a derived name meets a stored schema.
 
-    Nothing had written one until now: `FeatureIdentity` derived
-    names and tests read them back out of memory. Parquet has its own
-    rules about column names, and the `d`-family character had never been
-    near a file.
+    Nothing had written one until now: `FeatureIdentity` derived names
+    and tests read them back out of memory. Parquet has its own rules
+    about column names, and the derived name is built from an enum
+    member and a duration label rather than chosen by a caller, so what
+    it can contain has never been checked against a file format.
     """
     phased = phased_from_closes(
         [rising(_LOOKBACK), list(reversed(rising(_LOOKBACK)))], lookback=_LOOKBACK
     )
     written = add_indicator(phased, _RSI, period=_PERIOD)
     path = tmp_path / "indicators.parquet"
-    written.write_parquet(path)
+    written.frame.write_parquet(path)
 
     read_back = pl.read_parquet(path)
 
-    assert read_back.columns == written.columns
+    # Against a literal, not against the frame that was written: comparing
+    # the round trip to itself would pass however the name had been
+    # mangled, as long as it was mangled the same way in both directions.
+    assert read_back.columns == [
+        "close_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "src_count",
+        "coverage_seconds",
+        "traded_seconds",
+        "rsi_p3_w3m",
+    ]
     assert read_back["rsi_p3_w3m"].to_list() == [_ONLY_RISES, _ONLY_FALLS]
     assert read_back["rsi_p3_w3m"].dtype == pl.Float64
 

@@ -6,6 +6,15 @@ the ``P`` changes that ``P + 1`` phased windows hold. Every change is
 counted in both means, as a zero when it has the other sign, so the two
 always average over ``P``.
 
+That common divisor cancels: ``(Sg/P) / ((Sg/P) + (Sd/P))`` is
+``Sg / (Sg + Sd)``. The implementation therefore sums and never divides
+by ``P``, and the difference between a mean and a total is stated here
+rather than written as an operation no test could reach -- dividing both
+sides by ``P`` changes no reading, so an implementation that dropped it
+by accident would look identical to one that meant to. What the period
+really controls is the NUMBER OF CHANGES, and that is fixed by the
+lookback the harness was resolved with.
+
 Cutler's and not Wilder's, recorded here so that nobody has to rediscover
 it: Wilder's smoothing is a recursion with infinite memory, so its value
 depends on where the series was seeded and two artifacts built from
@@ -24,6 +33,15 @@ undefined and never non-finite:
   limit, because the inputs are all present and the momentum is genuinely
   neutral. That is not the same as a window with too little trading in
   it, which the harness has already turned into a null input.
+
+The two one-sided conventions are the exact values at the exact
+boundaries, and they are NOT symmetric just beyond them. Float64 rounding
+makes ``100.0`` reachable from a nonzero ``D`` -- ``G = 1.0`` with
+``D = 1.11e-16`` reads exactly ``100.0`` -- while the low end keeps its
+resolution: ``G = 5e-324`` with ``D = 1.0`` reads ``4.94e-322`` rather
+than ``0.0``. A reading of exactly ``100.0`` therefore means "no falls,
+or falls too small to register against the rises"; a reading of exactly
+``0.0`` means no rises at all.
 """
 
 from dataclasses import dataclass
@@ -54,6 +72,12 @@ _NEUTRAL_RSI: Final = 50.0
 
 _FULL_SCALE: Final = 100.0
 _CLOSE: Final = "close"
+
+# The decomposition's own column names, prefixed so that they cannot
+# collide with a phased field the frame already carries.
+_HOLE: Final = "_incomplete"
+_UP: Final = "_up"
+_DOWN: Final = "_down"
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,87 +129,114 @@ class CutlersRSI:
         Raises:
             ConfigError: If the period is unusable, or if the frame was
                 not assembled for this lookback.
-            DataValidationError: If any reading is non-finite, which
-                finite closes cannot produce.
+            DataValidationError: If either change total is non-finite,
+                which finite closes cannot produce.
 
         """
         require_phased_inputs(self, phased, period=period, fields=(_CLOSE,))
         identity = indicator_identity(self, phased, period=period)
-        values = phased.frame.select(
-            _reading(period).alias(identity.column_name)
-        ).to_series()
-        _require_finite(values, identity.column_name)
-        return values
+        parts = phased.frame.select(_decomposed())
+        _require_finite_totals(parts, identity.column_name)
+        return parts.select(_reading().alias(identity.column_name)).to_series()
 
 
-def _reading(period: int) -> pl.Expr:
-    """Build the reading in the closed form its conventions fall out of.
+def _decomposed() -> list[pl.Expr]:
+    """Split each tick's changes into its upward and its downward total.
 
-    ``100 - 100 / (1 + G / D)`` is ``100 * G / (G + D)`` for any ``G`` and
-    ``D`` that are not both zero -- the same number by algebra, but it
-    divides by a sum of non-negative means rather than by ``D``, so the
-    two one-sided conventions are arithmetic rather than branches: a run
-    with no falls has ``D = 0`` and reads ``100 * G / G``. Only the
-    both-zero case is genuinely undefined, and it is the one branch
-    below. The spelled-out form would divide by zero at ``D = 0`` and
-    manufacture an infinity for the next expression to turn into a NaN.
-
-    The parenthesis around ``gain / movement`` is load-bearing and was
-    put there by a failing property test. Scaling first,
-    ``100 * gain / movement``, rounds the product before it divides:
-    with ``D = 0`` and ``G = 256842.5 / 3`` it returns
-    ``100.00000000000001``, which is outside the range this indicator
-    claims to be bounded to. Dividing first gives exactly ``1.0``
-    whenever the two are equal, and a quotient that can never exceed one
-    otherwise, so the bound holds by construction rather than by luck.
-
-    Args:
-        period: The period ``P``, the divisor of both means.
+    Kept as columns rather than folded into one expression so that the
+    finiteness check below can look at them. An infinity here does not
+    survive into the reading: a finite ``up`` over an infinite ``down``
+    is ``0.0``, which is in range, finite, and indistinguishable from the
+    only-falls convention.
 
     Returns:
-        The expression, over a `close` list column of ``P + 1`` closes.
+        The hole flag and the two totals, as named expressions over a
+        `close` list column.
 
     """
     # `list.reverse` first: the harness orders each list newest FIRST, and
     # a difference taken in that order is the negative of the change.
     changes = pl.col(_CLOSE).list.reverse().list.eval(pl.element().diff().drop_nulls())
-    gain = changes.list.eval(pl.element().clip(lower_bound=0.0)).list.sum() / period
-    loss = changes.list.eval((-pl.element()).clip(lower_bound=0.0)).list.sum() / period
-    movement = gain + loss
-    return (
-        pl.when(
+    return [
+        (
             pl.col(_CLOSE).list.drop_nulls().list.len() != pl.col(_CLOSE).list.len()
-        )
+        ).alias(_HOLE),
+        changes.list.eval(pl.element().clip(lower_bound=0.0)).list.sum().alias(_UP),
+        changes.list.eval((-pl.element()).clip(lower_bound=0.0))
+        .list.sum()
+        .alias(_DOWN),
+    ]
+
+
+def _reading() -> pl.Expr:
+    """Build the reading in the closed form its conventions fall out of.
+
+    ``100 - 100 / (1 + G / D)`` is ``100 * (G / (G + D))`` for any ``G``
+    and ``D`` that are not both zero -- the same number by algebra, but it
+    divides by a sum of non-negative totals rather than by ``D``, so the
+    two one-sided conventions are arithmetic rather than branches: a run
+    with no falls has ``D = 0`` and reads ``100 * (G / G)``. Only the
+    both-zero case is genuinely undefined, and it is the one branch
+    below. The spelled-out form would divide by zero at ``D = 0`` and
+    manufacture an infinity for the next expression to turn into a NaN.
+
+    The parenthesis around ``G / (G + D)`` is load-bearing and was put
+    there by a failing property test. Scaling first,
+    ``100 * G / (G + D)``, rounds the product before it divides: with
+    ``D = 0`` and ``G = 256842.5`` it returns ``100.00000000000001``,
+    which is outside the range this indicator claims to be bounded to.
+    Dividing first gives exactly ``1.0`` whenever the two are equal --
+    correctly-rounded addition is monotonic, so ``fl(G + D) >= G`` and the
+    quotient can never exceed one -- and the bound holds by construction
+    rather than by luck.
+
+    Returns:
+        The expression, over the columns :func:`_decomposed` produces.
+
+    """
+    movement = pl.col(_UP) + pl.col(_DOWN)
+    return (
+        pl.when(pl.col(_HOLE))
         .then(None)
         .when(movement == 0.0)
         .then(pl.lit(_NEUTRAL_RSI))
-        .otherwise(_FULL_SCALE * (gain / movement))
+        .otherwise(_FULL_SCALE * (pl.col(_UP) / movement))
         .cast(pl.Float64)
     )
 
 
-def _require_finite(values: pl.Series, column: str) -> None:
-    """Refuse a non-finite reading rather than writing one into a frame.
+def _require_finite_totals(parts: pl.DataFrame, column: str) -> None:
+    """Refuse an infinite gain or loss total rather than reading through it.
 
-    Unreachable from finite closes, which is the point: the source layer
-    already refuses non-finite prices, so a NaN or an infinity here means
-    a caller assembled the lookback by hand out of values no reader would
-    have accepted. Derived frames do not manufacture what the source
-    refuses.
+    The reading itself cannot show this. A finite ``up`` over an infinite
+    ``down`` is ``0.0`` -- in range, finite, and exactly the only-falls
+    convention, so nothing downstream could tell the two apart. Only one
+    of the four infinite combinations reaches the output as a NaN.
+
+    Unreachable from finite closes whose differences do not overflow,
+    which is the point: the source layer already refuses non-finite
+    prices, so an infinity here means a caller assembled the lookback by
+    hand out of values no reader would have accepted. Derived frames do
+    not manufacture what the source refuses.
 
     Args:
-        values: The computed column.
-        column: Its name, for the refusal.
+        parts: The decomposed totals.
+        column: The column being computed, for the refusal.
 
     Raises:
-        DataValidationError: If any value is not finite.
+        DataValidationError: If either total is non-finite anywhere.
 
     """
-    present = values.drop_nulls()
-    if present.is_finite().all():
+    offending = {
+        name: int((~parts[name].drop_nulls().is_finite()).sum())
+        for name in (_UP, _DOWN)
+    }
+    if not any(offending.values()):
         return
-    logger.error("Refusing a non-finite reading in {}.", column)
+    counted = ", ".join(f"{count} in {name}" for name, count in offending.items())
+    logger.error("Refusing non-finite change totals for {}.", column)
     raise DataValidationError(
-        f"{column} holds {(~present.is_finite()).sum()} non-finite value(s); "
-        "the closes they were computed from are not finite."
+        f"{column} decomposes to non-finite change total(s) ({counted}); the "
+        "closes they were computed from are not finite, or their differences "
+        "overflow."
     )
