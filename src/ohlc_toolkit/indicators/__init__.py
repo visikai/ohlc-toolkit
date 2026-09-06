@@ -28,7 +28,14 @@ from ohlc_toolkit.indicators.identity import (
     effective_n,
 )
 from ohlc_toolkit.indicators.phased import phased_lookback
+from ohlc_toolkit.indicators.primitives import (
+    IndicatorPrimitive,
+    add_indicator,
+    indicator_identity,
+    require_phased_inputs,
+)
 from ohlc_toolkit.indicators.reference import phased_lookback_reference
+from ohlc_toolkit.indicators.rsi import CutlersRSI
 
 # `resolve_phased_grid` is deliberately NOT here. Both entry points call
 # it and neither caller does; exporting it would enlarge the published
@@ -45,13 +52,18 @@ __all__ = [
     "MAX_LOOKBACK",
     "PHASED_COLUMNS",
     "REQUIRED_COLUMNS",
+    "CutlersRSI",
     "FeatureFamily",
     "FeatureIdentity",
+    "IndicatorPrimitive",
     "NormalizationClass",
     "PhasedGrid",
     "PhasedLookback",
+    "add_indicator",
     "effective_history",
     "effective_n",
+    "indicator_identity",
     "phased_lookback",
     "phased_lookback_reference",
+    "require_phased_inputs",
 ]
