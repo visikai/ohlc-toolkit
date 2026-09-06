@@ -909,6 +909,92 @@ DURATION_UNITS = ScheduleUnits(
 )
 
 
+def require_endpoints_on_the_grain(
+    *,
+    minimum: int,
+    maximum: int,
+    grain: int,
+    rounding: RoundingRule,
+    units: ScheduleUnits,
+) -> None:
+    """Refuse endpoints a grain cannot represent without leaving the range.
+
+    For most generators here ``minimum`` and ``maximum`` are pure BOUNDS
+    -- filters over terms a recurrence produced, which no caller asked to
+    receive. For the log-spaced generators they are also the FIRST and
+    LAST POINTS, named by the caller and promised back. That double role
+    is what makes this a defect rather than a filter doing its job.
+
+    Quantization can move an endpoint out of the range it defines. The
+    lower one rounds DOWN below itself, the upper one rounds UP above
+    itself, and the bound then drops the very point the caller named:
+
+        log_spaced_lookback(count=3, minimum=10, maximum=100, grain=3)
+          -> (33, 99)          -- 10 quantized to 9, below the minimum
+        log_spaced_lookback(count=3, minimum=12, maximum=101, grain=3)
+          -> (12, 36)          -- 101 quantized to 102, above the maximum
+
+    Three points asked for, two returned, and nothing said. The choice
+    made here is to REFUSE rather than to exempt the endpoints from their
+    own bounds. The schedule types carry their spec beside their members,
+    so keeping a first point of 9 under a recorded ``minimum`` of 10
+    would produce an artifact that contradicts itself, and any consumer
+    re-applying the recorded bound would drop the member again. A grain
+    that cannot represent the endpoints is a configuration error, and
+    saying so is cheaper than a schedule that is quietly one point short.
+
+    An endpoint that quantizes INWARD is not affected: a minimum of 11 at
+    a grain of 3 becomes 12, which is above the bound and survives. That
+    is ordinary rounding, not a silent loss.
+
+    A third answer was weighed and rejected, recorded here because it is
+    the one a future reader is most likely to propose: SNAP the endpoints
+    inward to the grain before generating, so the count and the bounds
+    both survive. It substitutes a different first point without saying
+    so, which is the same class of defect this refusal exists to remove,
+    and it would mix rounding rules inside one schedule -- nearest for
+    the interior points, directed at the ends.
+
+    The verdict depends on ``rounding``: at a grain of 4, a minimum of 2
+    quantizes to 0 under ties-away and to 4 under ties-even, so the same
+    bounds refuse under one rule and resolve under the other. The rule is
+    threaded through rather than assumed.
+
+    Args:
+        minimum: The lower bound, which is also the first point.
+        maximum: The upper bound, which is also the last point.
+        grain: The quantization grain, in whole units.
+        rounding: The tie rule quantization applies.
+        units: How to describe a member when refusing.
+
+    Raises:
+        ConfigError: If either endpoint quantizes outside the range.
+
+    """
+    for label, endpoint, outside in (
+        ("minimum", minimum, _quantize(Fraction(minimum), grain, rounding) < minimum),
+        ("maximum", maximum, _quantize(Fraction(maximum), grain, rounding) > maximum),
+    ):
+        if not outside:
+            continue
+        quantized = _quantize(Fraction(endpoint), grain, rounding)
+        logger.warning(
+            "Rejecting a {} of {} that quantizes to {} at a {} grain.",
+            label,
+            units.render(endpoint),
+            units.render(quantized),
+            units.render_grain(grain),
+        )
+        raise ConfigError(
+            f"The {label} is also the {'first' if label == 'minimum' else 'last'} "
+            f"point, and {units.render(endpoint)} quantizes to "
+            f"{units.render(quantized)} at a {units.render_grain(grain)} grain, "
+            f"which is outside the range it defines -- so the point you named "
+            f"would be dropped by your own bound. Choose a grain that represents "
+            f"{units.render(endpoint)}, or a {label} the grain can represent."
+        )
+
+
 def resolve_values(  # noqa: PLR0913 - one keyword per resolution rule
     values: list[Fraction],
     *,
@@ -1246,7 +1332,8 @@ def log_spaced(
         grain multiple are deduplicated.
 
     Raises:
-        ConfigError: If any parameter is invalid, if a point quantizes
+        ConfigError: If any parameter is invalid, if an endpoint
+            quantizes outside the range it defines, if a point quantizes
             to nothing, or if the bounds leave no windows.
 
     """
@@ -1256,6 +1343,13 @@ def log_spaced(
         maximum=validate_window_duration(maximum),
         grain=validate_cadence(grain),
         rounding=rounding,
+    )
+    require_endpoints_on_the_grain(
+        minimum=spec.minimum.total_seconds,
+        maximum=spec.maximum.total_seconds,
+        grain=spec.grain.total_seconds,
+        rounding=spec.rounding,
+        units=DURATION_UNITS,
     )
     windows = _resolve_windows(
         _log_spaced_terms(spec),

@@ -39,6 +39,7 @@ from ohlc_toolkit.schedules.generators import (
     _validated_count,
     log_spaced_values,
     recurrence_values,
+    require_endpoints_on_the_grain,
     resolve_values,
 )
 from ohlc_toolkit.schedules.identity import (
@@ -598,8 +599,9 @@ def log_spaced_lookback(  # noqa: PLR0913 - one keyword per recorded parameter
         The resolved schedule.
 
     Raises:
-        ConfigError: For any parameter the spec refuses, or bounds that
-            leave nothing after quantization.
+        ConfigError: For any parameter the spec refuses, for an endpoint
+            that quantizes outside the range it defines, or for bounds
+            that leave nothing after quantization.
 
     """
     spec = LogSpacedLookbackSpec(
@@ -609,6 +611,13 @@ def log_spaced_lookback(  # noqa: PLR0913 - one keyword per recorded parameter
         grain=grain,
         rounding=rounding,
         dedup=dedup,
+    )
+    require_endpoints_on_the_grain(
+        minimum=spec.minimum,
+        maximum=spec.maximum,
+        grain=spec.grain,
+        rounding=spec.rounding,
+        units=PERIOD_UNITS,
     )
     values = log_spaced_values(
         count=spec.count, minimum=spec.minimum, maximum=spec.maximum

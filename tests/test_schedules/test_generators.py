@@ -645,6 +645,79 @@ class TestLogSpaced:
         assert schedule.spec.limiting_ratio == pytest.approx(1.0, abs=1e-12)
 
 
+class TestEndpointsMustSurviveTheirOwnGrain:
+    """The rule, in one place: an endpoint outside its own range is refused.
+
+    For every other generator here `minimum` and `maximum` are pure
+    BOUNDS -- filters over terms a recurrence produced. For the
+    log-spaced ones they are also the FIRST and LAST POINTS, promised
+    back to the caller, and the class above pins that promise in
+    `test_both_endpoints_are_the_bounds_themselves`.
+
+    Quantization can move an endpoint out of the range it defines: the
+    lower one rounds DOWN below itself, the upper one rounds UP above
+    itself, and the bound then drops the very point the caller named. The
+    rule is one predicate applied to both ends -- refuse when
+    `quantize(minimum) < minimum` or `quantize(maximum) > maximum` -- so
+    that a reader does not have to infer it from two examples.
+
+    An endpoint that quantizes INWARD is untouched. That is ordinary
+    rounding, not a silent loss.
+    """
+
+    @pytest.mark.parametrize(
+        ("minimum", "maximum", "grain", "refused"),
+        [
+            pytest.param("10s", "100s", "3s", True, id="minimum-rounds-below-itself"),
+            pytest.param("12s", "101s", "3s", True, id="maximum-rounds-above-itself"),
+            pytest.param("10s", "101s", "3s", True, id="both-ends-leave-the-range"),
+            pytest.param("11s", "99s", "3s", False, id="minimum-rounds-inward"),
+            pytest.param("12s", "100s", "3s", False, id="maximum-rounds-inward"),
+            pytest.param("12s", "99s", "3s", False, id="both-ends-on-the-grain"),
+            pytest.param(
+                "10s", "100s", "1s", False, id="a-grain-of-one-represents-all"
+            ),
+        ],
+    )
+    def test_the_rule_is_one_predicate_over_both_ends(
+        self, minimum: str, maximum: str, grain: str, refused: bool
+    ) -> None:
+        """Both ends, both directions, and the cases that must still resolve."""
+        if refused:
+            with pytest.raises(ConfigError, match="outside the range it defines"):
+                log_spaced(count=3, minimum=minimum, maximum=maximum, grain=grain)
+            return
+        schedule = log_spaced(count=3, minimum=minimum, maximum=maximum, grain=grain)
+        assert len(schedule.windows) > 0
+
+    def test_the_refusal_names_the_endpoint_and_what_it_became(self) -> None:
+        """A caller cannot fix a grain they are not told about.
+
+        The named minimum of 10s quantizes to 9s at a 3s grain, which is
+        below the bound it defines, so the first point the caller asked
+        for would be dropped by their own bound. Before this refusal the
+        call returned two windows for a count of three and said nothing.
+        """
+        with pytest.raises(ConfigError) as caught:
+            log_spaced(count=3, minimum="10s", maximum="100s", grain="3s")
+
+        message = str(caught.value)
+        assert "minimum" in message
+        assert "10s" in message
+        assert "9s" in message
+        assert "3s" in message
+
+    def test_the_duration_path_no_longer_loses_the_first_point_silently(self) -> None:
+        """The reported defect, in the units this entry point takes.
+
+        `log_spaced(count=3, minimum="10s", maximum="100s", grain="3s")`
+        returned `['33s', '1m39s']` -- three points asked for, two
+        returned, the named endpoint gone.
+        """
+        with pytest.raises(ConfigError, match="first point"):
+            log_spaced(count=3, minimum="10s", maximum="100s", grain="3s")
+
+
 class TestLogSpacedRatio:
     """The spacing a log-spaced ladder implies, recorded with it."""
 

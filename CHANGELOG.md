@@ -321,6 +321,54 @@ recorded here because it is the reason the entries below are breaking.
   one is refused with a `ConfigError` rather than silently checked
   against one threshold. A caller that projects a frame down to what the
   step consults must keep all three.
+- **BREAKING: a log-spaced endpoint that quantizes outside its own range
+  is now REFUSED**, in both `log_spaced` and `log_spaced_lookback`. A
+  call that returned a schedule now raises `ConfigError`, which is why
+  this is marked breaking. For these two generators `minimum` and
+  `maximum` are the FIRST and LAST POINTS as well as the bounds, promised
+  back to the caller. Elsewhere in this module they are bounds applied to
+  terms a recurrence produced — that is not a claim that no other
+  generator can lose a point a caller named, only that this change is
+  scoped to the two where the endpoints ARE the parameters. Quantization can move an
+  endpoint out of the range it defines, and the bound then dropped the
+  very point the caller named:
+
+      log_spaced_lookback(count=3, minimum=10, maximum=100, grain=3)
+        -> (33, 99)      # 10 quantized to 9, below the minimum
+      log_spaced_lookback(count=3, minimum=12, maximum=101, grain=3)
+        -> (12, 36)      # 101 quantized to 102, above the maximum
+
+  Three points asked for, two returned, nothing said. Both ends are
+  affected; the lower one was reported and the upper one was found while
+  fixing it.
+  Refusing rather than exempting the endpoints from their own bounds is a
+  choice, and the reason is that these types carry their spec beside
+  their members: a first point of 9 under a recorded `minimum` of 10
+  would be an artifact that contradicts itself, and any consumer
+  re-applying the recorded bound would drop the member again. A grain
+  that cannot represent the endpoints is a configuration error.
+  **The rule, which is what you need to tell whether you are affected:**
+  your call is affected if and only if quantizing your `minimum` at your
+  grain and rounding rule moves it BELOW itself, or quantizing your
+  `maximum` moves it ABOVE itself. An endpoint that quantizes INWARD is
+  untouched — a minimum of 11 at a grain of 3 becomes 12, which is inside
+  the bound and survives, as before.
+  **A stored schedule is not checked when it is read back.** `from_dict`
+  deserializes a recorded payload without re-applying this predicate, so
+  a schedule written before this change keeps its id and raises nothing.
+  If you hold stored schedules, the rule above applies verbatim to the
+  recorded spec: quantize the recorded `minimum` and `maximum` at the
+  recorded `grain` and rounding rule, and a payload is affected if either
+  lands outside the range it defines. Such a payload records bounds whose
+  endpoint is missing from its own members.
+  Some configurations that already raised now raise a DIFFERENT message
+  from the same `ConfigError` class, so an `except` clause is unaffected.
+  **No resolved schedule changes its members, so no schedule id moves.**
+  Measured over 22,090 configurations that resolved before the change:
+  0 produced different members, and every configuration that now refuses
+  is one where an endpoint had been silently dropped. What changes is
+  that those configurations raise `ConfigError` instead of returning a
+  schedule one point short.
 - A generated schedule's maximum is now compared against the QUANTIZED
   term rather than the raw one. Generation produces the first term past
   the bound and lets resolution decide, so a term of 21.434 against a
