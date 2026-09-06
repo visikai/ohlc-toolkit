@@ -43,7 +43,10 @@ from ohlc_toolkit.snapshot.manifest import (
     SnapshotManifest,
     parse_manifest,
 )
-from ohlc_toolkit.snapshot.release import SnapshotRelease
+from ohlc_toolkit.snapshot.release import (
+    DEFAULT_RELEASE_HOST,
+    SnapshotRelease,
+)
 from ohlc_toolkit.snapshot.transport import AssetTransport, HttpAssetTransport
 from ohlc_toolkit.temporal import ConfigError, bounded_echo
 
@@ -210,6 +213,190 @@ def fetch_snapshot(
     )
 
 
+def verify_snapshot_on_disk(
+    directory: str | os.PathLike[str],
+    *,
+    repository: str,
+    host: str = DEFAULT_RELEASE_HOST,
+) -> SnapshotFetchResult:
+    """Verify a snapshot already on disk against the manifest beside it.
+
+    :func:`fetch_snapshot` answers "did these bytes arrive intact". This
+    answers the other question a consumer has: "are these still the
+    bytes". They are different questions and neither implies the other --
+    a directory verified in August is not thereby a directory verified
+    now, and nothing about a directory stops something else writing to
+    it. Nothing is fetched here and no transport is used.
+
+    What it proves is that the directory is INTERNALLY CONSISTENT: these
+    bytes are the bytes this manifest describes. It does not prove the
+    manifest is the one you meant. A different, self-consistent release
+    verifies clean and is reported as itself, which is the right
+    behaviour -- the identity it returns is what a caller records, so a
+    substitution is visible in the record rather than hidden by it.
+    Pinning an expected identity is a separate feature and is not this.
+
+    Nor is containment. An asset that is a SYMLINK to a file outside the
+    directory verifies clean, exactly as it does on the fetch path: what
+    is checked is that the bytes reachable at each declared path are the
+    bytes the manifest declares, not where those bytes live. A directory
+    assembled by something hostile can therefore point outward and still
+    be internally consistent, which is worth knowing before treating a
+    clean verification as a statement about the filesystem.
+
+    The result is the same type :func:`fetch_snapshot` returns, so
+    :func:`~ohlc_toolkit.snapshot.continuity.read_snapshot_frame` consumes
+    it unchanged. Every asset reports ``was_downloaded=False``, because
+    nothing was.
+
+    The returned release is assembled from the two parties that each know
+    part of it: ``repository`` and ``host`` come from the caller, because
+    a manifest does not record where it was published, and the tag comes
+    from the manifest, because that is the one field it does record.
+    Neither is defaulted to this project's own release, which would be
+    the same mistake :func:`fetch_snapshot` avoids by refusing to pick a
+    directory on a caller's disk -- and this function knows LESS about
+    provenance than that one does, not more, since it fetched nothing.
+
+    Args:
+        directory: The directory holding the manifest and its assets.
+        repository: The repository the snapshot came from, ``owner/name``.
+            Required and not defaulted: a repository this function
+            invented would be recorded as provenance by a caller who
+            trusted it, and its ``asset_url`` would resolve somewhere
+            with no relationship to the bytes just verified.
+        host: The release host. Defaults to
+            :data:`~ohlc_toolkit.snapshot.release.DEFAULT_RELEASE_HOST`,
+            which is the same default :class:`SnapshotRelease` itself
+            applies, so this adds no assumption of its own.
+
+    Returns:
+        The verified assets, the parsed manifest, and the snapshot
+        identity.
+
+    Raises:
+        ConfigError: If no manifest is there to check against, or if an
+            asset path exists and is not a regular file. Both are a
+            caller pointing this at the wrong directory, which is a
+            different kind of wrong from a file that does not match.
+        SnapshotIntegrityError: If the manifest declares no assets, or an
+            asset it declares is absent, the wrong size, or hashes to
+            something else. The same class :func:`fetch_snapshot` raises
+            for the same findings, so one ``except`` covers both
+            questions.
+        SnapshotManifestError: If the manifest's own bytes do not parse
+            or fail its schema, or if the tag it declares is not a usable
+            release tag.
+        OSError: If the manifest or an asset is present but cannot be
+            read.
+
+    """
+    base = Path(directory)
+    manifest_path = base / MANIFEST_ASSET_NAME
+    if not manifest_path.is_file():
+        logger.warning("No snapshot manifest at {}.", bounded_echo(str(manifest_path)))
+        raise ConfigError(
+            f"No snapshot manifest at {bounded_echo(str(manifest_path))}; there "
+            "is nothing to verify these files against."
+        )
+
+    raw = manifest_path.read_bytes()
+    manifest = parse_manifest(raw)
+    # The identity is the digest of the manifest bytes exactly as
+    # published. Per-asset digests cannot reveal a wholesale swap of a
+    # manifest and its assets together, because a swapped manifest
+    # describes its swapped assets correctly; this one value changes.
+    manifest_sha256 = hashlib.sha256(raw).hexdigest()
+
+    # Refused HERE and not only by `parse_manifest`, which refuses it
+    # today. If that guard is ever relaxed, the loop below verifies
+    # nothing and reports success -- a verification that passes over zero
+    # assets is worse than none, because it looks like one.
+    if not manifest.assets:
+        logger.error("Manifest {} declares no assets.", bounded_echo(manifest_sha256))
+        raise SnapshotIntegrityError(
+            f"Manifest {bounded_echo(manifest_sha256)} declares no assets, so "
+            f"verifying it proves nothing about {bounded_echo(str(base))}."
+        )
+
+    assets = {
+        record.name: _verified_on_disk(base / record.name, record)
+        for record in manifest.assets.values()
+    }
+    logger.info(
+        "Verified {} on-disk asset(s) against manifest {} (tag {!r}).",
+        len(assets),
+        manifest_sha256,
+        manifest.tag,
+    )
+    # `parse_manifest` reads the tag as any non-empty string, and
+    # `SnapshotRelease` applies the stricter release grammar. Checked here
+    # so a hostile tag is refused as what it is -- a manifest this cannot
+    # use -- rather than escaping as the ConfigError that means a caller
+    # pointed at the wrong directory. The caller pointed at the right one.
+    try:
+        release = SnapshotRelease(repository=repository, tag=manifest.tag, host=host)
+    except ConfigError as error:
+        logger.error(
+            "Manifest {} declares an unusable release tag: {}",
+            bounded_echo(manifest_sha256),
+            bounded_echo(manifest.tag),
+        )
+        raise SnapshotManifestError(
+            f"Manifest {bounded_echo(manifest_sha256)} declares the tag "
+            f"{bounded_echo(manifest.tag)}, which is not a usable release tag."
+        ) from error
+
+    return SnapshotFetchResult(
+        release=release,
+        directory=base,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+        assets=assets,
+    )
+
+
+def _verified_on_disk(path: Path, record: AssetRecord) -> FetchedAsset:
+    """Check one on-disk asset against the record the manifest declares.
+
+    Size before digest, through the same two helpers the fetch path uses
+    -- a truncated file and a substituted one are different findings and
+    the messages say which.
+    """
+    if not path.is_file():
+        if path.exists():
+            logger.warning(
+                "Refusing asset {!r}: {} exists and is not a regular file.",
+                record.name,
+                bounded_echo(str(path)),
+            )
+            raise ConfigError(
+                f"Snapshot asset path for {record.name!r} exists and is not a "
+                f"regular file: {bounded_echo(str(path))}."
+            )
+        logger.error(
+            "Manifest declares asset {!r}, absent at {}.",
+            record.name,
+            bounded_echo(str(path)),
+        )
+        raise SnapshotIntegrityError(
+            f"The manifest declares asset {record.name!r}, which is not at "
+            f"{bounded_echo(str(path))}."
+        )
+
+    source = str(path)
+    _verify_size(path, record, source)
+    _verify_digest(path, record, source)
+    return FetchedAsset(
+        name=record.name,
+        path=path,
+        sha256=record.sha256,
+        size_bytes=record.size_bytes,
+        was_downloaded=False,
+    )
+
+
 def _prepare_directory(directory: str | os.PathLike[str]) -> Path:
     """Resolve and create the destination, refusing a non-directory path."""
     resolved = Path(directory)
@@ -363,44 +550,46 @@ def _make_temp_path(final_path: Path) -> Path:
     return Path(name)
 
 
-def _verify_size(temp_path: Path, record: AssetRecord, url: str) -> None:
-    """Check the landed size against the manifest.
+def _verify_size(path: Path, record: AssetRecord, source: str) -> None:
+    """Check a file's size against the manifest.
 
     A short body cannot match the declared digest either, but size is the
-    cheaper check and says plainly that the transfer was truncated rather
-    than that the data was tampered with.
+    cheaper check and says plainly that the file is truncated rather than
+    that the data was tampered with.
+
+    ``source`` is where the bytes came from, for the message alone: a URL
+    when they were just downloaded, a path when they were already on
+    disk. The check itself does not care which.
     """
-    landed = temp_path.stat().st_size
+    landed = path.stat().st_size
     if landed != record.size_bytes:
         logger.error(
-            "Asset {!r} from {} landed at {} bytes, not the declared {}.",
+            "Asset {!r} from {} is {} bytes, not the declared {}.",
             record.name,
-            bounded_echo(url),
+            bounded_echo(source),
             landed,
             record.size_bytes,
         )
         raise SnapshotIntegrityError(
-            f"Asset {record.name!r} from {bounded_echo(url)} landed at {landed} "
-            "bytes, not "
-            f"the {record.size_bytes} bytes its manifest declared."
+            f"Asset {record.name!r} from {bounded_echo(source)} is {landed} "
+            f"bytes, not the {record.size_bytes} bytes its manifest declared."
         )
 
 
-def _verify_digest(temp_path: Path, record: AssetRecord, url: str) -> None:
-    """Check the landed bytes against the manifest's declared SHA-256."""
-    digest = _digest_of(temp_path)
+def _verify_digest(path: Path, record: AssetRecord, source: str) -> None:
+    """Check a file's bytes against the manifest's declared SHA-256."""
+    digest = _digest_of(path)
     if digest != record.sha256:
         logger.error(
             "Asset {!r} from {} hashes to {}, not the declared {}.",
             record.name,
-            bounded_echo(url),
+            bounded_echo(source),
             digest,
             record.sha256,
         )
         raise SnapshotIntegrityError(
-            f"Asset {record.name!r} from {bounded_echo(url)} has sha256 {digest}, "
-            "not the "
-            f"declared {record.sha256}."
+            f"Asset {record.name!r} from {bounded_echo(source)} has sha256 "
+            f"{digest}, not the declared {record.sha256}."
         )
 
 
