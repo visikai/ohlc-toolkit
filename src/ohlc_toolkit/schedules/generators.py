@@ -116,7 +116,11 @@ logger = get_logger(__name__)
 # one: a two-term recurrence with a vanishing coefficient does still
 # terminate, but only after billions of terms, and a generator that
 # hangs is worse than one that refuses. One number for every kind, so
-# there is a single answer to "how long can a schedule be".
+# there is a single answer to "how long can a schedule be" -- including
+# the count-valued lookback schedule, whose members are period counts
+# rather than durations and whose refusal therefore reads "at most 512
+# period counts". The name says windows because that is what it capped
+# first; it caps any resolved schedule.
 MAX_RESOLVED_WINDOWS = 512
 
 # The largest recurrence coefficient whose square is still a float: the
@@ -1073,9 +1077,21 @@ def recurrence_values(
             # resolution rounds first. A term of 21.434 against a maximum
             # of 21 quantizes to exactly 21, which is inside the bound;
             # stopping on the raw value excluded a member the caller
-            # asked for. Anything further past the bound rounds past it
-            # too and `resolve_values` drops it, so exactly one extra
-            # term is ever produced.
+            # asked for.
+            #
+            # One extra term is ENOUGH, and the reason is an error bound
+            # plus dedup rather than monotonicity. Many further terms can
+            # round back inside -- measured, a coefficient of 1/100 with
+            # seed 100, grain 100 and a maximum of 300 puts 31 of them
+            # there. But round-nearest moves a value by at most g/2, so
+            # every past-maximum term that lands inside lands on the SAME
+            # multiple of the grain: a second, smaller in-bound multiple
+            # would be at most M - g, and no term rounding down by g/2 or
+            # less can reach it from above M. They collapse to one value
+            # and DedupRule.DROP_LATER_REPEATS keeps one.
+            #
+            # A rounding rule whose error can reach a full grain would
+            # break that, and would need more than one extra term.
             terms.append(following)
             return terms
         if len(terms) >= MAX_RESOLVED_WINDOWS:

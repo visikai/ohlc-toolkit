@@ -19,7 +19,9 @@ from ohlc_toolkit.schedules import (
     WindowSchedule,
     metallic_recurrence,
 )
+from ohlc_toolkit.schedules.generators import recurrence_values
 from ohlc_toolkit.schedules.lookback import (
+    PERIOD_UNITS,
     ExplicitLookbackSpec,
     LogSpacedLookbackSpec,
     LookbackSchedule,
@@ -71,16 +73,48 @@ def test_the_log_spaced_control_is_exactly_seven_fourteen_twenty_eight() -> None
 
 
 def test_only_one_term_past_the_bound_is_ever_generated() -> None:
-    """The extra term is one, not a run of them.
+    """Checked on the generated terms, not on what they resolve to.
 
-    Quantization is monotone, so a term far past the maximum rounds past
-    it too and resolution drops it. This pins that the generosity is
-    exactly one term: a maximum of 9 admits 8 and nothing above it, even
-    though 21.434 exists further along the recurrence.
+    A schedule cannot say this: extra terms past the bound are dropped by
+    resolution, so a generator emitting four of them resolves to the same
+    counts as one emitting one. The count above the maximum is the
+    property, so the count above the maximum is what is asserted.
     """
-    schedule = metallic_lookback(coefficient=_COEFFICIENT, seed=1, grain=1, maximum=9)
+    maximum = 9
+    terms = recurrence_values(
+        coefficient=_COEFFICIENT, seed=1, maximum=maximum, units=PERIOD_UNITS
+    )
 
-    assert schedule.periods == (1, 3, 8)
+    assert sum(1 for term in terms if term > maximum) == 1
+    assert metallic_lookback(
+        coefficient=_COEFFICIENT, seed=1, grain=1, maximum=maximum
+    ).periods == (1, 3, 8)
+
+
+def test_many_terms_past_the_bound_can_round_back_and_still_yield_one() -> None:
+    """Why one extra term is enough, stated as a case rather than a claim.
+
+    Monotonicity is NOT the reason, and believing it is would mislead
+    whoever adds a rounding rule next. Here 31 generated terms sit above
+    the maximum and round back inside it; every one lands on the SAME
+    multiple of the grain, because round-nearest moves a value by at most
+    half a grain and a second in-bound multiple would be a whole grain
+    further down. The dedup rule keeps one of them.
+    """
+    coefficient, seed, grain, maximum = 0.01, 100, 100, 300
+    terms = recurrence_values(
+        coefficient=coefficient, seed=seed, maximum=maximum, units=PERIOD_UNITS
+    )
+    rounded_back = {
+        (int(term) + grain // 2) // grain * grain
+        for term in terms
+        if term > maximum and (int(term) + grain // 2) // grain * grain <= maximum
+    }
+
+    assert len(rounded_back) == 1
+    assert metallic_lookback(
+        coefficient=coefficient, seed=seed, grain=grain, maximum=maximum
+    ).periods == (100, 200, 300)
 
 
 def test_a_lookback_and_a_window_schedule_over_the_same_numbers_differ() -> None:
@@ -185,6 +219,23 @@ def test_bounds_that_leave_nothing_are_refused_in_the_lookback_s_own_words() -> 
         )
 
     assert "s]" not in str(caught.value)
+
+
+def test_the_zero_quantize_refusal_speaks_in_periods_too() -> None:
+    """The other half of the shared resolver's prose.
+
+    Its sibling -- the bounds-left-nothing refusal -- is pinned above.
+    This one was not, and reverting its wording to duration prose left
+    the suite green. Both messages come from one function that is called
+    with two units; both need saying.
+    """
+    with pytest.raises(ConfigError, match="lookback") as caught:
+        metallic_lookback(coefficient=0.05, seed=1, grain=16, maximum=100)
+
+    message = str(caught.value)
+    assert "quantizes to 0" in message
+    assert "0s" not in message
+    assert "grain" in message
 
 
 def test_a_repeated_count_is_refused() -> None:

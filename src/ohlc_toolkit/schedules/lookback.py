@@ -25,7 +25,7 @@ than read as if the numbers meant the same thing.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import ClassVar, Protocol, Self, runtime_checkable
+from typing import ClassVar, Protocol, Self
 
 from ohlc_toolkit.config.logging import get_logger
 from ohlc_toolkit.schedules.generators import (
@@ -128,9 +128,13 @@ def periods_from_payload(value: object, *, label: str) -> tuple[int, ...]:
     return tuple(validated_period(member, label=label) for member in value)
 
 
-@runtime_checkable
 class LookbackSpec(Protocol):
-    """What every lookback generator's recorded parameters provide."""
+    """What every lookback generator's recorded parameters provide.
+
+    Both directions are declared, because the reader needs both: without
+    ``from_dict`` here, reconstructing a spec from a payload needs a
+    ``type: ignore`` at the one place the protocol exists to type.
+    """
 
     kind: ClassVar[GeneratorKind]
 
@@ -138,14 +142,19 @@ class LookbackSpec(Protocol):
         """Serialize these parameters to a JSON-compatible dict."""
         ...
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> Self:
+        """Reconstruct these parameters from their serialized form."""
+        ...
+
 
 @dataclass(frozen=True)
 class MetallicLookbackSpec:
     """The parameters of one metallic-recurrence lookback schedule.
 
-    The same recurrence the window schedule uses, in counts. ADR 006 §5's
-    list comes from a coefficient of ``sqrt(e + sqrt(5))`` seeded at 1
-    with a grain of 1: 1, 3, 8, 21, 56.
+    The same recurrence the window schedule uses, in counts. A
+    coefficient of ``sqrt(e + sqrt(5))`` seeded at 1 with a grain of 1
+    gives the ladder 1, 3, 8, 21, 56.
 
     Attributes:
         coefficient: The ``c`` in ``x[n+1] = c * x[n] + x[n-1]``.
@@ -234,8 +243,8 @@ class MetallicLookbackSpec:
 class LogSpacedLookbackSpec:
     """The parameters of one log-spaced lookback schedule.
 
-    ADR 006 §5's control comes from three points between 7 and 28, which
-    is a ratio of 2: 7, 14, 28.
+    A ladder wants something to be measured against. Three points between
+    7 and 28 -- a ratio of 2 -- give the control 7, 14, 28.
 
     Attributes:
         count: How many points, endpoints included.
@@ -499,7 +508,7 @@ class LookbackSchedule:
             data["parameters"], label="lookback parameters"
         )
         schedule = cls(
-            spec=_SPEC_TYPES[kind].from_dict(parameters),  # type: ignore[attr-defined]
+            spec=_SPEC_TYPES[kind].from_dict(parameters),
             periods=periods_from_payload(data["periods"], label="period"),
         )
         require_recorded_id(

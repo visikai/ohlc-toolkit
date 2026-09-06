@@ -23,6 +23,7 @@ from ohlc_toolkit.schedules import (
     log_spaced,
     metallic_recurrence,
 )
+from ohlc_toolkit.schedules.generators import DURATION_UNITS, recurrence_values
 from ohlc_toolkit.temporal import ConfigError, Duration
 
 _MINUTE_SECONDS = 60
@@ -899,9 +900,10 @@ def test_a_term_that_rounds_back_inside_the_maximum_is_kept() -> None:
     therefore produces the first term past the bound and lets resolution
     decide.
 
-    Measured when this changed: no schedule in this suite moved, and
-    neither did the named legacy schedule or the eleven-window schedule
-    of the one consumer that records a `schedule_id`.
+    One extra term is enough because of an error bound and dedup, not
+    because of monotonicity: many further terms CAN round back inside,
+    but round-nearest moves a value by at most half a grain, so they all
+    land on the same multiple and the dedup rule keeps one.
     """
     schedule = metallic_recurrence(
         coefficient=math.sqrt(math.e + math.sqrt(5)),
@@ -915,19 +917,24 @@ def test_a_term_that_rounds_back_inside_the_maximum_is_kept() -> None:
 
 
 def test_only_one_term_past_the_maximum_is_generated() -> None:
-    """The generosity is exactly one term, not an unbounded run.
+    """The generated list itself, not the schedule it resolves to.
 
-    Quantization is monotone, so anything further past the bound rounds
-    past it too and is dropped. A maximum of 9m admits 8m and stops.
+    Asserting on the resolved windows cannot say this: extra terms past
+    the bound are dropped by resolution, so a generator emitting four of
+    them produces the same schedule as one emitting one -- measured, a
+    mutant doing exactly that passed the whole suite. The count of terms
+    above the maximum is what has to be checked, and it is checked here
+    against the generator's own output.
     """
-    schedule = metallic_recurrence(
+    maximum_seconds = 9 * 60
+    terms = recurrence_values(
         coefficient=math.sqrt(math.e + math.sqrt(5)),
-        seed="1m",
-        grain="1m",
-        maximum="9m",
+        seed=60,
+        maximum=maximum_seconds,
+        units=DURATION_UNITS,
     )
 
-    assert [str(window) for window in schedule.windows] == ["1m", "3m", "8m"]
+    assert sum(1 for term in terms if term > maximum_seconds) == 1
 
 
 if __name__ == "__main__":

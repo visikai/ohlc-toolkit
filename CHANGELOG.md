@@ -128,10 +128,24 @@ recorded here because it is the reason the entries below are breaking.
   maximum of 21 is kept — it quantizes to exactly 21, which is inside the
   bound — where it was previously dropped for a value the schedule never
   uses. Every other bound in the resolver is already applied after
-  quantization; this was the one that was not. Measured: no schedule in
-  this repository's suite changes, and neither does the named legacy
-  schedule or the eleven-window schedule its one consumer records, so no
-  existing `schedule_id` moves.
+  quantization; the generation bound was not.
+  **This changes some existing schedule ids.** The rule, which is what
+  you need to tell whether you are affected: a generated schedule gains a
+  window when its `maximum` lands within half a grain of a generated
+  term, and the window it gains is always the `maximum` itself. Gaining a
+  window changes the content hash that names the schedule. A schedule
+  that previously resolved to nothing at all can now resolve to one
+  window, so a call that raised `ConfigError` can return.
+
+  Reproducible: `metallic_recurrence(coefficient=1.618, seed="1m",
+  grain="1m", maximum="5m")` resolved to `['1m', '3m']` before and
+  `['1m', '3m', '5m']` now.
+
+  Measured NOT to change: every schedule in this repository's suite, and
+  the eleven-window schedule of the one known consumer that records a
+  `schedule_id`. The named legacy schedule is unaffected structurally
+  rather than by measurement -- it is an `explicit` list and never passes
+  through this code at all.
 - **BREAKING: positional construction of `WindowQualityPolicy` and
   `QualityReport` changes.** `min_traded_seconds` is inserted between
   `min_coverage` and `gate_mode` rather than appended, so
