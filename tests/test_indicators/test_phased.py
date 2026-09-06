@@ -72,11 +72,25 @@ def _source_cadence_windows(
     Built with the engine rather than fabricated, so the fixture is the
     artifact the harness will really be handed.
     """
+    return _windows_at_cadence(
+        rows, window=window, cadence="1m", first_tick=first_tick, last_tick=last_tick
+    )
+
+
+def _windows_at_cadence(
+    rows: list[tuple], *, window: str, cadence: str, first_tick: int, last_tick: int
+) -> pl.DataFrame:
+    """Materialize `window` windows on a grid of `cadence`, whatever that is.
+
+    The same engine call, with the materialization cadence drawn out as a
+    knob: a frame at a cadence COARSER than the source is the thing the
+    harness has to refuse, and it cannot be fabricated honestly by hand.
+    """
     return compute_windows(
         frame_from_rows(rows),
         profile_for(_MINUTE),
         window=window,
-        emit_every="1m",
+        emit_every=cadence,
         materialization=ExplicitRange(start=first_tick, end=last_tick),
     )
 
@@ -802,6 +816,132 @@ def test_the_harness_agrees_with_the_oracle_where_the_grid_does_not_divide(
         check_column_order=True,
         check_row_order=True,
     )
+
+
+def test_a_frame_whose_cadence_does_not_divide_the_window_is_refused() -> None:
+    """The finding: the same window, served on one grid and refused on another.
+
+    `2h26m` on a `3m` grid passes every rule this harness had. The
+    cadence divides the `6m` emit step exactly, so the emit rule is
+    satisfied; every row spans `2h26m`, so the span rule is satisfied;
+    the emit grid sits on the frame's own phase, so the anchor rule is
+    satisfied. Only `t - kW` is unreachable, and the harness answered
+    that with a column of nulls end to end -- 0 non-null rows of 4,000
+    on the artifacts this was measured on, with nothing raised.
+
+    The emit step is deliberately NOT the window here. An emit step that
+    divided the window would make `t - kW` an emit tick and let the
+    existing rules stand in for the missing one, and the fixture would
+    prove nothing about this guard.
+    """
+    window, cadence, emit = "2h26m", "3m", "6m"
+    window_seconds = Duration.parse(window).total_seconds
+    cadence_seconds = Duration.parse(cadence).total_seconds
+    assert window_seconds % cadence_seconds != 0
+    assert Duration.parse(emit).total_seconds % cadence_seconds == 0
+
+    count = 2 * window_seconds // _MINUTE + 60
+    rows = _source_rows(count)
+    first = _BASE + -(-window_seconds // cadence_seconds) * cadence_seconds
+    last = _BASE + count * _MINUTE + 1
+    coarse = _windows_at_cadence(
+        rows, window=window, cadence=cadence, first_tick=first, last_tick=last
+    )
+
+    with pytest.raises(ConfigError, match="must divide the window"):
+        phased_lookback(coarse, window=window, emit_every=emit, lookback=2)
+
+
+def test_the_window_the_coarse_grid_cannot_serve_is_served_at_source_cadence() -> None:
+    """The other arm of the same finding, so the guard is not just a ban.
+
+    The refusal above must be a refusal of the FRAME, not of the window.
+    At source cadence the identical window and emit step are accepted and
+    carry real values, and the nulls they carry are exactly the warm-up
+    the reported effective history accounts for -- every tick that cannot
+    reach back `(L - 1) * W` to a row of the frame, and no other.
+    """
+    window, emit, lookback = "2h26m", "6m", 2
+    window_seconds = Duration.parse(window).total_seconds
+    count = lookback * window_seconds // _MINUTE + 60
+    first = _BASE + window_seconds
+    last = _BASE + count * _MINUTE + 1
+    frame = _source_cadence_windows(
+        _source_rows(count), window=window, first_tick=first, last_tick=last
+    )
+
+    result = phased_lookback(frame, window=window, emit_every=emit, lookback=lookback)
+
+    assert result.effective_history == Duration(lookback * window_seconds)
+    earliest = int(frame.get_column("close_time").min())  # type: ignore[arg-type]
+    warm_up = {
+        tick
+        for tick in result.grid.ticks
+        if tick - (lookback - 1) * window_seconds < earliest
+    }
+    served = result.frame.filter(pl.col("close").is_not_null())
+    assert warm_up
+    assert served.height == len(result.grid.ticks) - len(warm_up)
+    assert warm_up == {
+        int(tick)
+        for tick in result.frame.filter(pl.col("close").is_null())
+        .get_column("close_time")
+        .to_list()
+    }
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    cadence_minutes=st.integers(min_value=1, max_value=4),
+    window_minutes=st.integers(min_value=2, max_value=12),
+    emit_minutes=st.integers(min_value=1, max_value=6),
+)
+def test_a_resolved_grid_can_always_reach_every_phase_it_promises(
+    cadence_minutes: int, window_minutes: int, emit_minutes: int
+) -> None:
+    """Either the triple is refused, or every `t - kW` is a row of the frame.
+
+    Stated over the three cadences together because that is where the
+    hole was: each rule held on its own, and the combination they did not
+    cover -- a cadence dividing `E` but not `W` -- produced an accepted
+    grid whose every lookup missed. The assertion is not "some values are
+    non-null" alone; it re-derives each phase's address and requires the
+    frame to hold it, so a harness that answered with nulls for a
+    DIFFERENT reason could not pass by returning one lucky row.
+    """
+    lookback = 2
+    window = f"{window_minutes}m"
+    window_seconds = window_minutes * _MINUTE
+    cadence_seconds = cadence_minutes * _MINUTE
+    count = window_minutes * (lookback + 6)
+    first = _BASE + -(-window_seconds // cadence_seconds) * cadence_seconds
+    last = _BASE + count * _MINUTE + 1
+    frame = _windows_at_cadence(
+        _source_rows(count),
+        window=window,
+        cadence=f"{cadence_minutes}m",
+        first_tick=first,
+        last_tick=last,
+    )
+
+    try:
+        result = phased_lookback(
+            frame, window=window, emit_every=f"{emit_minutes}m", lookback=lookback
+        )
+    except ConfigError:
+        return
+
+    closes = set(frame.get_column("close_time").to_list())
+    earliest = min(closes)
+    assert result.frame.filter(pl.col("close").is_not_null()).height > 0
+    for tick in result.grid.ticks:
+        addresses = {tick - phase * window_seconds for phase in range(lookback)}
+        if min(addresses) < earliest:
+            # Warm-up. The address is BEFORE the frame, which is an
+            # absent row and a null; the property is about addresses that
+            # fall inside its range and still land between two rows.
+            continue
+        assert addresses <= closes
 
 
 class TestTheEmitTickGrid:

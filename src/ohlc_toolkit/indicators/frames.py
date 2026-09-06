@@ -131,8 +131,9 @@ def resolve_phased_grid(  # noqa: PLR0913 - one keyword per resolution input
         ConfigError: If ``lookback`` or ``min_traded_seconds`` is
             unusable, if the frame is missing a required column or is a
             schema v1 frame, if its ``close_time`` spacing is not a
-            single constant cadence, if any row's span is not ``W``, or
-            if ``E`` is not a whole multiple of that cadence.
+            single constant cadence, if any row's span is not ``W``, if
+            that cadence does not divide ``W``, or if ``E`` is not a
+            whole multiple of that cadence.
 
     """
     resolved_lookback = _validated_lookback(lookback)
@@ -144,6 +145,7 @@ def resolve_phased_grid(  # noqa: PLR0913 - one keyword per resolution input
     _require_columns(frame)
     cadence_seconds = _require_regular_grid(frame)
     _require_window_span(frame, window_seconds)
+    _require_cadence_divides_window(cadence_seconds, window_seconds)
 
     if emit_seconds % cadence_seconds:
         logger.warning(
@@ -331,6 +333,53 @@ def _require_window_span(frame: pl.DataFrame, window_seconds: int) -> None:
             f"Every row must span the stated window of {window_seconds}s; this "
             f"frame spans {bounded_echo(sorted(spans))}."
         )
+
+
+def _require_cadence_divides_window(cadence_seconds: int, window_seconds: int) -> None:
+    """Refuse a frame whose cadence cannot reach the phases of its own window.
+
+    Every phase is read at ``t - kW`` by exact equality, and ``t`` is a
+    row of the frame. Where the cadence does not divide ``W`` that
+    address falls between two rows for every ``k >= 1``, so every phase
+    but the zeroth misses, the all-or-nothing mask nulls the tick, and
+    the caller is handed a column that is null end to end -- the same
+    silent answer :func:`_require_ticks_on_the_grid` refuses an
+    out-of-phase anchor for, arrived at from the other side.
+
+    Refused whatever the lookback, though a lookback of 1 reads only
+    phase zero and cannot expose it: a recipe validated at 1 and then
+    raised to 2 would go from a wholly correct column to a wholly null
+    one, and the frame was the wrong frame at both. The emit rule cannot
+    stand in for this one either, since a cadence may divide ``E``
+    exactly and still not divide ``W``.
+
+    Raises:
+        ConfigError: If ``W`` is not a whole multiple of the cadence.
+
+    """
+    remainder = window_seconds % cadence_seconds
+    if not remainder:
+        return
+    logger.warning(
+        "Rejecting a {}s cadence that does not divide a {}s window.",
+        cadence_seconds,
+        window_seconds,
+    )
+    accepted = [
+        candidate
+        for candidate in (
+            window_seconds - remainder,
+            window_seconds - remainder + cadence_seconds,
+        )
+        if candidate > 0
+    ]
+    raise ConfigError(
+        f"The frame's {cadence_seconds}s cadence must divide the window of "
+        f"{window_seconds}s and leaves {remainder}s over, so every phase but the "
+        f"newest would be read at a time this frame has no row for. Materialize "
+        f"the frame at a cadence that divides {window_seconds}s, or state a window "
+        f"this cadence divides: {bounded_echo(accepted)}."
+    )
 
 
 def _require_ticks_on_the_grid(
