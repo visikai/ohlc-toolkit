@@ -22,6 +22,57 @@ recorded here because it is the reason the entries below are breaking.
 
 ### Added
 
+- **`indicators.FeatureIdentity`**, the record a feature column's name is
+  DERIVED from: `{indicator}_{family}{period}_w{window}`, as in
+  `rsi_p14_w21m`. A field that varies within a frame goes in the name; a
+  field constant across the artifact goes in the manifest. Deriving the
+  name rather than passing it beside the record means the two cannot
+  disagree -- there is nowhere for a second spelling to live. The name
+  parses back to the identity it came from, and refuses one it could not
+  have produced.
+  One exception to the varies/constant rule, made deliberately: the
+  family character is in the name even though an artifact carries one
+  family, so that shipping the dense family renames no phased column. A
+  rename breaks every consumer holding a stored frame.
+- **`indicators.NormalizationClass`**, three members: bounded by
+  construction, stationarized, empirically normalized. Carried by
+  `FeatureIdentity` as a required field and deliberately absent from the
+  column name: it does not vary between the columns of one feature, and
+  the rule above puts what varies in the name. A primitive declares its
+  class rather than having it inferred, because the answer follows from
+  how the number is built rather than from how one sample looks -- which
+  also means a reader parsing a stored column has to supply it from the
+  manifest that recorded it, and `FeatureIdentity.parse` takes it as a
+  keyword argument rather than inventing a default for the one field the
+  name cannot vouch for.
+- **`indicators.effective_history`** and **`indicators.effective_n`**.
+  The first is `L * W`. The second counts INDEPENDENT BLOCKS -- whole
+  non-overlapping windows in a range, divided by the lookback -- and is
+  explicitly not a statistical effective sample size, which accounts for
+  autocorrelation and is smaller. They carry different names because
+  reading one as the other overstates how much independent evidence a
+  feature has.
+- **`temporal.require_absent_columns`**, one guard against writing over a
+  column a frame already carries. It existed twice before, in
+  `returns.primitives` and `windows.annotations`, and the two copies had
+  already diverged: the annotations copy bounded what it echoed, the
+  returns copy did not. Only one of them needed to. The annotations copy
+  echoes a CALLER's prefix, of any length; the returns copy echoes names
+  this package composes from an enum member and a duration label, and the
+  longest such name is 60 characters even at the largest horizon Int64
+  seconds can express -- under the 80-character echo bound, and one of the
+  cases `temporal/echo.py` names as legitimately needing none. So the
+  drift was real and the exposure was not. What makes the bound necessary
+  is publishing the guard: its `names` argument is now a caller's, and
+  bounded at the one site. Three call sites in two modules, each keeping
+  its own remedy sentence -- the finding is shared, the advice about it is
+  not.
+  The guard refuses a bare `str` out loud rather than trusting the
+  annotation: a `str` IS a `Collection[str]`, so `require_absent_columns(
+  frame, "close", ...)` type-checks, iterates the characters, finds no
+  column named `c`, and lets the overwrite proceed.
+  The returns path's refusal text and log prefix changed to the shared
+  wording; the columns it names and the exception it raises did not.
 - **`ohlc_toolkit.indicators`**, a seventh subpackage, holding the phased
   lookback every indicator reads through: at each tick of the emit grid,
   the `L` non-overlapping windows of duration `W` ending at `t`, `t - W`,
