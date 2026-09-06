@@ -7,7 +7,7 @@ be worse than no rule.
 
 The scenarios that are not refusals are here too, because a boundary is
 defined as much by what it lets through: a frame carrying only the two
-columns this step reads, a frame carrying all nine the aggregator emits,
+columns this step reads, a frame carrying all ten the aggregator emits,
 a frame whose rows are not in time order, and a frame with null closes in
 it -- an absent observation is data, not a malformed input.
 """

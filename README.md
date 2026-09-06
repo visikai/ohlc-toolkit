@@ -128,17 +128,20 @@ print(
 ```text
 snapshot identity: 96e96cc32b313e4985a3d2d105e40ee528f8243bd2d1146a38f1b600f0bd3de1
 rows: 7714079 | seam mismatches: ()
-shape: (3, 9)
-┌────────────┬────────────┬──────────┬──────────┬───┬──────────┬───────────┬───────────┬───────────┐
-│ open_time  ┆ close_time ┆ open     ┆ high     ┆ … ┆ close    ┆ volume    ┆ src_count ┆ coverage_ │
-│ ---        ┆ ---        ┆ ---      ┆ ---      ┆   ┆ ---      ┆ ---       ┆ ---       ┆ seconds   │
-│ i64        ┆ i64        ┆ f64      ┆ f64      ┆   ┆ f64      ┆ f64       ┆ u32       ┆ ---       │
-│            ┆            ┆          ┆          ┆   ┆          ┆           ┆           ┆ i64       │
-╞════════════╪════════════╪══════════╪══════════╪═══╪══════════╪═══════════╪═══════════╪═══════════╡
-│ 1788215400 ┆ 1788219000 ┆ 78734.71 ┆ 78742.28 ┆ … ┆ 78554.24 ┆ 37.490404 ┆ 60        ┆ 3600      │
-│ 1788216300 ┆ 1788219900 ┆ 78642.61 ┆ 78642.61 ┆ … ┆ 78539.91 ┆ 34.778154 ┆ 60        ┆ 3600      │
-│ 1788217200 ┆ 1788220800 ┆ 78572.31 ┆ 78576.84 ┆ … ┆ 78571.17 ┆ 36.012591 ┆ 60        ┆ 3600      │
-└────────────┴────────────┴──────────┴──────────┴───┴──────────┴───────────┴───────────┴───────────┘
+shape: (3, 10)
+┌────────────┬───────────┬──────────┬──────────┬───┬───────────┬───────────┬───────────┬───────────┐
+│ open_time  ┆ close_tim ┆ open     ┆ high     ┆ … ┆ volume    ┆ src_count ┆ coverage_ ┆ traded_se │
+│ ---        ┆ e         ┆ ---      ┆ ---      ┆   ┆ ---       ┆ ---       ┆ seconds   ┆ conds     │
+│ i64        ┆ ---       ┆ f64      ┆ f64      ┆   ┆ f64       ┆ u32       ┆ ---       ┆ ---       │
+│            ┆ i64       ┆          ┆          ┆   ┆           ┆           ┆ i64       ┆ i64       │
+╞════════════╪═══════════╪══════════╪══════════╪═══╪═══════════╪═══════════╪═══════════╪═══════════╡
+│ 1788215400 ┆ 178821900 ┆ 78734.71 ┆ 78742.28 ┆ … ┆ 37.490404 ┆ 60        ┆ 3600      ┆ 3600      │
+│            ┆ 0         ┆          ┆          ┆   ┆           ┆           ┆           ┆           │
+│ 1788216300 ┆ 178821990 ┆ 78642.61 ┆ 78642.61 ┆ … ┆ 34.778154 ┆ 60        ┆ 3600      ┆ 3600      │
+│            ┆ 0         ┆          ┆          ┆   ┆           ┆           ┆           ┆           │
+│ 1788217200 ┆ 178822080 ┆ 78572.31 ┆ 78576.84 ┆ … ┆ 36.012591 ┆ 60        ┆ 3600      ┆ 3600      │
+│            ┆ 0         ┆          ┆          ┆   ┆           ┆           ┆           ┆           │
+└────────────┴───────────┴──────────┴──────────┴───┴───────────┴───────────┴───────────┴───────────┘
 shape: (3, 4)
 ┌────────────┬────────────────────────┬───────────────────────┬─────────────────────────────────┐
 │ close_time ┆ backward_return_log_4h ┆ forward_return_log_4h ┆ forward_return_log_4h_availabl… │
@@ -234,8 +237,13 @@ of them instead.
 each row aggregating the candles whose intervals fall inside the window
 ending at that tick. Membership is decided by close time, never by
 counting rows, so a gap in the source changes the window's reported
-coverage rather than silently changing what it spans. Nine columns come
-back: `open_time`, `close_time`, OHLCV, `src_count`, `coverage_seconds`.
+coverage rather than silently changing what it spans. Ten columns come
+back: `open_time`, `close_time`, OHLCV, `src_count`, `coverage_seconds`,
+`traded_seconds`. The last two measure different things: coverage is how
+much of the window the source had rows for, `traded_seconds` how much of
+it those rows traded in. On a complete grid coverage is full everywhere
+and a dead window looks exactly like a busy one without the second
+number.
 
 `compute_reference_windows` computes the same thing the plainest possible
 way — quadratic, on purpose. On valid input it is the specification and

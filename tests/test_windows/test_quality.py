@@ -3,7 +3,7 @@
 Every scenario here starts from a genuinely engine-produced window frame
 -- built with :func:`~ohlc_toolkit.windows.engine.compute_windows` over
 the same hand-written factories the rest of ``tests/test_windows`` uses
--- rather than a hand-crafted nine-column frame, so these tests exercise
+-- rather than a hand-crafted ten-column frame, so these tests exercise
 the real output shape the policy composes after.
 """
 
