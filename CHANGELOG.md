@@ -298,7 +298,10 @@ consumer is cheap now and expensive later.
   either infinity in a declared price or volume column. It is kept distinct
   from `NULL_VALUES` because a null is an absent cell and a NaN is a present
   cell that is not a number, and nothing is coerced: making a NaN into a null
-  is a repair this validator does not perform.
+  is a repair this validator does not perform. The member is inserted
+  mid-order rather than appended; `FindingKind` is a plain `Enum` with
+  string values, so nothing depends on member position and the values
+  themselves are unchanged.
 
 ### Fixed
 
