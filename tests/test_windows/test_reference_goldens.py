@@ -68,11 +68,11 @@ def test_aligned_tiling_emits_one_row_per_tile() -> None:
         expected_frame(
             [
                 # [0, 180): candles opening at 0, 60, 120.
-                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180),
+                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180, 180),
                 # [180, 360): candles opening at 180, 240, 300.
-                (180, 360, 103.0, 115.0, 93.0, 110.0, 56.0, 3, 180),
+                (180, 360, 103.0, 115.0, 93.0, 110.0, 56.0, 3, 180, 180),
                 # [360, 540): no candle opens at or after 360.
-                (360, 540, None, None, None, None, None, 0, 0),
+                (360, 540, None, None, None, None, None, 0, 0, 0),
             ]
         ),
         check_dtypes=True,
@@ -96,13 +96,13 @@ def test_overlapping_windows_emit_every_minute_over_a_three_minute_window() -> N
         expected_frame(
             [
                 # [0, 180): candles opening at 0, 60, 120.
-                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180),
+                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180, 180),
                 # [60, 240): candles opening at 60, 120, 180.
-                (60, 240, 101.0, 113.0, 91.0, 108.0, 14.0, 3, 180),
+                (60, 240, 101.0, 113.0, 91.0, 108.0, 14.0, 3, 180, 180),
                 # [120, 300): candles opening at 120, 180, 240.
-                (120, 300, 102.0, 114.0, 92.0, 109.0, 28.0, 3, 180),
+                (120, 300, 102.0, 114.0, 92.0, 109.0, 28.0, 3, 180, 180),
                 # [180, 360): candles opening at 180, 240, 300.
-                (180, 360, 103.0, 115.0, 93.0, 110.0, 56.0, 3, 180),
+                (180, 360, 103.0, 115.0, 93.0, 110.0, 56.0, 3, 180, 180),
             ]
         ),
         check_dtypes=True,
@@ -131,9 +131,9 @@ def test_nonzero_anchor_shifts_the_emit_grid_off_the_round_boundaries() -> None:
         expected_frame(
             [
                 # [120, 240): candles opening at 120 and 180.
-                (120, 240, 102.0, 113.0, 92.0, 108.0, 12.0, 2, 120),
+                (120, 240, 102.0, 113.0, 92.0, 108.0, 12.0, 2, 120, 120),
                 # [300, 420): only the candle opening at 300 exists.
-                (300, 420, 105.0, 115.0, 95.0, 110.0, 32.0, 1, 60),
+                (300, 420, 105.0, 115.0, 95.0, 110.0, 32.0, 1, 60, 60),
             ]
         ),
         check_dtypes=True,
@@ -183,11 +183,11 @@ def test_one_second_cadence_aggregates_second_level_candles() -> None:
         expected_frame(
             [
                 # [0, 3): candles opening at 0, 1, 2.
-                (0, 3, 10.0, 22.0, 5.0, 17.0, 6.0, 3, 3),
+                (0, 3, 10.0, 22.0, 5.0, 17.0, 6.0, 3, 3, 3),
                 # [1, 4): candles opening at 1, 2, 3.
-                (1, 4, 11.0, 23.0, 6.0, 18.0, 9.0, 3, 3),
+                (1, 4, 11.0, 23.0, 6.0, 18.0, 9.0, 3, 3, 3),
                 # [2, 5): candles opening at 2, 3, 4.
-                (2, 5, 12.0, 24.0, 7.0, 19.0, 12.0, 3, 3),
+                (2, 5, 12.0, 24.0, 7.0, 19.0, 12.0, 3, 3, 3),
             ]
         ),
         check_dtypes=True,
@@ -222,7 +222,7 @@ def test_window_spanning_a_gap_reports_partial_coverage() -> None:
             [
                 # [0, 240): candles opening at 0, 60, and 180; the candle
                 # opening at 240 closes at 300, past the window's end.
-                (0, 240, 100.0, 113.0, 90.0, 108.0, 11.0, 3, 180),
+                (0, 240, 100.0, 113.0, 90.0, 108.0, 11.0, 3, 180, 180),
             ]
         ),
         check_dtypes=True,
@@ -246,7 +246,7 @@ def test_candle_closing_exactly_at_the_emit_time_is_included() -> None:
         expected_frame(
             [
                 # [0, 60): the candle opening at 0 closes exactly at t=60.
-                (0, 60, 100.0, 110.0, 90.0, 105.0, 1.0, 1, 60),
+                (0, 60, 100.0, 110.0, 90.0, 105.0, 1.0, 1, 60, 60),
             ]
         ),
         check_dtypes=True,
@@ -284,7 +284,7 @@ def test_candle_straddling_the_window_open_is_excluded_whole() -> None:
         expected_frame(
             [
                 # [60, 180): candles opening at 60 and 120 only.
-                (60, 180, 102.0, 113.0, 92.0, 108.0, 12.0, 2, 120),
+                (60, 180, 102.0, 113.0, 92.0, 108.0, 12.0, 2, 120, 120),
             ]
         ),
         check_dtypes=True,
@@ -318,7 +318,7 @@ def test_candle_straddling_the_emit_time_is_excluded_whole() -> None:
         expected_frame(
             [
                 # [0, 180): candles opening at 0 and 60 only.
-                (0, 180, 100.0, 111.0, 90.0, 106.0, 3.0, 2, 120),
+                (0, 180, 100.0, 111.0, 90.0, 106.0, 3.0, 2, 120, 120),
             ]
         ),
         check_dtypes=True,
@@ -393,6 +393,7 @@ def test_overlapping_candles_report_coverage_above_the_window_unclamped() -> Non
                     31.0,
                     5,
                     300,
+                    300,
                 ),
             ]
         ),
@@ -420,18 +421,18 @@ def test_explicit_range_emits_empty_rows_before_and_after_all_data() -> None:
         result,
         expected_frame(
             [
-                (0, 60, None, None, None, None, None, 0, 0),
-                (60, 120, None, None, None, None, None, 0, 0),
-                (120, 180, None, None, None, None, None, 0, 0),
-                (180, 240, None, None, None, None, None, 0, 0),
+                (0, 60, None, None, None, None, None, 0, 0, 0),
+                (60, 120, None, None, None, None, None, 0, 0, 0),
+                (120, 180, None, None, None, None, None, 0, 0, 0),
+                (180, 240, None, None, None, None, None, 0, 0, 0),
                 # [240, 300): the candle opening at 300 closes at 360, so
                 # it is not knowable at t=300.
-                (240, 300, None, None, None, None, None, 0, 0),
-                (300, 360, 100.0, 110.0, 90.0, 105.0, 1.0, 1, 60),
-                (360, 420, 101.0, 111.0, 91.0, 106.0, 2.0, 1, 60),
-                (420, 480, None, None, None, None, None, 0, 0),
-                (480, 540, None, None, None, None, None, 0, 0),
-                (540, 600, None, None, None, None, None, 0, 0),
+                (240, 300, None, None, None, None, None, 0, 0, 0),
+                (300, 360, 100.0, 110.0, 90.0, 105.0, 1.0, 1, 60, 60),
+                (360, 420, 101.0, 111.0, 91.0, 106.0, 2.0, 1, 60, 60),
+                (420, 480, None, None, None, None, None, 0, 0, 0),
+                (480, 540, None, None, None, None, None, 0, 0, 0),
+                (540, 600, None, None, None, None, None, 0, 0, 0),
             ]
         ),
         check_dtypes=True,
@@ -459,10 +460,10 @@ def test_skip_warmup_starts_at_the_first_fully_covered_tick() -> None:
         result,
         expected_frame(
             [
-                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180),
-                (60, 240, 101.0, 113.0, 91.0, 108.0, 14.0, 3, 180),
-                (120, 300, 102.0, 114.0, 92.0, 109.0, 28.0, 3, 180),
-                (180, 360, 103.0, 115.0, 93.0, 110.0, 56.0, 3, 180),
+                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180, 180),
+                (60, 240, 101.0, 113.0, 91.0, 108.0, 14.0, 3, 180, 180),
+                (120, 300, 102.0, 114.0, 92.0, 109.0, 28.0, 3, 180, 180),
+                (180, 360, 103.0, 115.0, 93.0, 110.0, 56.0, 3, 180, 180),
             ]
         ),
         check_dtypes=True,
@@ -498,15 +499,15 @@ def test_skip_warmup_accepts_a_later_gap_after_the_first_covered_tick() -> None:
         expected_frame(
             [
                 # [0, 120): candles opening at 0 and 60; fully covered.
-                (0, 120, 100.0, 111.0, 90.0, 106.0, 3.0, 2, 120),
+                (0, 120, 100.0, 111.0, 90.0, 106.0, 3.0, 2, 120, 120),
                 # [60, 180): only the candle opening at 60 survives.
-                (60, 180, 101.0, 111.0, 91.0, 106.0, 2.0, 1, 60),
+                (60, 180, 101.0, 111.0, 91.0, 106.0, 2.0, 1, 60, 60),
                 # [120, 240): only the candle opening at 180.
-                (120, 240, 103.0, 113.0, 93.0, 108.0, 8.0, 1, 60),
+                (120, 240, 103.0, 113.0, 93.0, 108.0, 8.0, 1, 60, 60),
                 # [180, 300): candles opening at 180 and 240.
-                (180, 300, 103.0, 114.0, 93.0, 109.0, 24.0, 2, 120),
+                (180, 300, 103.0, 114.0, 93.0, 109.0, 24.0, 2, 120, 120),
                 # [240, 360): candles opening at 240 and 300.
-                (240, 360, 104.0, 115.0, 94.0, 110.0, 48.0, 2, 120),
+                (240, 360, 104.0, 115.0, 94.0, 110.0, 48.0, 2, 120, 120),
             ]
         ),
         check_dtypes=True,
@@ -535,7 +536,60 @@ def test_skip_warmup_accepts_the_plain_rule_name_as_a_string() -> None:
     assert_frame_equal(by_string, by_enum)
 
 
-def test_output_schema_is_exactly_the_nine_declared_columns() -> None:
+def test_traded_seconds_follows_volume_and_never_flatness() -> None:
+    """A flat candle that traded is traded; a moving-price fixture is not needed.
+
+    Six candles, all at one price. The first three carry volume and the
+    last three carry none, which is what an outage looks like on a
+    complete-by-construction minute grid: a flat zero-volume row, not a
+    missing one. The two windows therefore report the SAME
+    ``coverage_seconds`` and different ``traded_seconds``, which is the
+    whole reason the second column exists -- nothing in the first nine can
+    tell a dead window from a quiet one.
+
+    The predicate is volume, never ``high != low``. On the public
+    one-minute grid 13.71% of traded minutes trade at a single price, so a
+    flatness test would discard them; this fixture is what fails if the
+    predicate ever drifts to flatness, because under flatness the first
+    window would report zero too.
+    """
+    rows: tuple[SourceRow, ...] = (
+        (0, 100.0, 100.0, 100.0, 100.0, 1.0),
+        (60, 100.0, 100.0, 100.0, 100.0, 2.0),
+        (120, 100.0, 100.0, 100.0, 100.0, 4.0),
+        (180, 100.0, 100.0, 100.0, 100.0, 0.0),
+        (240, 100.0, 100.0, 100.0, 100.0, 0.0),
+        (300, 100.0, 100.0, 100.0, 100.0, 0.0),
+    )
+    result = compute_reference_windows(
+        frame_from_rows(rows),
+        profile_for(60),
+        window="3m",
+        emit_every="3m",
+        materialization=ExplicitRange(start=180, end=541),
+    )
+
+    assert_frame_equal(
+        result,
+        expected_frame(
+            [
+                # Flat prices, real volume: fully covered AND fully traded.
+                (0, 180, 100.0, 100.0, 100.0, 100.0, 7.0, 3, 180, 180),
+                # Same coverage, no trades. Volume is 0.0 and not null --
+                # three candles were observed, and each reported zero.
+                (180, 360, 100.0, 100.0, 100.0, 100.0, 0.0, 3, 180, 0),
+                # No candles at all: null prices, and zero for both
+                # durations, which is a different fact from the row above.
+                (360, 540, None, None, None, None, None, 0, 0, 0),
+            ]
+        ),
+        check_dtypes=True,
+        check_column_order=True,
+        check_row_order=True,
+    )
+
+
+def test_output_schema_is_exactly_the_ten_declared_columns() -> None:
     """The output columns, their order, and their dtypes are a fixed contract."""
     result = compute_reference_windows(
         frame_from_rows(_SIX_MINUTE_CANDLES),
@@ -555,6 +609,7 @@ def test_output_schema_is_exactly_the_nine_declared_columns() -> None:
         "volume",
         "src_count",
         "coverage_seconds",
+        "traded_seconds",
     ]
     assert result.dtypes == [
         pl.Int64,
@@ -565,6 +620,7 @@ def test_output_schema_is_exactly_the_nine_declared_columns() -> None:
         pl.Float64,
         pl.Float64,
         pl.UInt32,
+        pl.Int64,
         pl.Int64,
     ]
     # The ambiguous name the output contract deliberately refuses to use.
@@ -599,7 +655,7 @@ def test_open_and_close_come_from_the_extreme_open_times_not_the_end_rows() -> N
             [
                 # [0, 180): open from the candle opening at 0, close from
                 # the candle opening at 120.
-                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180),
+                (0, 180, 100.0, 112.0, 90.0, 107.0, 7.0, 3, 180, 180),
             ]
         ),
         check_dtypes=True,
@@ -629,6 +685,7 @@ def test_empty_tick_range_still_returns_the_declared_schema() -> None:
         "volume",
         "src_count",
         "coverage_seconds",
+        "traded_seconds",
     ]
 
 
@@ -646,9 +703,9 @@ def test_an_empty_source_frame_emits_every_tick_as_an_empty_window() -> None:
         result,
         expected_frame(
             [
-                (0, 60, None, None, None, None, None, 0, 0),
-                (60, 120, None, None, None, None, None, 0, 0),
-                (120, 180, None, None, None, None, None, 0, 0),
+                (0, 60, None, None, None, None, None, 0, 0, 0),
+                (60, 120, None, None, None, None, None, 0, 0, 0),
+                (120, 180, None, None, None, None, None, 0, 0, 0),
             ]
         ),
         check_dtypes=True,

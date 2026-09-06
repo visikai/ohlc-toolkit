@@ -134,6 +134,7 @@ class _WindowRow:
     volume: float | None
     src_count: int
     coverage_seconds: int
+    traded_seconds: int
 
 
 def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
@@ -191,7 +192,7 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
     included when ``open_time >= t - W`` and ``close_time <= t``, and is
     otherwise excluded whole.
 
-    The output has exactly nine columns, in this order:
+    The output has exactly ten columns, in this order:
 
     - ``open_time`` (Int64): ``t - W``.
     - ``close_time`` (Int64): ``t``, the emit time. This is the canonical
@@ -206,12 +207,27 @@ def compute_reference_windows(  # noqa: PLR0913 - one keyword per schedule knob
     - ``src_count`` (UInt32): how many candles were included.
     - ``coverage_seconds`` (Int64): the sum, over the included candles,
       of ``close_time - open_time``.
+    - ``traded_seconds`` (Int64): the same sum, over the included candles
+      whose ``volume`` is greater than zero. A duration rather than a
+      count, for the same reason coverage is: a source may mix
+      resolutions, and durations stay comparable where counts do not.
+      ``traded_seconds <= coverage_seconds`` always, since the traded
+      candles are a subset of the included ones.
+
+      The predicate is volume, never ``high != low``. A candle can trade
+      repeatedly at one price -- on the public one-minute grid 13.71% of
+      traded minutes do -- and a flatness test would report every one of
+      them as untraded.
 
     A tick that includes no candle still emits its row: all five
-    price/volume columns are null, ``src_count`` is 0, and
-    ``coverage_seconds`` is 0. The null volume is deliberate -- the
-    absence of source data is a different observation from a real
-    zero-volume candle, and writing 0.0 would erase that difference.
+    price/volume columns are null, ``src_count`` is 0, and both
+    ``coverage_seconds`` and ``traded_seconds`` are 0. The null volume is
+    deliberate -- the absence of source data is a different observation
+    from a real zero-volume candle, and writing 0.0 would erase that
+    difference. The two zeros are also different facts from each other:
+    an untraded window that WAS covered reports ``coverage_seconds`` of a
+    full window and ``traded_seconds`` of 0, and nothing in the first nine
+    columns could tell it from this one.
 
     Aligned windows are not a separate mode: they are ``emit_every`` equal
     to ``window``, with whatever anchor the caller recorded.
@@ -364,6 +380,7 @@ def _compute_window_row(
             volume=None,
             src_count=0,
             coverage_seconds=0,
+            traded_seconds=0,
         )
 
     earliest = included[0]
@@ -376,6 +393,7 @@ def _compute_window_row(
     # explanation.
     volume = 0.0
     coverage = 0
+    traded = 0
     for candle in included:
         if candle.open_time < earliest.open_time:
             earliest = candle
@@ -385,6 +403,12 @@ def _compute_window_row(
         low = min(low, candle.low)
         volume += candle.volume
         coverage += candle.close_time - candle.open_time
+        # The predicate is volume, never `high != low`. A candle can trade
+        # repeatedly at one price -- on the Bitstamp minute grid 13.71% of
+        # traded minutes do -- and a flatness test would call every one of
+        # them dead.
+        if candle.volume > 0:
+            traded += candle.close_time - candle.open_time
 
     return _WindowRow(
         open_time=window_open,
@@ -396,6 +420,7 @@ def _compute_window_row(
         volume=volume,
         src_count=len(included),
         coverage_seconds=coverage,
+        traded_seconds=traded,
     )
 
 
@@ -535,7 +560,7 @@ def _log_brute_force_cost(candle_count: int, tick_count: int) -> None:
 
 
 def _build_output_frame(rows: Sequence[_WindowRow]) -> pl.DataFrame:
-    """Assemble the nine output columns, with their names, dtypes, and order.
+    """Assemble the ten output columns, with their names, dtypes, and order.
 
     The columns are built as explicitly typed series rather than inferred
     from the data, so an all-null or empty result carries exactly the same
@@ -554,6 +579,11 @@ def _build_output_frame(rows: Sequence[_WindowRow]) -> pl.DataFrame:
             pl.Series(
                 "coverage_seconds",
                 [row.coverage_seconds for row in rows],
+                dtype=pl.Int64,
+            ),
+            pl.Series(
+                "traded_seconds",
+                [row.traded_seconds for row in rows],
                 dtype=pl.Int64,
             ),
         ]

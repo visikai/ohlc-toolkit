@@ -101,6 +101,7 @@ _SCHEDULES_BY_FAMILY: dict[str, tuple[tuple[str, str, str], ...]] = {
     "complete_grid_1m": _MINUTE_SCHEDULES,
     "single_gap_1m": _MINUTE_SCHEDULES,
     "multi_gap_1m": _MINUTE_SCHEDULES,
+    "untraded_run_1m": _MINUTE_SCHEDULES,
     "straddling_1m": _MINUTE_SCHEDULES,
     "complete_grid_1s": _SECOND_SCHEDULES,
     "phased_grid_1m": _PHASED_SCHEDULES,
@@ -327,19 +328,19 @@ _TIED_OPEN_TIME_ROWS: tuple[SourceRow, ...] = (
 # comparison stays exact.
 _TIED_OPEN_TIME_WINDOWS: tuple[WindowRow, ...] = (
     # Nothing has closed yet by t = 0.
-    (-120, 0, None, None, None, None, None, 0, 0),
+    (-120, 0, None, None, None, None, None, 0, 0, 0),
     # Only the first candle: [0, 60) closes at 60, inside [-60, 60).
-    (-60, 60, 100.0, 110.0, 90.0, 101.0, 1.0, 1, 60),
+    (-60, 60, 100.0, 110.0, 90.0, 101.0, 1.0, 1, 60, 60),
     # [0, 120) holds all three of the first three rows. The latest open
     # time is 60, shared by two rows, so ``close`` is the earlier row's
     # 201.0 -- not 301.0, which is the last row of the slice.
-    (0, 120, 100.0, 310.0, 90.0, 201.0, 7.0, 3, 180),
+    (0, 120, 100.0, 310.0, 90.0, 201.0, 7.0, 3, 180, 180),
     # [60, 180) drops the first row and gains the fourth. The earliest
     # open time is now the tied one, so ``open`` is the earlier row's
     # 200.0 -- the same tie, read from the other end.
-    (60, 180, 200.0, 410.0, 190.0, 401.0, 14.0, 3, 180),
+    (60, 180, 200.0, 410.0, 190.0, 401.0, 14.0, 3, 180, 180),
     # [120, 240) holds the fourth row alone.
-    (120, 240, 400.0, 410.0, 390.0, 401.0, 8.0, 1, 60),
+    (120, 240, 400.0, 410.0, 390.0, 401.0, 8.0, 1, 60, 60),
 )
 
 
@@ -587,6 +588,7 @@ def test_a_non_finite_price_makes_the_two_disagree_and_neither_is_right() -> Non
         "volume",
         "src_count",
         "coverage_seconds",
+        "traded_seconds",
     ):
         assert _same_values(
             engine.get_column(column).to_list(), oracle.get_column(column).to_list()

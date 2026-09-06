@@ -22,9 +22,12 @@ RAW_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 SourceRow = tuple[int, float, float, float, float, float]
 
 # (open_time, close_time, open, high, low, close, volume, src_count,
-#  coverage_seconds) -- the nine output columns, in order. The five
-# price/volume entries are None exactly when a window included no
-# candles.
+#  coverage_seconds, traded_seconds) -- the ten output columns, in order.
+# The five price/volume entries are None exactly when a window included no
+# candles. `traded_seconds` is written out even where it equals
+# `coverage_seconds`, which it does whenever every included candle traded,
+# because the two are separate measurements and a golden that omitted one
+# would stop pinning it.
 WindowRow = tuple[
     int,
     int,
@@ -33,6 +36,7 @@ WindowRow = tuple[
     float | None,
     float | None,
     float | None,
+    int,
     int,
     int,
 ]
@@ -106,7 +110,7 @@ def expected_frame(rows: Sequence[WindowRow]) -> pl.DataFrame:
             expected order.
 
     Returns:
-        A nine-column polars DataFrame with the exact expected schema.
+        A ten-column polars DataFrame with the exact expected schema.
 
     """
     return pl.DataFrame(
@@ -120,5 +124,6 @@ def expected_frame(rows: Sequence[WindowRow]) -> pl.DataFrame:
             pl.Series("volume", [row[6] for row in rows], dtype=pl.Float64),
             pl.Series("src_count", [row[7] for row in rows], dtype=pl.UInt32),
             pl.Series("coverage_seconds", [row[8] for row in rows], dtype=pl.Int64),
+            pl.Series("traded_seconds", [row[9] for row in rows], dtype=pl.Int64),
         ]
     )

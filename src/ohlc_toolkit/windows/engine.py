@@ -265,7 +265,7 @@ def compute_windows(  # noqa: PLR0913 - one keyword per schedule knob
     This is the production counterpart to
     :func:`~ohlc_toolkit.windows.reference.compute_reference_windows`. The
     parameter list, the window rule, the emit grid, the materialization
-    semantics, the nine output columns and every resolution-time refusal
+    semantics, the ten output columns and every resolution-time refusal
     are the same; only the cost differs. Read that function's docstring
     for the contract -- it is the normative one, and this module is tested
     against it rather than restating it.
@@ -317,10 +317,10 @@ def compute_windows(  # noqa: PLR0913 - one keyword per schedule knob
             (or its name, ``"skip_warmup"``).
 
     Returns:
-        A nine-column window frame -- ``open_time``, ``close_time``,
+        A ten-column window frame -- ``open_time``, ``close_time``,
         ``open``, ``high``, ``low``, ``close``, ``volume``, ``src_count``,
-        ``coverage_seconds`` -- with one row per emit tick, ordered by
-        ascending ``close_time``.
+        ``coverage_seconds``, ``traded_seconds`` -- with one row per emit
+        tick, ordered by ascending ``close_time``.
 
     Raises:
         ConfigError: Under exactly the conditions the oracle raises it:
@@ -649,10 +649,29 @@ def _window_volumes(
     )
 
 
+def _traded_counts(
+    candles: _SortedCandles, lower: pl.Series, upper: pl.Series
+) -> pl.Series:
+    """Count each window's included candles that traded.
+
+    A prefix sum, where ``_window_volumes`` sums a slice per window: this
+    is an integer count, so a difference of prefixes is exact and there is
+    no addition order that has to be preserved for it.
+
+    A null or a NaN volume is not a trade. The fill is what says so,
+    rather than leaving the answer to whatever a comparison against null
+    happens to propagate -- and it fails in the direction that reports
+    less trading, never more.
+    """
+    traded = (candles.volume > 0).fill_null(value=False).cast(pl.Int64)
+    prefix = pl.concat([pl.Series("traded", [0], dtype=pl.Int64), traded.cum_sum()])
+    return (prefix.gather(upper) - prefix.gather(lower)).rename("traded_count")
+
+
 def _build_output_frame(
     candles: _SortedCandles, ticks: pl.Series, schedule: ResolvedSchedule
 ) -> pl.DataFrame:
-    """Assemble the nine output columns, with their names, dtypes, and order.
+    """Assemble the ten output columns, with their names, dtypes, and order.
 
     Every column is computed for every tick and then masked: a tick whose
     window held no candle reports null prices and a null volume, never a
@@ -673,6 +692,7 @@ def _build_output_frame(
             extremes.get_column("low"),
             close_price.rename("close"),
             _window_volumes(candles, lower, upper),
+            _traded_counts(candles, lower, upper),
         ]
     )
 
@@ -698,4 +718,10 @@ def _build_output_frame(
         (pl.col("src_count") * candles.cadence_seconds)
         .cast(pl.Int64)
         .alias("coverage_seconds"),
+        # Same arithmetic, over the included candles that traded rather
+        # than over all of them. `traded_seconds <= coverage_seconds`
+        # holds because the count it multiplies is a subset's.
+        (pl.col("traded_count") * candles.cadence_seconds)
+        .cast(pl.Int64)
+        .alias("traded_seconds"),
     )
