@@ -13,6 +13,8 @@ fixture prices, compared with no tolerance, as in
 """
 
 import math
+import re
+from collections.abc import Callable
 
 import polars as pl
 import pytest
@@ -53,8 +55,15 @@ _ROW0_MFE = 1.5  # 320 / 128 - 1, the high at t=120
 _ROW0_MAE = 0.0  # 128 / 128 - 1, the low at t=60
 _ROW3_MFE = 0.4  # 112 /  80 - 1, the high at t=240
 _ROW3_MAE = -0.8  #  16 /  80 - 1, the low at t=300, the interval's last bar
-_CARRIED_ROW0_MFE = 0.25  # 160 / 128 - 1, with the bar at t=120 carried
-_CARRIED_ROW0_MAE = 0.0  # 128 / 128 - 1
+# The carried bar IS the favorable extremum of row 0's interval, which is
+# what makes the two readings of it give different numbers. Included as it
+# stands, the highest high over (t=60, t=120) is the carried 128 and the
+# mfe is 0.0. Skipped, the only high left is 64 and the mfe is -0.5. A
+# fixture where the carried bar is neither extremum cannot tell those
+# apart: both readings take their answer from the other bar.
+_CARRIED_ROW0_MFE = 0.0  # 128 / 128 - 1, the carried bar's own high
+_CARRIED_ROW0_MFE_IF_SKIPPED = -0.5  # 64 / 128 - 1, the bar past it
+_CARRIED_ROW0_MAE = -0.5  # 64 / 128 - 1
 _GAPPED_ROW0_MFE = -0.5  # 64 / 128 - 1: the best the interval reached
 _GAPPED_ROW0_MAE = -0.875  # 16 / 128 - 1
 
@@ -100,20 +109,41 @@ def _oracle(
         incomplete = len(bars) < rows or any(
             high is None or low is None for high, low in bars
         )
-        if incomplete or close is None or close == 0:
+        if incomplete or close is None:
             mfe.append(None)
             mae.append(None)
             continue
         best = max(high for high, _ in bars if high is not None)
         worst = min(low for _, low in bars if low is not None)
-        pair = (best / close, worst / close)
-        values = [
-            ratio - 1 if method is ReturnMethod.SIMPLE else math.log(ratio)
-            for ratio in pair
-        ]
-        mfe.append(values[0] if math.isfinite(values[0]) else None)
-        mae.append(values[1] if math.isfinite(values[1]) else None)
+        mfe.append(_stated(best, close, method))
+        mae.append(_stated(worst, close, method))
     return mfe, mae
+
+
+def _stated(extremum: float, close: float, method: ReturnMethod) -> float | None:
+    """Return the value the definition states, or ``None`` where it states none.
+
+    Derived from the arithmetic failing to produce a finite number, not
+    from a list of named cases: a zero close comes back ``None`` because
+    dividing by it is not finite, not because ``close == 0`` was written
+    down. An oracle that names the implementation's special cases is
+    drifting toward restating the implementation.
+
+    Args:
+        extremum: The highest high or lowest low over the interval.
+        close: The close at ``t``.
+        method: Which formula to apply.
+
+    Returns:
+        The finite value, or ``None``.
+
+    """
+    try:
+        ratio = extremum / close
+        value = ratio - 1 if method is ReturnMethod.SIMPLE else math.log(ratio)
+    except (ZeroDivisionError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
 
 
 @pytest.mark.parametrize("method", list(ReturnMethod))
@@ -206,15 +236,18 @@ def test_the_excursion_twin_does_not_collide_with_the_return_twin() -> None:
 
 def test_an_untraded_bar_inside_the_interval_is_read_as_it_stands() -> None:
     """Include a carried bar rather than skipping or nulling it."""
-    # A bar with volume 0 carries the previous close into every price. Here
-    # the bar at t=120 is replaced by a carried one at 160.0, which is
-    # neither the highest high nor the lowest low of the interval, so the
-    # extremes are unchanged and no column goes null.
+    # A bar with volume 0 carries the previous close into every price, so
+    # the bar at t=60 states 128.0 throughout -- exactly row 0's close,
+    # which is the claim being pinned. It is also the HIGHEST high in row
+    # 0's interval, and that is what makes this fixture able to fail: an
+    # implementation that skipped carried bars would report -0.5 here
+    # instead of 0.0, where a carried bar sitting between the extremes
+    # would give 0.25 under both readings and prove nothing.
     carried = excursion_frame(
         _OFFSETS,
-        (130.0, 160.0, 160.0, 96.0, 112.0, 40.0),
-        (120.0, 128.0, 160.0, 64.0, 80.0, 16.0),
-        (128.0, 160.0, 160.0, 80.0, 96.0, 32.0),
+        (130.0, 128.0, 64.0, 96.0, 112.0, 40.0),
+        (120.0, 128.0, 64.0, 64.0, 80.0, 16.0),
+        (128.0, 128.0, 64.0, 80.0, 96.0, 32.0),
     )
     out = add_forward_excursions(
         carried, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
@@ -222,8 +255,12 @@ def test_an_untraded_bar_inside_the_interval_is_read_as_it_stands() -> None:
     mfe = out.get_column(forward_mfe_column(ReturnMethod.SIMPLE, _HORIZON))
     mae = out.get_column(forward_mae_column(ReturnMethod.SIMPLE, _HORIZON))
 
-    # Row 0's interval is (t=60, t=120): highs (160, 160), lows (128, 160).
+    # Row 0's interval is (t=60, t=120): highs (128, 64), lows (128, 64).
     assert mfe[0] == _CARRIED_ROW0_MFE
+    assert mfe[0] != _CARRIED_ROW0_MFE_IF_SKIPPED, (
+        "the carried bar was left out of the interval: its high is the "
+        "favorable extremum here, so skipping it changes the answer"
+    )
     assert mae[0] == _CARRIED_ROW0_MAE
     assert mfe.null_count() == mae.null_count() == _ROWS_PER_HORIZON
 
@@ -290,6 +327,91 @@ def test_a_bar_stating_only_one_of_its_prices_nulls_both_excursions() -> None:
     assert mae[1] is None
 
 
+def test_a_nan_price_is_unusable_like_an_absent_one() -> None:
+    """Keep the two columns agreeing about which intervals are knowable.
+
+    ``NaN`` is not null, and the mask read nullness alone. A ``NaN`` high
+    made the favorable column null through the arithmetic while the
+    adverse column STATED a number taken from the other bars in the same
+    interval -- two columns over one interval disagreeing about whether
+    it can be stated at all, which is what this module exists to prevent.
+
+    The aggregator emits null and never ``NaN``, so such a frame is
+    outside the stated contract. It is not outside the API: the extremum
+    guard accepts any ``Float64`` from any caller, and this package is
+    published, so nothing between a caller and here enforces it.
+
+    The assertion is over the SET of rows rather than the one row the
+    disagreement was found on: the property is that the two columns are
+    null in the same places, not that they happen to agree at row 0.
+    """
+    tainted = excursion_frame(
+        _OFFSETS,
+        (_HIGHS[0], float("nan"), *_HIGHS[2:]),
+        _LOWS,
+        _CLOSES,
+    )
+    out = add_forward_excursions(
+        tainted, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
+    )
+    mfe = out.get_column(forward_mfe_column(ReturnMethod.SIMPLE, _HORIZON))
+    mae = out.get_column(forward_mae_column(ReturnMethod.SIMPLE, _HORIZON))
+
+    assert mfe.is_null().to_list() == mae.is_null().to_list()
+    # Only row 0's interval (rows 1 and 2) reads the tainted bar at t=60;
+    # row 1's interval starts past it. Rows 4 and 5 run off the end.
+    assert mfe.is_null().to_list() == [True, False, False, False, True, True]
+
+
+def test_a_frame_out_of_grid_order_is_refused_rather_than_read_positionally() -> None:
+    """Refuse a shuffled frame: an extremum is positional and a return is not.
+
+    The returns find a counterpart by close-time equality and hand any row
+    order back unchanged, and the shared battery in test_alignment.py pins
+    that for them. An excursion reads the ROWS that follow each position,
+    so order is part of its input, and a frame out of grid order is caught
+    by the total-grid rule -- consecutive steps are no longer the cadence
+    -- rather than read as though the rows had been sorted first.
+    """
+    shuffled = _fixture()[[3, 0, 5, 2, 1, 4]]
+    with pytest.raises(ConfigError, match=r"total .*grid"):
+        add_forward_excursions(
+            shuffled, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
+        )
+
+
+def test_an_empty_frame_gains_the_three_columns_with_their_dtypes() -> None:
+    """No rows is not an error; the schema still says what was asked for."""
+    out = add_forward_excursions(
+        _fixture().clear(), horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.LOG
+    )
+    assert out.height == 0
+    assert out.schema[forward_mfe_column(ReturnMethod.LOG, _HORIZON)] == pl.Float64()
+    assert out.schema[forward_mae_column(ReturnMethod.LOG, _HORIZON)] == pl.Float64()
+    assert out.schema[
+        forward_excursion_available_at_column(ReturnMethod.LOG, _HORIZON)
+    ] == (pl.Int64())
+
+
+def test_a_single_row_has_no_interval_and_states_only_its_availability() -> None:
+    """One row has nothing after it: both excursions null, the twin stated."""
+    out = add_forward_excursions(
+        _fixture().head(1),
+        horizon=_HORIZON,
+        cadence=CADENCE,
+        method=ReturnMethod.SIMPLE,
+    )
+    assert out.get_column(
+        forward_mfe_column(ReturnMethod.SIMPLE, _HORIZON)
+    ).to_list() == [None]
+    assert out.get_column(
+        forward_mae_column(ReturnMethod.SIMPLE, _HORIZON)
+    ).to_list() == [None]
+    assert out.get_column(
+        forward_excursion_available_at_column(ReturnMethod.SIMPLE, _HORIZON)
+    ).to_list() == [TIME_BASE + _ROWS_PER_HORIZON * CADENCE_SECONDS]
+
+
 def test_a_frame_missing_a_row_is_refused_rather_than_read_through() -> None:
     """Refuse a hole, because an extremum over a hole is wrong, not null."""
     gapped = excursion_frame(
@@ -347,9 +469,33 @@ def test_the_columns_are_float64_and_refuse_to_overwrite() -> None:
     ):
         assert out.schema[name] == pl.Float64()
 
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="already carries"):
         add_forward_excursions(
             out, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
+        )
+
+
+@pytest.mark.parametrize(
+    "column_for",
+    [forward_mfe_column, forward_mae_column, forward_excursion_available_at_column],
+    ids=["mfe", "mae", "available_at"],
+)
+def test_each_column_this_call_writes_is_refused_on_its_own(
+    column_for: Callable[[ReturnMethod, str], str],
+) -> None:
+    """Make the refusal name the column, so one guard cannot cover three.
+
+    Re-feeding the whole output frame, as the test above does, proves only
+    that SOMETHING collided. The mfe column collides first and the other
+    two are never reached, so a guard narrowed to two of the three -- or
+    to one -- leaves that test green. Each column is planted by itself
+    here and the refusal has to name the one that was planted.
+    """
+    column = column_for(ReturnMethod.SIMPLE, _HORIZON)
+    frame = _fixture().with_columns(pl.lit(0.0).alias(column))
+    with pytest.raises(ConfigError, match=re.escape(column)):
+        add_forward_excursions(
+            frame, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
         )
 
 

@@ -588,9 +588,19 @@ def _masked_extremum_inputs(frame: pl.DataFrame) -> pl.DataFrame:
     An absent bar -- one the aggregator emitted with null prices because
     nothing traded and nothing was carried -- must not be skipped over as
     though the interval simply did not contain it. Nulling BOTH inputs
-    wherever EITHER is null is what makes an absent bar refuse the whole
-    interval rather than shrink it, and it makes the two columns agree
-    about which rows they cannot state.
+    wherever EITHER is unusable is what makes an absent bar refuse the
+    whole interval rather than shrink it, and it makes the two columns
+    agree about which rows they cannot state.
+
+    ``NaN`` counts as unusable alongside null, and the two are separate
+    cases in polars rather than one. The aggregator emits null and never
+    ``NaN``, so a frame carrying one is outside the contract this package
+    states -- but :func:`require_extremum_columns` accepts any ``Float64``
+    from any caller, and outside the contract is not the same as outside
+    the API. Masking on nullness alone left a ``NaN`` high nulling the
+    favorable column through the arithmetic while the adverse column
+    STATED a number taken from the other bars, which is the two columns
+    disagreeing about whether one interval is knowable.
 
     Args:
         frame: A frame carrying ``Float64`` ``high`` and ``low``.
@@ -599,7 +609,12 @@ def _masked_extremum_inputs(frame: pl.DataFrame) -> pl.DataFrame:
         A two-column frame of the masked inputs, in ``frame``'s row order.
 
     """
-    absent = pl.col(HIGH_COLUMN).is_null() | pl.col(LOW_COLUMN).is_null()
+    absent = (
+        pl.col(HIGH_COLUMN).is_null()
+        | pl.col(LOW_COLUMN).is_null()
+        | pl.col(HIGH_COLUMN).is_nan()
+        | pl.col(LOW_COLUMN).is_nan()
+    )
     return frame.select(
         pl.when(absent).then(None).otherwise(pl.col(HIGH_COLUMN)).alias(_MASKED_HIGH),
         pl.when(absent).then(None).otherwise(pl.col(LOW_COLUMN)).alias(_MASKED_LOW),

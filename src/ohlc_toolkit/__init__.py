@@ -11,8 +11,9 @@ so that a bare ``import ohlc_toolkit`` reaches all of them:
   and an independent brute-force oracle it is checked against.
 - :mod:`ohlc_toolkit.schedules` -- window-scale schedules and emit
   cadence rules, each recording the request that produced it.
-- :mod:`ohlc_toolkit.returns` -- backward and forward returns, with the
-  instant a forward value becomes available carried beside it.
+- :mod:`ohlc_toolkit.returns` -- backward and forward returns, and the
+  forward excursions, with the instant a forward value becomes available
+  carried beside it.
 - :mod:`ohlc_toolkit.snapshot` -- fetching a published dataset release,
   refusing any byte that does not match its manifest, and re-checking one
   already on disk.

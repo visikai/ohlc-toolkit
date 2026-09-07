@@ -6,6 +6,12 @@ exactly one horizon away -- at ``t - H`` looking back, at ``t + H``
 looking forward? This module answers it, once, for both, so that a rule
 one direction enforced and the other did not cannot exist.
 
+The forward excursions rest on the same frame rules and add two of their
+own, held here for the same reason: :func:`require_extremum_columns`, for
+the two price columns a return never reads, and :func:`require_total_grid`,
+because an extremum reads the interior of its interval and a hole there
+produces a wrong number rather than a null.
+
 Why the counterpart is found by time and never by a row shift
 --------------------------------------------------------------
 
@@ -85,11 +91,12 @@ from ohlc_toolkit.temporal import (
 
 logger = get_logger(__name__)
 
-# The two columns every return primitive reads, by the names and in the
-# kinds :func:`~ohlc_toolkit.windows.engine.compute_windows` emits them.
-# Nothing else is read, so nothing else is required: a caller who has
-# projected a window frame down to what this step consults is not doing
-# anything wrong.
+# The columns this package reads, by the names and in the kinds
+# :func:`~ohlc_toolkit.windows.engine.compute_windows` emits them. A
+# return reads the first two and nothing else; an excursion reads all
+# four. Each primitive requires exactly what it reads, so a caller who has
+# projected a window frame down to ``close_time`` and ``close`` is doing
+# nothing wrong until it asks for an extremum.
 CLOSE_TIME_COLUMN = "close_time"
 CLOSE_COLUMN = "close"
 HIGH_COLUMN = "high"

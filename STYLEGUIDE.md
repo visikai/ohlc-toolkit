@@ -141,7 +141,7 @@ nothing depends on it any more. Do not add a second DataFrame library.
 - `source` — profiles, validation, and the raw-frame reader
 - `windows` — the aggregation engine, its oracle, and the quality policy
 - `schedules` — scale schedules and emit-cadence rules
-- `returns` — backward and forward returns
+- `returns` — backward and forward returns, and forward excursions
 - `snapshot` — fetching and verifying a published release
 
 The top-level package imports all six, so `import ohlc_toolkit` reaches
