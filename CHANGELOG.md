@@ -26,8 +26,8 @@ against their tags, and are not restated here.
   time, so a missing row makes one value null and leaves the rest
   correct; an extremum reads the interior of its interval, so a missing
   row quietly removes a candidate and the answer that comes back is not
-  null but wrong. A bar inside the interval that states no price at all
-  nulls both columns rather than being skipped.
+  null but wrong. A bar inside the interval whose high or low is null or
+  `NaN` nulls both columns rather than being skipped.
 - The typical sign is `mfe >= 0 >= mae` and it is NOT enforced. Price
   that gaps down between the close at `t` and everything after it can
   put every high in the interval below that close, and a negative

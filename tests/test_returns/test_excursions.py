@@ -55,15 +55,44 @@ _ROW0_MFE = 1.5  # 320 / 128 - 1, the high at t=120
 _ROW0_MAE = 0.0  # 128 / 128 - 1, the low at t=60
 _ROW3_MFE = 0.4  # 112 /  80 - 1, the high at t=240
 _ROW3_MAE = -0.8  #  16 /  80 - 1, the low at t=300, the interval's last bar
-# The carried bar IS the favorable extremum of row 0's interval, which is
-# what makes the two readings of it give different numbers. Included as it
-# stands, the highest high over (t=60, t=120) is the carried 128 and the
-# mfe is 0.0. Skipped, the only high left is 64 and the mfe is -0.5. A
-# fixture where the carried bar is neither extremum cannot tell those
-# apart: both readings take their answer from the other bar.
-_CARRIED_ROW0_MFE = 0.0  # 128 / 128 - 1, the carried bar's own high
-_CARRIED_ROW0_MFE_IF_SKIPPED = -0.5  # 64 / 128 - 1, the bar past it
-_CARRIED_ROW0_MAE = -0.5  # 64 / 128 - 1
+# The carried bar must BE an extremum of row 0's interval for a fixture to
+# tell "included as it stands" from "skipped": a carried bar sitting between
+# the extremes gives the same number under both readings and proves
+# nothing. One bar cannot be both extrema unless the other bar is carried
+# too, so there is one fixture per side. Row 0's interval is (t=60, t=120)
+# in both, and the carried bar at t=60 states 128.0 throughout -- exactly
+# row 0's close, which is the carry the aggregator performs.
+_CARRIED_IS_THE_HIGHEST_HIGH = (
+    (130.0, 128.0, 64.0, 96.0, 112.0, 40.0),
+    (120.0, 128.0, 64.0, 64.0, 80.0, 16.0),
+    (128.0, 128.0, 64.0, 80.0, 96.0, 32.0),
+)
+_CARRIED_IS_THE_LOWEST_LOW = (
+    (130.0, 128.0, 320.0, 96.0, 112.0, 40.0),
+    (120.0, 128.0, 144.0, 64.0, 80.0, 16.0),
+    (128.0, 128.0, 256.0, 80.0, 96.0, 32.0),
+)
+# (prices, mfe, mae, mfe if the carried bar were skipped, mae if skipped).
+# Each number's arithmetic is beside it so the expectation stays attached
+# to what produces it.
+_CARRIED_CASES = [
+    pytest.param(
+        _CARRIED_IS_THE_HIGHEST_HIGH,
+        0.0,  # 128 / 128 - 1, the carried bar's own high
+        -0.5,  # 64 / 128 - 1, the other bar's low
+        -0.5,  # skipped: 64 / 128 - 1, the only high left
+        -0.5,  # skipped: unchanged, the other bar holds the low anyway
+        id="carried-bar-is-the-highest-high",
+    ),
+    pytest.param(
+        _CARRIED_IS_THE_LOWEST_LOW,
+        1.5,  # 320 / 128 - 1, the other bar's high
+        0.0,  # 128 / 128 - 1, the carried bar's own low
+        1.5,  # skipped: unchanged, the other bar holds the high anyway
+        0.125,  # skipped: 144 / 128 - 1, the only low left
+        id="carried-bar-is-the-lowest-low",
+    ),
+]
 _GAPPED_ROW0_MFE = -0.5  # 64 / 128 - 1: the best the interval reached
 _GAPPED_ROW0_MAE = -0.875  # 16 / 128 - 1
 
@@ -234,35 +263,45 @@ def test_the_excursion_twin_does_not_collide_with_the_return_twin() -> None:
     )
 
 
-def test_an_untraded_bar_inside_the_interval_is_read_as_it_stands() -> None:
-    """Include a carried bar rather than skipping or nulling it."""
-    # A bar with volume 0 carries the previous close into every price, so
-    # the bar at t=60 states 128.0 throughout -- exactly row 0's close,
-    # which is the claim being pinned. It is also the HIGHEST high in row
-    # 0's interval, and that is what makes this fixture able to fail: an
-    # implementation that skipped carried bars would report -0.5 here
-    # instead of 0.0, where a carried bar sitting between the extremes
-    # would give 0.25 under both readings and prove nothing.
-    carried = excursion_frame(
-        _OFFSETS,
-        (130.0, 128.0, 64.0, 96.0, 112.0, 40.0),
-        (120.0, 128.0, 64.0, 64.0, 80.0, 16.0),
-        (128.0, 128.0, 64.0, 80.0, 96.0, 32.0),
+@pytest.mark.parametrize(
+    ("prices", "expected_mfe", "expected_mae", "mfe_if_skipped", "mae_if_skipped"),
+    _CARRIED_CASES,
+)
+def test_an_untraded_bar_inside_the_interval_is_read_as_it_stands(
+    prices: tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]],
+    expected_mfe: float,
+    expected_mae: float,
+    mfe_if_skipped: float,
+    mae_if_skipped: float,
+) -> None:
+    """Include a carried bar rather than skipping or nulling it, on either side.
+
+    A bar with volume 0 carries the previous close into every price. Each
+    fixture makes that bar one of row 0's two extrema, so an implementation
+    that skipped carried bars on that side would report the other bar's
+    number instead, and the two sides are separate cases because the
+    extremum is computed once per column.
+    """
+    assert (expected_mfe, expected_mae) != (mfe_if_skipped, mae_if_skipped), (
+        "the carried bar is neither extremum of this fixture, so both "
+        "readings give the same numbers and the case cannot fail"
     )
+    highs, lows, closes = prices
+    carried = excursion_frame(_OFFSETS, highs, lows, closes)
     out = add_forward_excursions(
         carried, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
     )
     mfe = out.get_column(forward_mfe_column(ReturnMethod.SIMPLE, _HORIZON))
     mae = out.get_column(forward_mae_column(ReturnMethod.SIMPLE, _HORIZON))
 
-    # Row 0's interval is (t=60, t=120): highs (128, 64), lows (128, 64).
-    assert mfe[0] == _CARRIED_ROW0_MFE
-    assert mfe[0] != _CARRIED_ROW0_MFE_IF_SKIPPED, (
-        "the carried bar was left out of the interval: its high is the "
-        "favorable extremum here, so skipping it changes the answer"
+    assert mfe[0] == expected_mfe, (
+        f"the favorable excursion is {mfe[0]}; skipping the carried bar "
+        f"would give {mfe_if_skipped}"
     )
-    assert mae[0] == _CARRIED_ROW0_MAE
-    assert mfe.null_count() == mae.null_count() == _ROWS_PER_HORIZON
+    assert mae[0] == expected_mae, (
+        f"the adverse excursion is {mae[0]}; skipping the carried bar "
+        f"would give {mae_if_skipped}"
+    )
 
 
 def test_an_absent_bar_inside_the_interval_nulls_both_excursions() -> None:
@@ -292,42 +331,50 @@ def test_an_absent_bar_inside_the_interval_nulls_both_excursions() -> None:
     assert mae[3] == _ROW3_MAE
 
 
-def test_a_bar_stating_only_one_of_its_prices_nulls_both_excursions() -> None:
+@pytest.mark.parametrize("absent", ["high", "low"])
+def test_a_bar_stating_only_one_of_its_prices_nulls_both_excursions(
+    absent: str,
+) -> None:
     """Refuse the interval for a HALF-absent bar, not only a wholly absent one.
 
     A wholly absent bar nulls both columns whether or not anything masks
     it, because a rolling extremum over a window containing a null is
-    null anyway. This is the case that tells the two apart: a bar whose
-    high is missing while its low is present. Without the mask the
-    adverse excursion is computed from the lows regardless, quietly
-    reporting a minimum over an interval it has just been told it cannot
-    fully see, while the favorable one goes null -- two columns over one
-    interval disagreeing about whether that interval is knowable.
+    null anyway. This is the case that tells the two apart: a bar with one
+    price missing and the other present. Without the mask the column read
+    from the PRESENT price is computed regardless, quietly reporting an
+    extremum over an interval it has just been told it cannot fully see,
+    while the other column goes null -- two columns over one interval
+    disagreeing about whether that interval is knowable. Each side is its
+    own case because the mask is one clause per column and either clause
+    can be dropped on its own.
     """
-    half_absent = excursion_frame(
-        _OFFSETS,
-        (130.0, 160.0, None, 96.0, 112.0, 40.0),
-        (120.0, 128.0, 144.0, 64.0, 80.0, 16.0),
-        (128.0, 160.0, 256.0, 80.0, 96.0, 32.0),
-    )
+    highs: list[float | None] = list(_HIGHS)
+    lows: list[float | None] = list(_LOWS)
+    (highs if absent == "high" else lows)[2] = None
+    half_absent = excursion_frame(_OFFSETS, highs, lows, _CLOSES)
     out = add_forward_excursions(
         half_absent, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
     )
     mfe = out.get_column(forward_mfe_column(ReturnMethod.SIMPLE, _HORIZON))
     mae = out.get_column(forward_mae_column(ReturnMethod.SIMPLE, _HORIZON))
 
-    # Rows 0 and 1 both have the half-absent bar at t=120 in their interval.
-    assert mfe[0] is None
-    assert mae[0] is None, (
-        "the adverse excursion was stated over an interval containing a bar "
-        "that reported no high: both columns read the same interval, so "
-        "either both can be stated or neither can."
+    # Rows 0 and 1 both have the half-absent bar at t=120 in their
+    # interval; rows 4 and 5 run off the end of the frame.
+    unknowable = [True, True, False, False, True, True]
+    assert mfe.is_null().to_list() == unknowable, (
+        "the favorable excursion was stated over an interval containing a "
+        f"bar that reported no {absent}: both columns read the same interval, "
+        "so either both can be stated or neither can."
     )
-    assert mfe[1] is None
-    assert mae[1] is None
+    assert mae.is_null().to_list() == unknowable, (
+        "the adverse excursion was stated over an interval containing a "
+        f"bar that reported no {absent}: both columns read the same interval, "
+        "so either both can be stated or neither can."
+    )
 
 
-def test_a_nan_price_is_unusable_like_an_absent_one() -> None:
+@pytest.mark.parametrize("tainted", ["high", "low"])
+def test_a_nan_price_is_unusable_like_an_absent_one(tainted: str) -> None:
     """Keep the two columns agreeing about which intervals are knowable.
 
     ``NaN`` is not null, and the mask read nullness alone. A ``NaN`` high
@@ -343,16 +390,15 @@ def test_a_nan_price_is_unusable_like_an_absent_one() -> None:
 
     The assertion is over the SET of rows rather than the one row the
     disagreement was found on: the property is that the two columns are
-    null in the same places, not that they happen to agree at row 0.
+    null in the same places, not that they happen to agree at row 0. Each
+    side is its own case because the mask is one clause per column.
     """
-    tainted = excursion_frame(
-        _OFFSETS,
-        (_HIGHS[0], float("nan"), *_HIGHS[2:]),
-        _LOWS,
-        _CLOSES,
-    )
+    highs: list[float | None] = list(_HIGHS)
+    lows: list[float | None] = list(_LOWS)
+    (highs if tainted == "high" else lows)[1] = float("nan")
+    frame = excursion_frame(_OFFSETS, highs, lows, _CLOSES)
     out = add_forward_excursions(
-        tainted, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
+        frame, horizon=_HORIZON, cadence=CADENCE, method=ReturnMethod.SIMPLE
     )
     mfe = out.get_column(forward_mfe_column(ReturnMethod.SIMPLE, _HORIZON))
     mae = out.get_column(forward_mae_column(ReturnMethod.SIMPLE, _HORIZON))

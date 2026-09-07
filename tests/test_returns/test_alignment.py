@@ -347,7 +347,7 @@ class TestCloseTimeIsAKey:
     ) -> None:
         """The offending instant is reported, not just its existence."""
         frame = return_frame((0, 60, 60, 120), (100.0, 110.0, 111.0, 120.0))
-        with pytest.raises(ConfigError) as caught:
+        with pytest.raises(ConfigError, match="unique") as caught:
             _add(entry_point, frame)
         assert str(TIME_BASE + 60) in str(caught.value)
 

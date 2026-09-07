@@ -711,7 +711,14 @@ def add_forward_excursions(
         A new frame: ``frame``'s columns unchanged and in their original
         order, followed by the columns :func:`forward_mfe_column` and
         :func:`forward_mae_column` name and then the one
-        :func:`forward_excursion_available_at_column` names.
+        :func:`forward_excursion_available_at_column` names. Both
+        excursions are null on a row whose interval runs past the end of
+        the frame, and on a row whose interval contains a bar with a null
+        or ``NaN`` ``high`` or ``low``: such a bar makes the whole interval
+        unknowable rather than being skipped, and the two columns are
+        always null on the same rows. An untraded bar that carries the
+        previous close into its prices is an ordinary bar and is read as it
+        stands.
 
     Raises:
         ConfigError: If ``method`` is not a :class:`ReturnMethod`, if the
