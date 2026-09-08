@@ -54,7 +54,8 @@ against their tags, and are not restated here.
   wrong kind of thing. The same `ScheduleUnits` mechanism the lookback
   schedule already threads through for its own noun is now threaded
   through the horizon path too; the arithmetic and every bound are
-  unchanged.
+  unchanged. A zero-length seed, bound or member is refused as a
+  `Horizon duration` where it was refused as a `Window duration`.
 - `tests/test_public_namespace.py` pins the environment of the
   subprocesses it inspects instead of inheriting one. Those tests compare
   a child's stdout exactly, and an ambient `LOG_LEVEL=DEBUG` -- which

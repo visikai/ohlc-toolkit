@@ -68,7 +68,7 @@ from ohlc_toolkit.temporal import (
     ConfigError,
     Duration,
     validate_cadence,
-    validate_window_duration,
+    validate_horizon_duration,
 )
 from ohlc_toolkit.temporal.echo import enum_from_payload
 
@@ -229,10 +229,10 @@ def metallic_horizons(  # noqa: PLR0913 - one keyword per recorded parameter
     """
     spec = MetallicRecurrenceSpec(
         coefficient=coefficient,
-        seed=validate_window_duration(seed),
+        seed=validate_horizon_duration(seed),
         grain=validate_cadence(grain),
-        maximum=validate_window_duration(maximum),
-        minimum=None if minimum is None else validate_window_duration(minimum),
+        maximum=validate_horizon_duration(maximum),
+        minimum=None if minimum is None else validate_horizon_duration(minimum),
         rounding=rounding,
     )
     require_seed_above_its_own_floor(
@@ -283,8 +283,8 @@ def log_spaced_horizons(
     """
     spec = LogSpacedSpec(
         count=count,
-        minimum=validate_window_duration(minimum),
-        maximum=validate_window_duration(maximum),
+        minimum=validate_horizon_duration(minimum),
+        maximum=validate_horizon_duration(maximum),
         grain=validate_cadence(grain),
         rounding=rounding,
     )
@@ -340,6 +340,6 @@ def explicit_horizons(
             f"An explicit schedule takes a list of durations, got "
             f"{type(horizons).__name__}"
         )
-    resolved = tuple(validate_window_duration(horizon) for horizon in horizons)
+    resolved = tuple(validate_horizon_duration(horizon) for horizon in horizons)
     logger.debug("Recorded an explicit schedule of {} horizon(s).", len(resolved))
     return HorizonSchedule(spec=ExplicitSpec(name=name), horizons=resolved)

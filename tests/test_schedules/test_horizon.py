@@ -212,6 +212,62 @@ def test_a_bare_string_is_not_a_list_of_horizons() -> None:
         explicit_horizons("2h26m")
 
 
+@pytest.mark.parametrize(
+    ("generate", "kwargs"),
+    [
+        (
+            metallic_horizons,
+            {"coefficient": 1.618, "seed": "0s", "grain": "1h", "maximum": "4h"},
+        ),
+        (
+            metallic_horizons,
+            {"coefficient": 1.618, "seed": "1h", "grain": "1h", "maximum": "0s"},
+        ),
+        (
+            metallic_horizons,
+            {
+                "coefficient": 1.618,
+                "seed": "1h",
+                "grain": "1h",
+                "maximum": "4h",
+                "minimum": "0s",
+            },
+        ),
+        (
+            log_spaced_horizons,
+            {"count": 3, "minimum": "0s", "maximum": "4h", "grain": "1h"},
+        ),
+        (
+            log_spaced_horizons,
+            {"count": 3, "minimum": "1h", "maximum": "0s", "grain": "1h"},
+        ),
+        (explicit_horizons, {"horizons": ["1h", "0s"]}),
+    ],
+    ids=[
+        "metallic-seed",
+        "metallic-maximum",
+        "metallic-minimum",
+        "log-spaced-minimum",
+        "log-spaced-maximum",
+        "explicit-member",
+    ],
+)
+def test_a_zero_length_horizon_is_refused_as_a_horizon(
+    generate: Callable[..., HorizonSchedule], kwargs: dict[str, object]
+) -> None:
+    """A zero-length duration is refused in the name of what it was passed as.
+
+    A horizon schedule is built from the window generators' own parameter
+    classes, whose validators name a "Window duration". Every duration is
+    validated as a horizon before those classes see it, so the refusal a
+    caller reads names the thing they actually passed.
+    """
+    with pytest.raises(ConfigError) as refused:
+        generate(**kwargs)
+    assert str(refused.value).startswith("Horizon duration must be strictly positive")
+    assert "window" not in str(refused.value).lower()
+
+
 def test_a_horizon_schedule_carries_no_cadence() -> None:
     """Two fields, neither a cadence; no constructor takes one.
 
