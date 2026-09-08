@@ -245,6 +245,16 @@ class TestRefusals:
             add_calendar_columns(frame)
         assert "never converted" in str(caught.value)
 
+    def test_refuses_a_narrower_integer_column_without_widening_it(self):
+        """Only Int64 is accepted: an Int32 clock is refused, never widened."""
+        frame = pl.DataFrame(
+            {"close_time": [1_700_000_000]}, schema={"close_time": pl.Int32}
+        )
+
+        with pytest.raises(ConfigError, match="Int64") as caught:
+            add_calendar_columns(frame)
+        assert "Int32" in str(caught.value)
+
     def test_refuses_an_already_present_output_column(self):
         """A single colliding output column is named in the refusal."""
         frame = _frame(_SOME_TIMESTAMPS).with_columns(pl.lit(0.0).alias(CAL_MOD_SIN))

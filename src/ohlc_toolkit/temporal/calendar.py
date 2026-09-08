@@ -136,7 +136,7 @@ def day_of_week(t: int | pl.Expr) -> int | pl.Expr:
 
 
 def _require_seconds_column(frame: pl.DataFrame, column: str) -> None:
-    """Check that ``column`` exists in ``frame`` and carries an integer dtype.
+    """Check that ``column`` exists in ``frame`` and carries the Int64 dtype.
 
     A ``Datetime`` column is refused rather than converted: this module
     knows no timezone, so silently reading a ``Datetime``'s underlying
@@ -149,7 +149,7 @@ def _require_seconds_column(frame: pl.DataFrame, column: str) -> None:
 
     Raises:
         ConfigError: If ``column`` is absent from ``frame``, or is
-            present but not of an integer dtype.
+            present but not ``Int64``.
 
     """
     if column not in frame.columns:
@@ -159,10 +159,12 @@ def _require_seconds_column(frame: pl.DataFrame, column: str) -> None:
             "of an Int64 Unix-seconds column, or add one before calling this."
         )
     dtype = frame.schema[column]
-    if not dtype.is_integer():
-        logger.warning("Rejecting non-integer {}: {}", column, bounded_echo(dtype))
+    if dtype != pl.Int64:
+        logger.warning(
+            "Rejecting {} that is not Int64: {}", column, bounded_echo(dtype)
+        )
         raise ConfigError(
-            f"{column} must be an integer column of Unix seconds, got "
+            f"{column} must be an Int64 column of Unix seconds, got "
             f"{bounded_echo(dtype)}; a Datetime column is never converted here "
             "-- convert it to Int64 Unix seconds before calling this, choosing "
             "the timezone yourself."
@@ -194,7 +196,7 @@ def add_calendar_columns(
     than ``column``.
 
     Args:
-        frame: A frame carrying an Int64 (or other integer-dtype) column
+        frame: A frame carrying an Int64 column
             of Unix seconds.
         column: The name of that column. Defaults to ``"close_time"``.
 
@@ -205,7 +207,7 @@ def add_calendar_columns(
 
     Raises:
         ConfigError: If ``column`` is absent from ``frame``, is present
-            but not of an integer dtype, or if ``frame`` already carries
+            but not ``Int64``, or if ``frame`` already carries
             any of the four output columns.
 
     """
