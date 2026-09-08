@@ -10,8 +10,12 @@ import pytest
 
 import ohlc_toolkit.schedules as schedules_namespace
 from ohlc_toolkit.schedules import (
+    ExplicitSpec,
     HorizonSchedule,
+    LogSpacedSpec,
     LookbackSchedule,
+    MetallicRecurrenceSpec,
+    RoundingRule,
     WindowSchedule,
     explicit,
     explicit_horizons,
@@ -151,6 +155,54 @@ def test_a_recorded_list_that_breaks_an_invariant_is_refused() -> None:
 
     with pytest.raises(ConfigError, match=r"once|twice|repeat"):
         HorizonSchedule.from_dict(forged)
+
+
+def test_a_non_default_rounding_is_recorded_on_a_metallic_horizon_schedule() -> None:
+    """The tie rule is part of the identity, not an implementation detail.
+
+    A dropped pass-through would record the default rule and the default
+    rule's id for a schedule the caller built with another, so the id is
+    asserted against the default as well as the field.
+    """
+    default = _horizon_ladder(minimum="2h26m", maximum="16h33m")
+    ties_even = _horizon_ladder(
+        minimum="2h26m", maximum="16h33m", rounding=RoundingRule.NEAREST_TIES_EVEN
+    )
+    assert isinstance(ties_even.spec, MetallicRecurrenceSpec)
+    assert ties_even.spec.rounding is RoundingRule.NEAREST_TIES_EVEN
+    assert ties_even.schedule_id != default.schedule_id, (
+        "two tie rules share an id: the rounding was not recorded"
+    )
+
+
+def test_a_non_default_rounding_is_recorded_on_a_log_spaced_horizon_schedule() -> None:
+    """The tie rule is part of the identity for the log-spaced generator too."""
+    default = log_spaced_horizons(count=3, minimum="1h", maximum="4h", grain="1h")
+    ties_even = log_spaced_horizons(
+        count=3,
+        minimum="1h",
+        maximum="4h",
+        grain="1h",
+        rounding=RoundingRule.NEAREST_TIES_EVEN,
+    )
+    assert isinstance(ties_even.spec, LogSpacedSpec)
+    assert ties_even.spec.rounding is RoundingRule.NEAREST_TIES_EVEN
+    assert ties_even.schedule_id != default.schedule_id, (
+        "two tie rules share an id: the rounding was not recorded"
+    )
+
+
+def test_a_name_is_recorded_on_an_explicit_horizon_schedule() -> None:
+    """A registered list carries the name it is asked for by; an ad-hoc one none."""
+    named = explicit_horizons(["2h26m"], name="control-single-horizon")
+    unnamed = explicit_horizons(["2h26m"])
+    assert isinstance(named.spec, ExplicitSpec)
+    assert named.spec.name == "control-single-horizon"
+    assert isinstance(unnamed.spec, ExplicitSpec)
+    assert unnamed.spec.name is None
+    assert named.schedule_id != unnamed.schedule_id, (
+        "a named and an unnamed list share an id: the name was not recorded"
+    )
 
 
 def test_a_horizon_schedule_carries_no_cadence() -> None:

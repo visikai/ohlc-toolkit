@@ -191,7 +191,7 @@ def _as_horizons(schedule: WindowSchedule) -> HorizonSchedule:
     are a schedule OF.
     """
     logger.debug(
-        "Recorded {} horizon(s) from a {} generator.",
+        "Recorded {} horizon(s) from the {} generator.",
         len(schedule.windows),
         schedule.spec.kind.value,
     )
