@@ -31,7 +31,7 @@ _MAX_PAIR_GAP_LINES = 2
 # validation, schedules, lookback schedules and forward excursions (offline,
 # with pasted output), and the bare-expression Duration block. Parser rot
 # fails this count.
-_EXPECTED_TOTAL, _EXPECTED_OFFLINE = 6, 4
+_EXPECTED_TOTAL, _EXPECTED_OFFLINE = 7, 5
 # The Duration block carries exactly two bare comparisons; a reformat
 # that removes or demotes one must fail loud, never pass vacuously.
 _EXPECTED_BARE_CLAIMS = 2
