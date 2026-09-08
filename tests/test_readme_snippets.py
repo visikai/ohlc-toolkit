@@ -27,7 +27,7 @@ _LOG_LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \| ")
 # A pasted-output fence counts as paired only when nothing but one blank
 # line separates it from its snippet.
 _MAX_PAIR_GAP_LINES = 2
-# The README currently carries seven python fences: quickstart (network),
+# The README currently carries eight python fences: quickstart (network),
 # validation, schedules, lookback schedules, calendar columns and forward
 # excursions (offline, with pasted output), and the bare-expression
 # Duration block. Parser rot fails this count.
