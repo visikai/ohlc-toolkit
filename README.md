@@ -326,10 +326,42 @@ print(lookback.schedule_id)
 2b7c4fa642bfd96d9727e10ea28438ffcbb7756b9a5809e8e57a56339cc9b0b4
 ```
 
-The two identities cannot collide. A lookback records its members under
-`periods` and a window schedule under `windows`, and `3` is not `"3m"`,
-so `{1, 3, 8}` and `{1m, 3m, 8m}` hash differently and each reader
-refuses the other's payload rather than reading it as its own.
+A **horizon** schedule is the forward-looking twin: its members are the
+distances a target reaches ahead, the `H` in a forward return or a
+forward excursion. They are durations from the same generators as the
+windows, resolved by the same arithmetic with the same bounds and the
+same refusals, so a horizon of `2h26m` and a window of `2h26m` spell
+alike. A horizon schedule carries no emit cadence; the frame a target is
+computed on supplies that.
+
+```python
+import math
+
+from ohlc_toolkit.schedules import metallic_horizons, metallic_recurrence
+
+ladder = {"coefficient": math.sqrt(math.e + math.sqrt(5)), "seed": "1m", "grain": "1m"}
+horizons = metallic_horizons(**ladder, minimum="2h26m", maximum="16h33m")
+windows = metallic_recurrence(**ladder, minimum="2h26m", maximum="16h33m")
+print([str(horizon) for horizon in horizons.horizons])
+print([str(window) for window in windows.windows])
+print(horizons.schedule_id == windows.schedule_id)
+```
+
+```text
+['2h26m', '6h20m', '16h33m']
+['2h26m', '6h20m', '16h33m']
+False
+```
+
+Identity is per kind, and the three kinds cannot collide. Each records
+its members under its own key -- `windows`, `periods`, `horizons` -- so
+two schedules resolved from identical parameters hash differently when
+they are schedules of different things, and each reader refuses the
+other two's payloads for a missing key rather than reading them as its
+own. A window schedule names the scales a frame was built at; a horizon
+schedule names the distances a target reaches to; a lookback names
+counts of whatever period the frame carries. Letting any one stand in
+for another, with the ids agreeing, is what the separate keys prevent.
 
 A payload whose recorded `schedule_id` does not match its content is
 refused rather than repaired, so a schedule read back from disk is the

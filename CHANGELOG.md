@@ -8,6 +8,14 @@ against their tags, and are not restated here.
 
 ### Added
 
+- **`schedules.HorizonSchedule`, with `metallic_horizons`,
+  `log_spaced_horizons` and `explicit_horizons`: forward horizons as a
+  schedule of their own.** The same duration generators, bounds and
+  refusals as a window schedule, recording the resolved durations under
+  `horizons` so that a horizon schedule and a window schedule resolved
+  from identical parameters never share a `schedule_id`, and each reader
+  refuses the other's payload. Carries no emit cadence. Purely additive:
+  no existing name, payload or signature changes.
 - **`returns.add_forward_excursions`: the best and worst an interval
   reached, beside the return that only reads its end.** Adds
   `forward_mfe_{method}_{H}` and `forward_mae_{method}_{H}`, relating the
