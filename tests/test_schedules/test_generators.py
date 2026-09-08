@@ -24,7 +24,11 @@ from ohlc_toolkit.schedules import (
     log_spaced,
     metallic_recurrence,
 )
-from ohlc_toolkit.schedules.generators import DURATION_UNITS, recurrence_values
+from ohlc_toolkit.schedules.generators import (
+    DURATION_UNITS,
+    recurrence_values,
+    require_resolved_windows,
+)
 from ohlc_toolkit.temporal import ConfigError, Duration
 
 _MINUTE_SECONDS = 60
@@ -1134,6 +1138,48 @@ def test_only_one_term_past_the_maximum_is_generated() -> None:
     )
 
     assert sum(1 for term in terms if term > maximum_seconds) == 1
+
+
+def test_the_window_refusals_are_unchanged_byte_for_byte() -> None:
+    """``require_resolved_windows`` still reads exactly as it always has.
+
+    Every literal below is copied verbatim from the window path before
+    it also became :mod:`ohlc_toolkit.schedules.horizon`'s invariant
+    check: the horizon path now threads its own
+    :class:`~ohlc_toolkit.schedules.generators.ScheduleUnits` through
+    this same function, and an unqualified call -- the one the window
+    schedule and :mod:`ohlc_toolkit.schedules.cadence` both still make --
+    must go on reading precisely as it did before that noun existed.
+    """
+    with pytest.raises(ConfigError) as empty:
+        require_resolved_windows(())
+    assert str(empty.value) == (
+        "A schedule must name at least one window; this one resolved no windows at all."
+    )
+
+    over_cap = tuple(
+        Duration(seconds) for seconds in range(1, MAX_RESOLVED_WINDOWS + 2)
+    )
+    with pytest.raises(ConfigError) as capped:
+        require_resolved_windows(over_cap)
+    assert str(capped.value) == (
+        f"A schedule must name at most {MAX_RESOLVED_WINDOWS} windows, got "
+        f"{MAX_RESOLVED_WINDOWS + 1}."
+    )
+
+    with pytest.raises(ConfigError) as wrong_type:
+        require_resolved_windows((object(),))  # type: ignore[arg-type]
+    assert str(wrong_type.value) == "Schedule windows must be Durations, got object"
+
+    with pytest.raises(ConfigError) as zero:
+        require_resolved_windows((Duration(0),))
+    assert str(zero.value) == "Schedule windows must be strictly positive, got 0s."
+
+    with pytest.raises(ConfigError) as repeated:
+        require_resolved_windows((Duration(60), Duration(60)))
+    assert str(repeated.value) == (
+        "A schedule must name each window once, got 1m twice."
+    )
 
 
 if __name__ == "__main__":

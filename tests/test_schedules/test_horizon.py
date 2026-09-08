@@ -2,6 +2,7 @@
 
 import inspect
 import math
+import re
 from collections.abc import Callable
 from dataclasses import fields
 from functools import partial
@@ -205,6 +206,133 @@ def test_a_name_is_recorded_on_an_explicit_horizon_schedule() -> None:
     )
 
 
+def test_a_bare_string_is_not_a_list_of_horizons() -> None:
+    """A string is iterable, and iterating it would be nonsense here too."""
+    with pytest.raises(ConfigError, match="list"):
+        explicit_horizons("2h26m")
+
+
+@pytest.mark.parametrize(
+    ("generate", "kwargs"),
+    [
+        (
+            metallic_horizons,
+            {"coefficient": 1.618, "seed": "0s", "grain": "1h", "maximum": "4h"},
+        ),
+        (
+            metallic_horizons,
+            {"coefficient": 1.618, "seed": "1h", "grain": "1h", "maximum": "0s"},
+        ),
+        (
+            metallic_horizons,
+            {
+                "coefficient": 1.618,
+                "seed": "1h",
+                "grain": "1h",
+                "maximum": "4h",
+                "minimum": "0s",
+            },
+        ),
+        (
+            log_spaced_horizons,
+            {"count": 3, "minimum": "0s", "maximum": "4h", "grain": "1h"},
+        ),
+        (
+            log_spaced_horizons,
+            {"count": 3, "minimum": "1h", "maximum": "0s", "grain": "1h"},
+        ),
+        (explicit_horizons, {"horizons": ["1h", "0s"]}),
+    ],
+    ids=[
+        "metallic-seed",
+        "metallic-maximum",
+        "metallic-minimum",
+        "log-spaced-minimum",
+        "log-spaced-maximum",
+        "explicit-member",
+    ],
+)
+def test_a_zero_length_horizon_is_refused_as_a_horizon(
+    generate: Callable[..., HorizonSchedule], kwargs: dict[str, object]
+) -> None:
+    """A zero-length duration is refused in the name of what it was passed as.
+
+    A horizon schedule is built from the window generators' own parameter
+    classes, whose validators name a "Window duration". Every duration is
+    validated as a horizon before those classes see it, so the refusal a
+    caller reads names the thing they actually passed.
+    """
+    with pytest.raises(ConfigError) as refused:
+        generate(**kwargs)
+    assert str(refused.value).startswith("Horizon duration must be strictly positive")
+    assert "window" not in str(refused.value).lower()
+
+
+_METALLIC_LADDER: dict[str, object] = {
+    "coefficient": 1.618,
+    "seed": "1h",
+    "grain": "1h",
+    "minimum": "1h",
+    "maximum": "4h",
+}
+_LOG_SPACED_LADDER: dict[str, object] = {
+    "count": 3,
+    "minimum": "1h",
+    "maximum": "4h",
+    "grain": "1h",
+}
+
+
+@pytest.mark.parametrize(
+    ("generate", "kwargs", "parameter"),
+    [
+        (metallic_horizons, _METALLIC_LADDER, "seed"),
+        (metallic_horizons, _METALLIC_LADDER, "minimum"),
+        (metallic_horizons, _METALLIC_LADDER, "maximum"),
+        (log_spaced_horizons, _LOG_SPACED_LADDER, "minimum"),
+        (log_spaced_horizons, _LOG_SPACED_LADDER, "maximum"),
+    ],
+    ids=[
+        "metallic-seed",
+        "metallic-minimum",
+        "metallic-maximum",
+        "log-spaced-minimum",
+        "log-spaced-maximum",
+    ],
+)
+def test_a_recorded_zero_length_parameter_is_refused_as_a_horizon(
+    generate: Callable[..., HorizonSchedule],
+    kwargs: dict[str, object],
+    parameter: str,
+) -> None:
+    """Reading a payload back is a second door to the refusal, and it names a horizon too.
+
+    The recorded parameters are read by the window generators' parameter
+    classes, which validate durations as windows. Each is validated as a
+    horizon before those classes see it, so a recorded zero-length value
+    is refused as what it was recorded as. The recorded id is never
+    reached: the parameters are refused first.
+    """
+    payload = generate(**kwargs).to_dict()
+    parameters = payload["parameters"]
+    assert isinstance(parameters, dict)
+    forged = {**payload, "parameters": {**parameters, parameter: "0s"}}
+    with pytest.raises(ConfigError) as refused:
+        HorizonSchedule.from_dict(forged)
+    assert str(refused.value).startswith("Horizon duration must be strictly positive")
+    assert "window" not in str(refused.value).lower()
+
+
+def test_bounds_that_exclude_every_horizon_say_so() -> None:
+    """When the bounds keep nothing, the refusal counts horizons, not windows."""
+    with pytest.raises(ConfigError) as refused:
+        metallic_horizons(
+            coefficient=1.618, seed="1h", grain="1h", minimum="12h", maximum="12h"
+        )
+    assert str(refused.value).startswith("The bounds left no horizons:")
+    assert "window" not in str(refused.value)
+
+
 def test_a_horizon_schedule_carries_no_cadence() -> None:
     """Two fields, neither a cadence; no constructor takes one.
 
@@ -223,6 +351,17 @@ def test_a_horizon_schedule_carries_no_cadence() -> None:
         assert not offending, f"{constructor.__name__} takes {offending}"
 
 
+# A whole-word "window(s)" or "horizon(s)", replaced by a common
+# placeholder so two messages that differ only in which of those nouns
+# they name compare equal underneath it.
+_NOUN = re.compile(r"\b(?:windows?|horizons?)\b")
+
+
+def _without_the_noun(message: str) -> str:
+    """Strip the schedule noun, leaving only the shared arithmetic."""
+    return _NOUN.sub("_", message)
+
+
 @pytest.mark.parametrize(
     ("horizon_constructor", "window_constructor", "arguments"),
     [
@@ -237,15 +376,24 @@ def test_a_horizon_schedule_carries_no_cadence() -> None:
             {"count": 3, "minimum": "1h", "maximum": "4h", "grain": "3h"},
         ),
         (explicit_horizons, explicit, {"horizons": []}),
+        (explicit_horizons, explicit, {"horizons": ["1m", "1m"]}),
     ],
-    ids=["crossed-bounds", "endpoint-off-the-grain", "empty-list"],
+    ids=["crossed-bounds", "endpoint-off-the-grain", "empty-list", "repeated-member"],
 )
 def test_a_horizon_schedule_has_the_window_generator_s_refusals(
     horizon_constructor: Callable[..., object],
     window_constructor: Callable[..., object],
     arguments: dict[str, object],
 ) -> None:
-    """The same parameters are refused with the same words, by construction."""
+    """The same parameters are refused under the same condition, by construction.
+
+    Not with the same words: the window path names "window" and the
+    horizon path names "horizon", by design. What must stay identical is
+    everything else in the message -- the bounds, the counts, the
+    quantized value -- which is the shared arithmetic neither path is
+    allowed to drift from. Stripping the noun from both messages before
+    comparing pins that arithmetic without pinning which noun raised it.
+    """
     window_arguments = {
         ("windows" if key == "horizons" else key): value
         for key, value in arguments.items()
@@ -255,7 +403,11 @@ def test_a_horizon_schedule_has_the_window_generator_s_refusals(
     with pytest.raises(ConfigError) as from_horizons:
         horizon_constructor(**arguments)
 
-    assert str(from_horizons.value) == str(from_windows.value)
+    assert _without_the_noun(str(from_horizons.value)) == _without_the_noun(
+        str(from_windows.value)
+    )
+    assert "window" not in str(from_horizons.value)
+    assert "horizon" not in str(from_windows.value)
 
 
 def test_the_public_names_are_exported() -> None:
