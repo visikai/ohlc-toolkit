@@ -18,6 +18,17 @@ flattened into that namespace: spell them ``ohlc_toolkit.temporal.X``, or
 import them from here.
 """
 
+from ohlc_toolkit.temporal.calendar import (
+    CAL_DOW_COS,
+    CAL_DOW_SIN,
+    CAL_MOD_COS,
+    CAL_MOD_SIN,
+    DEFAULT_SECONDS_COLUMN,
+    add_calendar_columns,
+    day_of_week,
+    second_of_day,
+    second_of_week,
+)
 from ohlc_toolkit.temporal.columns import require_absent_columns
 from ohlc_toolkit.temporal.duration import (
     Duration,
@@ -34,14 +45,23 @@ from ohlc_toolkit.temporal.errors import (
 )
 
 __all__ = [
+    "CAL_DOW_COS",
+    "CAL_DOW_SIN",
+    "CAL_MOD_COS",
+    "CAL_MOD_SIN",
+    "DEFAULT_SECONDS_COLUMN",
     "MAX_ECHO_CHARS",
     "ConfigError",
     "CoverageError",
     "DataValidationError",
     "Duration",
+    "add_calendar_columns",
     "bounded_echo",
     "coerce_duration",
+    "day_of_week",
     "require_absent_columns",
+    "second_of_day",
+    "second_of_week",
     "validate_cadence",
     "validate_horizon_duration",
     "validate_window_duration",
