@@ -10,12 +10,13 @@ against their tags, and are not restated here.
 
 - **`schedules.HorizonSchedule`, with `metallic_horizons`,
   `log_spaced_horizons` and `explicit_horizons`: forward horizons as a
-  schedule of their own.** The same duration generators, bounds and
-  refusals as a window schedule, recording the resolved durations under
-  `horizons` so that a horizon schedule and a window schedule resolved
-  from identical parameters never share a `schedule_id`, and each reader
-  refuses the other's payload. Carries no emit cadence. Purely additive:
-  no existing name, payload or signature changes.
+  schedule of their own.** The same duration generators and bounds as a
+  window schedule, refusing under the same conditions, recording the
+  resolved durations under `horizons` so that a horizon schedule and a
+  window schedule resolved from identical parameters never share a
+  `schedule_id`, and each reader refuses the other's payload. Carries no
+  emit cadence. Purely additive: no existing name, payload or signature
+  changes.
 - **`returns.add_forward_excursions`: the best and worst an interval
   reached, beside the return that only reads its end.** Adds
   `forward_mfe_{method}_{H}` and `forward_mae_{method}_{H}`, relating the
@@ -44,6 +45,16 @@ against their tags, and are not restated here.
 
 ### Fixed
 
+- **`metallic_horizons`, `log_spaced_horizons`, `explicit_horizons` and
+  `HorizonSchedule` now refuse in words that name a horizon, not a
+  window.** A horizon schedule reused the window generators' own
+  refusals unchanged, so `explicit_horizons(["1m", "1m"])` refused with
+  "A schedule must name each window once, got 1m twice." and an empty
+  list refused with "... at least one window ...", both naming the
+  wrong kind of thing. The same `ScheduleUnits` mechanism the lookback
+  schedule already threads through for its own noun is now threaded
+  through the horizon path too; the arithmetic and every bound are
+  unchanged.
 - `tests/test_public_namespace.py` pins the environment of the
   subprocesses it inspects instead of inheriting one. Those tests compare
   a child's stdout exactly, and an ambient `LOG_LEVEL=DEBUG` -- which

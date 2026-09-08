@@ -2,6 +2,7 @@
 
 import inspect
 import math
+import re
 from collections.abc import Callable
 from dataclasses import fields
 from functools import partial
@@ -205,6 +206,12 @@ def test_a_name_is_recorded_on_an_explicit_horizon_schedule() -> None:
     )
 
 
+def test_a_bare_string_is_not_a_list_of_horizons() -> None:
+    """A string is iterable, and iterating it would be nonsense here too."""
+    with pytest.raises(ConfigError, match="list"):
+        explicit_horizons("2h26m")
+
+
 def test_a_horizon_schedule_carries_no_cadence() -> None:
     """Two fields, neither a cadence; no constructor takes one.
 
@@ -223,6 +230,17 @@ def test_a_horizon_schedule_carries_no_cadence() -> None:
         assert not offending, f"{constructor.__name__} takes {offending}"
 
 
+# A whole-word "window(s)" or "horizon(s)", replaced by a common
+# placeholder so two messages that differ only in which of those nouns
+# they name compare equal underneath it.
+_NOUN = re.compile(r"\b(?:windows?|horizons?)\b")
+
+
+def _without_the_noun(message: str) -> str:
+    """Strip the schedule noun, leaving only the shared arithmetic."""
+    return _NOUN.sub("_", message)
+
+
 @pytest.mark.parametrize(
     ("horizon_constructor", "window_constructor", "arguments"),
     [
@@ -237,15 +255,24 @@ def test_a_horizon_schedule_carries_no_cadence() -> None:
             {"count": 3, "minimum": "1h", "maximum": "4h", "grain": "3h"},
         ),
         (explicit_horizons, explicit, {"horizons": []}),
+        (explicit_horizons, explicit, {"horizons": ["1m", "1m"]}),
     ],
-    ids=["crossed-bounds", "endpoint-off-the-grain", "empty-list"],
+    ids=["crossed-bounds", "endpoint-off-the-grain", "empty-list", "repeated-member"],
 )
 def test_a_horizon_schedule_has_the_window_generator_s_refusals(
     horizon_constructor: Callable[..., object],
     window_constructor: Callable[..., object],
     arguments: dict[str, object],
 ) -> None:
-    """The same parameters are refused with the same words, by construction."""
+    """The same parameters are refused under the same condition, by construction.
+
+    Not with the same words: the window path names "window" and the
+    horizon path names "horizon", by design. What must stay identical is
+    everything else in the message -- the bounds, the counts, the
+    quantized value -- which is the shared arithmetic neither path is
+    allowed to drift from. Stripping the noun from both messages before
+    comparing pins that arithmetic without pinning which noun raised it.
+    """
     window_arguments = {
         ("windows" if key == "horizons" else key): value
         for key, value in arguments.items()
@@ -255,7 +282,11 @@ def test_a_horizon_schedule_has_the_window_generator_s_refusals(
     with pytest.raises(ConfigError) as from_horizons:
         horizon_constructor(**arguments)
 
-    assert str(from_horizons.value) == str(from_windows.value)
+    assert _without_the_noun(str(from_horizons.value)) == _without_the_noun(
+        str(from_windows.value)
+    )
+    assert "window" not in str(from_horizons.value)
+    assert "horizon" not in str(from_windows.value)
 
 
 def test_the_public_names_are_exported() -> None:

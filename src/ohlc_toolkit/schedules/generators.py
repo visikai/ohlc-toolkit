@@ -809,75 +809,6 @@ class WindowSchedule:
         return schedule
 
 
-def require_resolved_windows(windows: tuple[Duration, ...]) -> None:
-    """Check a resolved window list, wherever it came from.
-
-    Shared with :mod:`ohlc_toolkit.schedules.cadence`, whose rules map
-    the same window lists: one statement of what a list of window
-    scales may be, rather than two that could drift.
-
-    Raises:
-        ConfigError: If the list is empty, holds anything but a strictly
-            positive Duration, repeats a value, or is longer than the
-            cap.
-
-    """
-    if not windows:
-        logger.warning("Rejecting a schedule that resolved no windows.")
-        raise ConfigError(
-            "A schedule must name at least one window; this one resolved no "
-            "windows at all."
-        )
-    if len(windows) > MAX_RESOLVED_WINDOWS:
-        logger.warning("Rejecting a schedule of {} windows.", len(windows))
-        raise ConfigError(
-            f"A schedule must name at most {MAX_RESOLVED_WINDOWS} windows, got "
-            f"{len(windows)}."
-        )
-    seen: set[Duration] = set()
-    for window in windows:
-        if not isinstance(window, Duration):
-            logger.warning(
-                "Rejecting non-Duration schedule window: {}", type(window).__name__
-            )
-            raise ConfigError(
-                f"Schedule windows must be Durations, got {type(window).__name__}"
-            )
-        if window.total_seconds == 0:
-            logger.warning("Rejecting a zero-length schedule window.")
-            raise ConfigError("Schedule windows must be strictly positive, got 0s.")
-        if window in seen:
-            logger.warning("Rejecting a schedule repeating the window {}.", window)
-            raise ConfigError(
-                f"A schedule must name each window once, got {window} twice."
-            )
-        seen.add(window)
-
-
-def _quantize(value: Fraction, grain_seconds: int, rounding: RoundingRule) -> int:
-    """Round an exact number of seconds to the nearest whole grain.
-
-    Args:
-        value: The exact, non-negative duration in seconds.
-        grain_seconds: The grain, in seconds.
-        rounding: The rule to apply at an exact tie.
-
-    Returns:
-        The nearest whole multiple of the grain, in seconds.
-
-    """
-    scaled = value / grain_seconds
-    whole = math.floor(scaled)
-    remainder = scaled - whole
-    if remainder > _HALF:
-        return (whole + 1) * grain_seconds
-    if remainder == _HALF and (
-        rounding is RoundingRule.NEAREST_TIES_AWAY or whole % 2 == 1
-    ):
-        return (whole + 1) * grain_seconds
-    return whole * grain_seconds
-
-
 @dataclass(frozen=True, slots=True)
 class ScheduleUnits:
     """How one resolved list describes itself when it refuses.
@@ -907,6 +838,89 @@ DURATION_UNITS = ScheduleUnits(
     render=lambda seconds: f"{Duration(seconds)}",
     render_grain=lambda seconds: f"{Duration(seconds)}",
 )
+
+
+def require_resolved_windows(
+    windows: tuple[Duration, ...], *, units: ScheduleUnits = DURATION_UNITS
+) -> None:
+    """Check a resolved duration list, wherever it came from.
+
+    Shared with :mod:`ohlc_toolkit.schedules.cadence`, whose rules map
+    the same window lists, and with
+    :mod:`ohlc_toolkit.schedules.horizon`, whose members are the same
+    ``Duration``-valued kind of thing under a different name: one
+    statement of what such a list may be, rather than two that could
+    drift. ``units`` supplies only the noun a refusal names -- "window"
+    by default -- never the arithmetic.
+
+    Args:
+        windows: The resolved list to check.
+        units: How to name one member when refusing. Defaults to
+            :data:`DURATION_UNITS`, so an unqualified call reads exactly
+            as it always has.
+
+    Raises:
+        ConfigError: If the list is empty, holds anything but a strictly
+            positive Duration, repeats a value, or is longer than the
+            cap.
+
+    """
+    noun = units.noun
+    plural = f"{noun}s"
+    if not windows:
+        logger.warning("Rejecting a schedule that resolved no {}.", plural)
+        raise ConfigError(
+            f"A schedule must name at least one {noun}; this one resolved no "
+            f"{plural} at all."
+        )
+    if len(windows) > MAX_RESOLVED_WINDOWS:
+        logger.warning("Rejecting a schedule of {} {}.", len(windows), plural)
+        raise ConfigError(
+            f"A schedule must name at most {MAX_RESOLVED_WINDOWS} {plural}, got "
+            f"{len(windows)}."
+        )
+    seen: set[Duration] = set()
+    for window in windows:
+        if not isinstance(window, Duration):
+            logger.warning(
+                "Rejecting non-Duration schedule {}: {}", noun, type(window).__name__
+            )
+            raise ConfigError(
+                f"Schedule {plural} must be Durations, got {type(window).__name__}"
+            )
+        if window.total_seconds == 0:
+            logger.warning("Rejecting a zero-length schedule {}.", noun)
+            raise ConfigError(f"Schedule {plural} must be strictly positive, got 0s.")
+        if window in seen:
+            logger.warning("Rejecting a schedule repeating the {} {}.", noun, window)
+            raise ConfigError(
+                f"A schedule must name each {noun} once, got {window} twice."
+            )
+        seen.add(window)
+
+
+def _quantize(value: Fraction, grain_seconds: int, rounding: RoundingRule) -> int:
+    """Round an exact number of seconds to the nearest whole grain.
+
+    Args:
+        value: The exact, non-negative duration in seconds.
+        grain_seconds: The grain, in seconds.
+        rounding: The rule to apply at an exact tie.
+
+    Returns:
+        The nearest whole multiple of the grain, in seconds.
+
+    """
+    scaled = value / grain_seconds
+    whole = math.floor(scaled)
+    remainder = scaled - whole
+    if remainder > _HALF:
+        return (whole + 1) * grain_seconds
+    if remainder == _HALF and (
+        rounding is RoundingRule.NEAREST_TIES_AWAY or whole % 2 == 1
+    ):
+        return (whole + 1) * grain_seconds
+    return whole * grain_seconds
 
 
 def require_endpoints_on_the_grain(
@@ -1138,13 +1152,14 @@ def resolve_values(  # noqa: PLR0913 - one keyword per resolution rule
     return tuple(kept)
 
 
-def _resolve_windows(
+def _resolve_windows(  # noqa: PLR0913 - one keyword per resolution rule
     values: list[Fraction],
     *,
     grain: Duration,
     rounding: RoundingRule,
     minimum: Duration | None,
     maximum: Duration,
+    units: ScheduleUnits = DURATION_UNITS,
 ) -> tuple[Duration, ...]:
     """Quantize, bound, and deduplicate a generator's real-valued output.
 
@@ -1159,6 +1174,9 @@ def _resolve_windows(
         rounding: The tie rule.
         minimum: The optional lower bound, applied after quantization.
         maximum: The upper bound, applied after quantization.
+        units: How to name one resolved member when refusing. Defaults
+            to :data:`DURATION_UNITS`, so an unqualified call reads
+            exactly as it always has.
 
     Returns:
         The resolved durations, in generated order.
@@ -1174,16 +1192,21 @@ def _resolve_windows(
         rounding=rounding,
         minimum=None if minimum is None else minimum.total_seconds,
         maximum=maximum.total_seconds,
-        units=DURATION_UNITS,
+        units=units,
     )
     return tuple(Duration(value) for value in seconds)
 
 
-def _recurrence_terms(spec: MetallicRecurrenceSpec) -> list[Fraction]:
+def _recurrence_terms(
+    spec: MetallicRecurrenceSpec, *, units: ScheduleUnits = DURATION_UNITS
+) -> list[Fraction]:
     """Run the two-term recurrence in exact rationals, bounded by the maximum.
 
     Args:
         spec: The validated recurrence parameters.
+        units: How to name one resolved member when refusing. Defaults
+            to :data:`DURATION_UNITS`, so an unqualified call reads
+            exactly as it always has.
 
     Returns:
         The real terms in seconds, starting with two copies of the seed
@@ -1200,7 +1223,7 @@ def _recurrence_terms(spec: MetallicRecurrenceSpec) -> list[Fraction]:
         coefficient=spec.coefficient,
         seed=spec.seed.total_seconds,
         maximum=spec.maximum.total_seconds,
-        units=DURATION_UNITS,
+        units=units,
     )
 
 

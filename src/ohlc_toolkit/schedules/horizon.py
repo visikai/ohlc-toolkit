@@ -22,10 +22,15 @@ looked at.
 
 Unlike the lookback, the values here ARE durations, so the parameter
 types are the window generators' own (:class:`MetallicRecurrenceSpec`,
-:class:`LogSpacedSpec`, :class:`ExplicitSpec`) and resolution goes
-through the window generators themselves. A horizon schedule therefore
-has exactly the bound refusals a window schedule has, in the words those
-refusals already use.
+:class:`LogSpacedSpec`, :class:`ExplicitSpec`) and the arithmetic --
+quantization, bounding, the recurrence, the log-spaced placement -- is
+the shared machinery those generators are themselves built from. A
+horizon schedule therefore refuses under exactly the same conditions a
+window schedule would, but names itself when it does: a
+:class:`~ohlc_toolkit.schedules.generators.ScheduleUnits` states
+``"horizon"`` where the window path's own would state ``"window"``,
+the same way :data:`~ohlc_toolkit.schedules.lookback.PERIOD_UNITS`
+states ``"lookback"`` for a period count.
 
 A horizon schedule carries no emit cadence. The frame a target is
 computed on supplies the cadence, and the target primitives refuse a
@@ -44,11 +49,13 @@ from ohlc_toolkit.schedules.generators import (
     LogSpacedSpec,
     MetallicRecurrenceSpec,
     RoundingRule,
-    WindowSchedule,
-    explicit,
-    log_spaced,
-    metallic_recurrence,
+    ScheduleUnits,
+    _log_spaced_terms,
+    _recurrence_terms,
+    _resolve_windows,
+    require_endpoints_on_the_grain,
     require_resolved_windows,
+    require_seed_above_its_own_floor,
 )
 from ohlc_toolkit.schedules.identity import (
     content_hash,
@@ -57,12 +64,26 @@ from ohlc_toolkit.schedules.identity import (
     require_keys,
     require_recorded_id,
 )
-from ohlc_toolkit.temporal import Duration
+from ohlc_toolkit.temporal import (
+    ConfigError,
+    Duration,
+    validate_cadence,
+    validate_window_duration,
+)
 from ohlc_toolkit.temporal.echo import enum_from_payload
 
 logger = get_logger(__name__)
 
 _HORIZON_KEYS = ("kind", "parameters", "horizons", "schedule_id")
+
+#: How a horizon schedule describes itself when it refuses. The render
+#: callables are the window path's own: a horizon is a Duration, spelled
+#: exactly the way a window is, so only the noun differs.
+HORIZON_UNITS = ScheduleUnits(
+    noun="horizon",
+    render=lambda seconds: f"{Duration(seconds)}",
+    render_grain=lambda seconds: f"{Duration(seconds)}",
+)
 
 # Which parameter class reads which kind's payload: the window generators'
 # own classes, because horizons are durations and these are the duration
@@ -101,7 +122,8 @@ class HorizonSchedule:
         """Check the resolved list against the invariants every kind shares.
 
         The invariants are the window schedule's, because the values are
-        the same kind of thing; the refusals therefore say "window".
+        the same kind of thing; the refusals therefore name "horizon"
+        rather than "window".
 
         Raises:
             ConfigError: If ``horizons`` is empty, holds anything but a
@@ -109,7 +131,7 @@ class HorizonSchedule:
                 than the cap.
 
         """
-        require_resolved_windows(self.horizons)
+        require_resolved_windows(self.horizons, units=HORIZON_UNITS)
 
     @property
     def schedule_id(self) -> str:
@@ -181,23 +203,6 @@ class HorizonSchedule:
         return schedule
 
 
-def _as_horizons(schedule: WindowSchedule) -> HorizonSchedule:
-    """Re-record a resolved window schedule's durations as horizons.
-
-    The one place the two types meet, and it runs in one direction only:
-    the generator did its work as a window schedule, and this takes the
-    parameters and the resolved list and records them under the horizon
-    identity. Nothing about the values changes; what changes is what they
-    are a schedule OF.
-    """
-    logger.debug(
-        "Recorded {} horizon(s) from the {} generator.",
-        len(schedule.windows),
-        schedule.spec.kind.value,
-    )
-    return HorizonSchedule(spec=schedule.spec, horizons=schedule.windows)
-
-
 def metallic_horizons(  # noqa: PLR0913 - one keyword per recorded parameter
     *,
     coefficient: float,
@@ -209,9 +214,10 @@ def metallic_horizons(  # noqa: PLR0913 - one keyword per recorded parameter
 ) -> HorizonSchedule:
     """Resolve a horizon schedule from a two-term linear recurrence.
 
-    The same arithmetic, bounds and refusals as
-    :func:`~ohlc_toolkit.schedules.generators.metallic_recurrence`; only
-    the identity differs. See that function for the parameters.
+    The same arithmetic and bounds as
+    :func:`~ohlc_toolkit.schedules.generators.metallic_recurrence`, and a
+    refusal under exactly the same conditions; only the identity, and the
+    noun a refusal names, differ. See that function for the parameters.
 
     Returns:
         The resolved horizon schedule.
@@ -221,16 +227,35 @@ def metallic_horizons(  # noqa: PLR0913 - one keyword per recorded parameter
             same parameters.
 
     """
-    return _as_horizons(
-        metallic_recurrence(
-            coefficient=coefficient,
-            seed=seed,
-            grain=grain,
-            maximum=maximum,
-            minimum=minimum,
-            rounding=rounding,
-        )
+    spec = MetallicRecurrenceSpec(
+        coefficient=coefficient,
+        seed=validate_window_duration(seed),
+        grain=validate_cadence(grain),
+        maximum=validate_window_duration(maximum),
+        minimum=None if minimum is None else validate_window_duration(minimum),
+        rounding=rounding,
     )
+    require_seed_above_its_own_floor(
+        seed=spec.seed.total_seconds,
+        minimum=None if spec.minimum is None else spec.minimum.total_seconds,
+        grain=spec.grain.total_seconds,
+        rounding=spec.rounding,
+        units=HORIZON_UNITS,
+    )
+    horizons = _resolve_windows(
+        _recurrence_terms(spec, units=HORIZON_UNITS),
+        grain=spec.grain,
+        rounding=spec.rounding,
+        minimum=spec.minimum,
+        maximum=spec.maximum,
+        units=HORIZON_UNITS,
+    )
+    logger.debug(
+        "Resolved a metallic horizon schedule of {} horizon(s) from a {} seed.",
+        len(horizons),
+        spec.seed,
+    )
+    return HorizonSchedule(spec=spec, horizons=horizons)
 
 
 def log_spaced_horizons(
@@ -243,9 +268,10 @@ def log_spaced_horizons(
 ) -> HorizonSchedule:
     """Resolve a horizon schedule of log-spaced durations between two bounds.
 
-    The same placement, bounds and refusals as
-    :func:`~ohlc_toolkit.schedules.generators.log_spaced`; only the
-    identity differs. See that function for the parameters.
+    The same placement and bounds as
+    :func:`~ohlc_toolkit.schedules.generators.log_spaced`, and a refusal
+    under exactly the same conditions; only the identity, and the noun a
+    refusal names, differ. See that function for the parameters.
 
     Returns:
         The resolved horizon schedule.
@@ -255,15 +281,34 @@ def log_spaced_horizons(
             same parameters.
 
     """
-    return _as_horizons(
-        log_spaced(
-            count=count,
-            minimum=minimum,
-            maximum=maximum,
-            grain=grain,
-            rounding=rounding,
-        )
+    spec = LogSpacedSpec(
+        count=count,
+        minimum=validate_window_duration(minimum),
+        maximum=validate_window_duration(maximum),
+        grain=validate_cadence(grain),
+        rounding=rounding,
     )
+    require_endpoints_on_the_grain(
+        minimum=spec.minimum.total_seconds,
+        maximum=spec.maximum.total_seconds,
+        grain=spec.grain.total_seconds,
+        rounding=spec.rounding,
+        units=HORIZON_UNITS,
+    )
+    horizons = _resolve_windows(
+        _log_spaced_terms(spec),
+        grain=spec.grain,
+        rounding=spec.rounding,
+        minimum=spec.minimum,
+        maximum=spec.maximum,
+        units=HORIZON_UNITS,
+    )
+    logger.debug(
+        "Resolved a log-spaced horizon schedule of {} horizon(s) from {} point(s).",
+        len(horizons),
+        spec.count,
+    )
+    return HorizonSchedule(spec=spec, horizons=horizons)
 
 
 def explicit_horizons(
@@ -286,4 +331,15 @@ def explicit_horizons(
             refuse the same list.
 
     """
-    return _as_horizons(explicit(horizons, name=name))
+    if isinstance(horizons, str) or not isinstance(horizons, Sequence):
+        logger.warning(
+            "Rejecting an explicit schedule that is not a list: {}",
+            type(horizons).__name__,
+        )
+        raise ConfigError(
+            f"An explicit schedule takes a list of durations, got "
+            f"{type(horizons).__name__}"
+        )
+    resolved = tuple(validate_window_duration(horizon) for horizon in horizons)
+    logger.debug("Recorded an explicit schedule of {} horizon(s).", len(resolved))
+    return HorizonSchedule(spec=ExplicitSpec(name=name), horizons=resolved)
