@@ -18,6 +18,7 @@ even with an empty ``__init__``, so the passthrough is checked in a
 subprocess that has imported nothing else.
 """
 
+import os
 import subprocess
 import sys
 from importlib import import_module
@@ -68,6 +69,14 @@ RETIRED_MODULES = (
 def _run(source: str) -> subprocess.CompletedProcess[str]:
     """Execute ``source`` in a fresh interpreter and return the result.
 
+    The child's environment is pinned rather than inherited, because
+    these tests compare its stdout EXACTLY. An ambient ``LOG_LEVEL`` of
+    ``DEBUG`` -- which the repository's own ``.mise.toml`` exports, so
+    the documented local command supplies one and CI does not -- makes a
+    package emit a debug line on import, and every exact-output assertion
+    below then fails locally while passing in CI. A test that asserts on
+    a subprocess's output has to own that subprocess's environment.
+
     Args:
         source: The program to run.
 
@@ -75,8 +84,15 @@ def _run(source: str) -> subprocess.CompletedProcess[str]:
         The completed process, with output captured as text.
 
     """
+    environment = {
+        key: value for key, value in os.environ.items() if key != "LOG_LEVEL"
+    }
     return subprocess.run(
-        [sys.executable, "-c", source], capture_output=True, text=True, check=False
+        [sys.executable, "-c", source],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
     )
 
 

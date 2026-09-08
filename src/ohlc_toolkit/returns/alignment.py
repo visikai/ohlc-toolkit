@@ -6,6 +6,12 @@ exactly one horizon away -- at ``t - H`` looking back, at ``t + H``
 looking forward? This module answers it, once, for both, so that a rule
 one direction enforced and the other did not cannot exist.
 
+The forward excursions rest on the same frame rules and add two of their
+own, held here for the same reason: :func:`require_extremum_columns`, for
+the two price columns a return never reads, and :func:`require_total_grid`,
+because an extremum reads the interior of its interval and a hole there
+produces a wrong number rather than a null.
+
 Why the counterpart is found by time and never by a row shift
 --------------------------------------------------------------
 
@@ -85,13 +91,16 @@ from ohlc_toolkit.temporal import (
 
 logger = get_logger(__name__)
 
-# The two columns every return primitive reads, by the names and in the
-# kinds :func:`~ohlc_toolkit.windows.engine.compute_windows` emits them.
-# Nothing else is read, so nothing else is required: a caller who has
-# projected a window frame down to what this step consults is not doing
-# anything wrong.
+# The columns this package reads, by the names and in the kinds
+# :func:`~ohlc_toolkit.windows.engine.compute_windows` emits them. A
+# return reads the first two and nothing else; an excursion reads all
+# four. Each primitive requires exactly what it reads, so a caller who has
+# projected a window frame down to ``close_time`` and ``close`` is doing
+# nothing wrong until it asks for an extremum.
 CLOSE_TIME_COLUMN = "close_time"
 CLOSE_COLUMN = "close"
+HIGH_COLUMN = "high"
+LOW_COLUMN = "low"
 
 # The exact dtype required of each, keyed by column name in the order
 # they are reported. Int64 is the width the aggregator emits and the only
@@ -291,6 +300,102 @@ def require_alignable_frame(frame: pl.DataFrame, *, offset_seconds: int) -> None
     _require_columns(frame)
     _require_close_time_key(frame)
     _require_representable_shift(frame, offset_seconds=offset_seconds)
+
+
+def require_extremum_columns(frame: pl.DataFrame) -> None:
+    """Check that the two columns an excursion reads exist as ``Float64``.
+
+    Separate from :func:`require_alignable_frame` because a return reads
+    neither: a caller who projected a window frame down to ``close_time``
+    and ``close`` is doing nothing wrong until it asks for an extremum.
+
+    Args:
+        frame: The frame an excursion is about to be composed onto.
+
+    Raises:
+        ConfigError: If ``high`` or ``low`` is absent, or carries a dtype
+            other than ``Float64``.
+
+    """
+    required = {HIGH_COLUMN: pl.Float64(), LOW_COLUMN: pl.Float64()}
+    missing = [name for name in required if name not in frame.columns]
+    if missing:
+        logger.warning("Rejecting frame missing excursion column(s): {}", missing)
+        raise ConfigError(
+            f"Excursion primitives require column(s) {missing}: an extremum over "
+            "an interval reads the bars inside it, not only their closes."
+        )
+
+    for name, expected in required.items():
+        actual = frame.schema[name]
+        if actual != expected:
+            logger.warning(
+                "Rejecting {} of dtype {}; {} is required.",
+                name,
+                bounded_echo(actual),
+                expected,
+            )
+            raise ConfigError(
+                f"{name} must be a {expected} column, got {bounded_echo(actual)}; "
+                "apply excursion primitives to an engine-produced window frame."
+            )
+
+
+def require_total_grid(frame: pl.DataFrame, *, cadence_seconds: int) -> None:
+    """Refuse any frame that is not a hole-free grid at exactly ``cadence``.
+
+    STRICTER than the regular-grid check the indicator harness applies,
+    and deliberately so. That one accepts a hole whose width is a whole
+    multiple of the step, which is right for a LOOKUP: a counterpart is
+    found by close time, so a missing row makes one value null and leaves
+    every other value correct. An EXTREMUM has no such property. It reads
+    the interior of the interval, so a missing row silently removes a
+    candidate from the maximum, and the answer that comes back is not
+    null but WRONG -- indistinguishable from a real extremum over the
+    bars that happen to remain.
+
+    An empty frame and a single-row frame have no step to check and are
+    accepted; the horizon's own row count is what makes their columns
+    null, not this rule.
+
+    Args:
+        frame: The frame an excursion is about to be composed onto.
+        cadence_seconds: The cadence the caller states the rows are
+            emitted at. Strictly positive.
+
+    Raises:
+        ConfigError: If any consecutive pair of close times differs by
+            anything other than ``cadence_seconds``.
+
+    """
+    steps = frame.get_column(CLOSE_TIME_COLUMN).diff().drop_nulls()
+    if steps.is_empty():
+        return
+
+    offending = steps != cadence_seconds
+    offence_count = int(offending.sum())
+    if not offence_count:
+        return
+
+    first = int(offending.arg_true()[0])
+    close_time = frame.get_column(CLOSE_TIME_COLUMN)
+    logger.warning(
+        "Rejecting {} close_time step(s) that are not exactly {}s; the first is "
+        "{}s, between {} and {}.",
+        offence_count,
+        cadence_seconds,
+        int(steps[first]),
+        close_time[first],
+        close_time[first + 1],
+    )
+    raise ConfigError(
+        f"An excursion needs a total {cadence_seconds}s grid: {offence_count} "
+        f"step(s) are not exactly that, the first being {int(steps[first])}s "
+        f"between close_time {close_time[first]} and {close_time[first + 1]}. "
+        "An extremum reads the bars inside its interval, so a missing row does "
+        "not make the answer null, it makes it wrong -- a maximum over the bars "
+        "that happen to be present is not the maximum this column claims."
+    )
 
 
 def shifted_close_times(frame: pl.DataFrame, *, offset_seconds: int) -> pl.Series:

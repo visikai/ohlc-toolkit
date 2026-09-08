@@ -21,11 +21,13 @@ from polars.testing import assert_frame_equal
 from ohlc_toolkit.returns import (
     ReturnMethod,
     add_backward_returns,
+    add_forward_excursions,
     add_forward_returns,
     backward_return_column,
     forward_available_at_column,
     forward_return_column,
 )
+from ohlc_toolkit.returns.alignment import HIGH_COLUMN, LOW_COLUMN
 from ohlc_toolkit.temporal import ConfigError
 from ohlc_toolkit.windows import compute_windows
 from tests.test_returns.factories import (
@@ -39,16 +41,47 @@ from tests.test_returns.factories import (
 )
 from tests.test_windows.factories import frame_from_rows, profile_for
 
-# The two entry points every frame-shaped rule must fire in.
+# Every entry point a frame-shaped rule must fire in. The rules here are
+# about the FRAME -- a missing key column, a wrong dtype, a duplicated
+# close time -- not about what gets computed from it, so each one has to
+# hold in all three. Excursions were absent from this list for a while,
+# and the cost was exact: two guards they call were never observed, and
+# both could be deleted with the whole suite green.
 AddReturns = Callable[..., pl.DataFrame]
-_ENTRY_POINTS = [add_backward_returns, add_forward_returns]
-_ENTRY_POINT_IDS = ["backward", "forward"]
+_ENTRY_POINTS = [add_backward_returns, add_forward_returns, add_forward_excursions]
+_ENTRY_POINT_IDS = ["backward", "forward", "excursion"]
+
+# The returns only. An excursion reads the INTERIOR of its interval, so it
+# is positional where a return is a join on close time, and it refuses a
+# frame whose rows are not in grid order rather than working regardless.
+# That difference is real and tested on its own below; it is not this
+# list being lazy.
+_ORDER_FREE_ENTRY_POINTS = [add_backward_returns, add_forward_returns]
+_ORDER_FREE_IDS = ["backward", "forward"]
 
 # Each entry point paired with the helper that names its value column.
+# Excursions write two value columns rather than one, so they are tested
+# against their own names in test_excursions.py.
 _ENTRY_POINTS_AND_COLUMNS = [
     (add_backward_returns, backward_return_column),
     (add_forward_returns, forward_return_column),
 ]
+
+# Constant extrema for the fixtures the returns wrote first. Constants
+# rather than values derived from `close`: every fixture below varies one
+# thing deliberately, and extrema computed from a column a test has just
+# made a String or a struct would vary a second one by accident.
+_FIXTURE_HIGH = 1000.0
+_FIXTURE_LOW = 1.0
+
+# What each entry point reads, and therefore what it has to refuse the
+# absence of. Keyed by the callable so the two lists cannot fall out of
+# step with each other.
+_COLUMNS_READ = {
+    add_backward_returns: ("close_time", "close"),
+    add_forward_returns: ("close_time", "close"),
+    add_forward_excursions: ("close_time", "close", HIGH_COLUMN, LOW_COLUMN),
+}
 
 # The bounds of the Int64 column close times are held in.
 _INT64_MIN = -(2**63)
@@ -61,6 +94,46 @@ _INT64_MAX = 2**63 - 1
 _SHUFFLE = [3, 0, 5, 2, 1, 4]
 
 
+def _readable_by(entry_point: AddReturns, frame: pl.DataFrame) -> pl.DataFrame:
+    """Give a frame the extra columns one entry point reads.
+
+    Excursions read two columns the returns do not, so a fixture written
+    for the returns is refused by them for the WRONG reason -- a test
+    that names a missing `close_time` would pass on a refusal about a
+    missing `high`. A test asserting on a refusal it did not mean is
+    worse than no test at all.
+
+    It supplies them only for a fixture that says NOTHING about them.
+    The first version of this helper filled in whichever was missing,
+    which meant no fixture could reach an excursion without extrema and
+    `require_extremum_columns` stayed deletable with the whole suite
+    green -- the same defect this change was made to close, moved into
+    the thing closing it.
+
+    Args:
+        entry_point: The call about to be made.
+        frame: The fixture as the test built it.
+
+    Returns:
+        The frame, with extrema added only where they are read and only
+        where the test did not supply them itself.
+
+    """
+    if entry_point is not add_forward_excursions:
+        return frame
+    if HIGH_COLUMN in frame.columns or LOW_COLUMN in frame.columns:
+        # The fixture said something about the extrema -- dropped one,
+        # cast one, supplied both -- so it is left exactly as written.
+        # Repairing it here is how the extremum guard survived being
+        # deleted with this battery green: a helper that quietly supplies
+        # the column under test means no fixture can be missing it.
+        return frame
+    return frame.with_columns(
+        pl.lit(_FIXTURE_HIGH, dtype=pl.Float64).alias(HIGH_COLUMN),
+        pl.lit(_FIXTURE_LOW, dtype=pl.Float64).alias(LOW_COLUMN),
+    )
+
+
 def _add(
     entry_point: AddReturns,
     frame: pl.DataFrame,
@@ -68,21 +141,33 @@ def _add(
     horizon: str = "1m",
     method: ReturnMethod = ReturnMethod.SIMPLE,
 ) -> pl.DataFrame:
-    """Call one of the two entry points with this suite's usual arguments."""
-    return entry_point(frame, horizon=horizon, cadence=CADENCE, method=method)
+    """Call one of the entry points with this suite's usual arguments."""
+    return entry_point(
+        _readable_by(entry_point, frame),
+        horizon=horizon,
+        cadence=CADENCE,
+        method=method,
+    )
 
 
 class TestRequiredColumns:
     """The two columns this step reads are required; nothing else is."""
 
     @pytest.mark.parametrize("entry_point", _ENTRY_POINTS, ids=_ENTRY_POINT_IDS)
-    @pytest.mark.parametrize("dropped", ["close_time", "close"])
     def test_a_frame_missing_a_read_column_is_refused(
-        self, entry_point: AddReturns, dropped: str
+        self, entry_point: AddReturns
     ) -> None:
-        """A column that cannot be read cannot be silently worked around."""
-        with pytest.raises(ConfigError, match=dropped):
-            _add(entry_point, gap_free_frame().drop(dropped))
+        """A column that cannot be read cannot be silently worked around.
+
+        Over the columns THIS entry point reads rather than a fixed pair.
+        An excursion reads two the returns do not, and a battery that only
+        ever dropped `close_time` and `close` is exactly how its extremum
+        guard came to be deletable with every test still passing.
+        """
+        complete = _readable_by(entry_point, gap_free_frame())
+        for dropped in _COLUMNS_READ[entry_point]:
+            with pytest.raises(ConfigError, match=dropped):
+                _add(entry_point, complete.drop(dropped))
 
     @pytest.mark.parametrize("entry_point", _ENTRY_POINTS, ids=_ENTRY_POINT_IDS)
     def test_a_frame_missing_both_names_them_both(
@@ -170,6 +255,30 @@ class TestRequiredDtypes:
         with pytest.raises(ConfigError, match="Float64"):
             _add(entry_point, frame)
 
+    @pytest.mark.parametrize(
+        "dtype", [pl.Float32, pl.Int64, pl.String], ids=["Float32", "Int64", "String"]
+    )
+    @pytest.mark.parametrize("extremum", [HIGH_COLUMN, LOW_COLUMN], ids=["high", "low"])
+    def test_a_non_float64_extremum_is_refused(
+        self, extremum: str, dtype: pl.DataType
+    ) -> None:
+        """The two columns an excursion adds are held to the same width.
+
+        Deliberately not parametrized over the entry points. The returns
+        do not read these columns, so a version of this that passed for
+        them would be passing because nothing looked -- which is the
+        opposite of what it claims. A `Float32` high is the case that
+        matters: it is accepted by arithmetic and quietly changes values,
+        where a `String` would at least fail loudly on its own.
+        """
+        frame = _readable_by(add_forward_excursions, gap_free_frame()).with_columns(
+            pl.col(extremum).cast(dtype)
+        )
+        with pytest.raises(ConfigError, match="Float64"):
+            add_forward_excursions(
+                frame, horizon="1m", cadence=CADENCE, method=ReturnMethod.SIMPLE
+            )
+
     @pytest.mark.parametrize("entry_point", _ENTRY_POINTS, ids=_ENTRY_POINT_IDS)
     def test_an_unwieldy_dtype_is_echoed_within_a_bound(
         self, entry_point: AddReturns
@@ -238,7 +347,7 @@ class TestCloseTimeIsAKey:
     ) -> None:
         """The offending instant is reported, not just its existence."""
         frame = return_frame((0, 60, 60, 120), (100.0, 110.0, 111.0, 120.0))
-        with pytest.raises(ConfigError) as caught:
+        with pytest.raises(ConfigError, match="unique") as caught:
             _add(entry_point, frame)
         assert str(TIME_BASE + 60) in str(caught.value)
 
@@ -273,7 +382,7 @@ class TestRowOrderIsNotAssumed:
     """The join is on equality, so it does not care what order rows arrive in."""
 
     @pytest.mark.parametrize(
-        ("entry_point", "column_for"), _ENTRY_POINTS_AND_COLUMNS, ids=_ENTRY_POINT_IDS
+        ("entry_point", "column_for"), _ENTRY_POINTS_AND_COLUMNS, ids=_ORDER_FREE_IDS
     )
     def test_an_unsorted_frame_gets_the_same_values_per_close_time(
         self, entry_point: AddReturns, column_for: Callable[..., str]
@@ -297,7 +406,9 @@ class TestRowOrderIsNotAssumed:
         ):
             assert value == by_close_time[close_time]
 
-    @pytest.mark.parametrize("entry_point", _ENTRY_POINTS, ids=_ENTRY_POINT_IDS)
+    @pytest.mark.parametrize(
+        "entry_point", _ORDER_FREE_ENTRY_POINTS, ids=_ORDER_FREE_IDS
+    )
     def test_the_input_row_order_is_handed_back_unchanged(
         self, entry_point: AddReturns
     ) -> None:

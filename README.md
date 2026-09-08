@@ -350,6 +350,56 @@ rows, so a gap yields a null instead of a wrong pairing. `method` is
 required — `ReturnMethod.SIMPLE` or `ReturnMethod.LOG` — and is recorded
 in the column name. Any value that is not a finite float comes back null.
 
+`add_forward_excursions` reads the interval's interior rather than its
+end: the highest high and lowest low over `(t, t + H]`, each relative to
+the close at `t`, as `forward_mfe_*` and `forward_mae_*` with one
+`available_at` column beside them. The interval excludes the bar at `t`
+and includes the bar at `t + H`, so the adverse column is not clamped at
+zero — a path whose highest high stays below the entry close reports a
+negative favourable excursion, and `mae <= forward_return <= mfe` holds
+on every row all three are stated.
+
+Because an extremum reads every bar inside the interval, a missing row
+does not make it null but WRONG, so the frame must be a hole-free grid at
+exactly the stated cadence and anything else is refused. A bar with no
+price at all, or a `NaN` one, nulls both columns for every interval that
+contains it rather than being skipped.
+
+```python
+import polars as pl
+
+from ohlc_toolkit.returns import ReturnMethod, add_forward_excursions
+
+# Four one-minute bars. Every close is 100 so each excursion reads as a
+# plain fraction of the interval's highest high and lowest low.
+bars = pl.DataFrame(
+    {
+        "close_time": [1_700_000_000 + 60 * i for i in range(4)],
+        "high": [101.0, 104.0, 103.0, 106.0],
+        "low": [99.0, 100.0, 97.0, 95.0],
+        "close": [100.0, 100.0, 100.0, 100.0],
+    }
+)
+out = add_forward_excursions(
+    bars, horizon="2m", cadence="1m", method=ReturnMethod.SIMPLE
+)
+print(out.select("close_time", "forward_mfe_simple_2m", "forward_mae_simple_2m"))
+```
+
+```text
+shape: (4, 3)
+┌────────────┬───────────────────────┬───────────────────────┐
+│ close_time ┆ forward_mfe_simple_2m ┆ forward_mae_simple_2m │
+│ ---        ┆ ---                   ┆ ---                   │
+│ i64        ┆ f64                   ┆ f64                   │
+╞════════════╪═══════════════════════╪═══════════════════════╡
+│ 1700000000 ┆ 0.04                  ┆ -0.03                 │
+│ 1700000060 ┆ 0.06                  ┆ -0.05                 │
+│ 1700000120 ┆ null                  ┆ null                  │
+│ 1700000180 ┆ null                  ┆ null                  │
+└────────────┴───────────────────────┴───────────────────────┘
+```
+
 ### `snapshot` — fail-closed fetching
 
 A release is named by repository and immutable tag; asset URLs are
