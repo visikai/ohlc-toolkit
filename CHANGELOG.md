@@ -4,6 +4,21 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
+## Unreleased
+
+### Added
+
+- **`temporal.add_calendar_columns`, with `second_of_day`, `second_of_week`
+  and `day_of_week`: a pure UTC calendar decomposition of an Int64
+  Unix-seconds column.** `second_of_day` and `second_of_week` place a
+  timestamp inside the UTC day and the UTC week (Monday `0` through
+  Sunday `6`); `add_calendar_columns` turns both into four cyclic
+  columns -- `cal_mod_sin`, `cal_mod_cos`, `cal_dow_sin`, `cal_dow_cos`
+  -- so the day and week wrap without a discontinuity. The clock is UTC
+  by construction: there is no timezone parameter, and a `Datetime`
+  column is refused rather than converted. Purely additive: no existing
+  name, column or signature changes.
+
 ## 3.0.0 - 2026-09-08
 
 **Read this first if you are on 2.x.** Two calls that used to return a

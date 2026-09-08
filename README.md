@@ -188,6 +188,38 @@ work; a bare integer whose unit you have to infer does not. `ConfigError`,
 taxonomy, and every message that quotes untrusted input goes through one
 bounded echo.
 
+`temporal.calendar` decomposes an Int64 Unix-seconds column with no
+timezone to supply: the clock is UTC by construction. `second_of_day`,
+`second_of_week` and `day_of_week` (Monday `0` through Sunday `6`) are
+scalar-or-expression helpers; `add_calendar_columns` turns the first two
+into four cyclic columns, so the wrap at midnight or at the week
+boundary is a point on a circle rather than a jump:
+
+```python
+import polars as pl
+
+from ohlc_toolkit.temporal import add_calendar_columns
+
+# 1970-01-05 00:00:00 UTC, a Monday, one week after itself.
+frame = pl.DataFrame(
+    {"close_time": [4 * 86_400, 11 * 86_400]}, schema={"close_time": pl.Int64}
+)
+out = add_calendar_columns(frame)
+print(out.select("cal_dow_sin", "cal_dow_cos"))
+```
+
+```text
+shape: (2, 2)
+┌─────────────┬─────────────┐
+│ cal_dow_sin ┆ cal_dow_cos │
+│ ---         ┆ ---         │
+│ f64         ┆ f64         │
+╞═════════════╪═════════════╡
+│ 0.0         ┆ 1.0         │
+│ 0.0         ┆ 1.0         │
+└─────────────┴─────────────┘
+```
+
 ### `source` — reads that report instead of repair
 
 A `SourceProfile` states a source's cadence, phase, timestamp column, and
