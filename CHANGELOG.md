@@ -4,7 +4,28 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
-## Unreleased
+## 3.0.0 - 2026-09-08
+
+**Read this first if you are on 2.x.** Two calls that used to return a
+silently wrong result now refuse it with a `ConfigError`, and that is why
+this is a major version rather than a minor one. Nothing else changes
+shape: no column, name, payload key or signature is removed or renamed.
+
+1. **`phased_lookback` and `phased_lookback_reference` refuse a frame
+   whose measured cadence does not divide the window.** Such a frame used
+   to come back with the indicator null end to end and nothing raised.
+   If you materialize a window at a cadence that does not divide it, the
+   call now tells you so at once; pick a cadence that divides the window.
+2. **`metallic_recurrence` and `metallic_lookback` refuse a seed at or
+   above the lower bound that quantization moves below it.** The seed
+   used to be dropped by the bound it was meant to satisfy, so the
+   schedule silently started from its second term. Seeding below the
+   bound on purpose still works; only the contradictory case is refused.
+
+The rest is additive: the forward excursion primitive
+(`returns.add_forward_excursions`) and the horizon schedule
+(`schedules.HorizonSchedule` with its three generators), both detailed
+below.
 
 ### Added
 
