@@ -268,6 +268,71 @@ def test_a_zero_length_horizon_is_refused_as_a_horizon(
     assert "window" not in str(refused.value).lower()
 
 
+_METALLIC_LADDER: dict[str, object] = {
+    "coefficient": 1.618,
+    "seed": "1h",
+    "grain": "1h",
+    "minimum": "1h",
+    "maximum": "4h",
+}
+_LOG_SPACED_LADDER: dict[str, object] = {
+    "count": 3,
+    "minimum": "1h",
+    "maximum": "4h",
+    "grain": "1h",
+}
+
+
+@pytest.mark.parametrize(
+    ("generate", "kwargs", "parameter"),
+    [
+        (metallic_horizons, _METALLIC_LADDER, "seed"),
+        (metallic_horizons, _METALLIC_LADDER, "minimum"),
+        (metallic_horizons, _METALLIC_LADDER, "maximum"),
+        (log_spaced_horizons, _LOG_SPACED_LADDER, "minimum"),
+        (log_spaced_horizons, _LOG_SPACED_LADDER, "maximum"),
+    ],
+    ids=[
+        "metallic-seed",
+        "metallic-minimum",
+        "metallic-maximum",
+        "log-spaced-minimum",
+        "log-spaced-maximum",
+    ],
+)
+def test_a_recorded_zero_length_parameter_is_refused_as_a_horizon(
+    generate: Callable[..., HorizonSchedule],
+    kwargs: dict[str, object],
+    parameter: str,
+) -> None:
+    """Reading a payload back is a second door to the refusal, and it names a horizon too.
+
+    The recorded parameters are read by the window generators' parameter
+    classes, which validate durations as windows. Each is validated as a
+    horizon before those classes see it, so a recorded zero-length value
+    is refused as what it was recorded as. The recorded id is never
+    reached: the parameters are refused first.
+    """
+    payload = generate(**kwargs).to_dict()
+    parameters = payload["parameters"]
+    assert isinstance(parameters, dict)
+    forged = {**payload, "parameters": {**parameters, parameter: "0s"}}
+    with pytest.raises(ConfigError) as refused:
+        HorizonSchedule.from_dict(forged)
+    assert str(refused.value).startswith("Horizon duration must be strictly positive")
+    assert "window" not in str(refused.value).lower()
+
+
+def test_bounds_that_exclude_every_horizon_say_so() -> None:
+    """When the bounds keep nothing, the refusal counts horizons, not windows."""
+    with pytest.raises(ConfigError) as refused:
+        metallic_horizons(
+            coefficient=1.618, seed="1h", grain="1h", minimum="12h", maximum="12h"
+        )
+    assert str(refused.value).startswith("The bounds left no horizons:")
+    assert "window" not in str(refused.value)
+
+
 def test_a_horizon_schedule_carries_no_cadence() -> None:
     """Two fields, neither a cadence; no constructor takes one.
 

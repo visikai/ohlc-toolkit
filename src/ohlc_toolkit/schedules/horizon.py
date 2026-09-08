@@ -98,6 +98,32 @@ _SPEC_TYPES: dict[
     GeneratorKind.EXPLICIT: ExplicitSpec,
 }
 
+# Which of a kind's recorded parameters are durations. Read back from a
+# payload, each is validated as a horizon before the parameter class
+# above sees it, so a zero-length value is refused as the thing it was
+# recorded as, not as a "Window duration".
+_DURATION_PARAMETERS: dict[GeneratorKind, tuple[str, ...]] = {
+    GeneratorKind.METALLIC_RECURRENCE: ("seed", "minimum", "maximum"),
+    GeneratorKind.LOG_SPACED: ("minimum", "maximum"),
+    GeneratorKind.EXPLICIT: (),
+}
+
+
+def _require_horizon_durations(
+    kind: GeneratorKind, parameters: Mapping[str, object]
+) -> None:
+    """Refuse a zero-length recorded duration in the name of a horizon.
+
+    The parameter classes validate the same values again, as windows. By
+    then every duration here has passed as a horizon, so their message is
+    never the one a reader sees. Anything that is not a duration at all is
+    left for the parameter class to refuse by type, as it always has.
+    """
+    for key in _DURATION_PARAMETERS[kind]:
+        value = parameters.get(key)
+        if isinstance(value, Duration | str):
+            validate_horizon_duration(value)
+
 
 @dataclass(frozen=True)
 class HorizonSchedule:
@@ -193,6 +219,7 @@ class HorizonSchedule:
         parameters = mapping_from_payload(
             data["parameters"], label="horizon schedule parameters"
         )
+        _require_horizon_durations(kind, parameters)
         schedule = cls(
             spec=_SPEC_TYPES[kind].from_dict(parameters),
             horizons=durations_from_payload(data["horizons"], label="horizon"),
