@@ -86,7 +86,7 @@ class PriceToMovingAverage:
             ConfigError: If the period is unusable, or if the frame was
                 not assembled for this lookback.
             DataValidationError: If a present close is not positive, or
-                if an intermediate is non-finite.
+                if an intermediate or the derived reading is non-finite.
 
         """
         require_phased_inputs(self, phased, period=period, fields=(_CLOSE,))
@@ -94,7 +94,11 @@ class PriceToMovingAverage:
         identity = indicator_identity(self, phased, period=period)
         parts = phased.frame.select(_decomposed())
         require_finite_columns(parts, (_CURRENT, _MEAN), computing=identity.column_name)
-        return parts.select(_reading().alias(identity.column_name)).to_series()
+        readings = parts.select(_reading().alias(identity.column_name))
+        require_finite_columns(
+            readings, (identity.column_name,), computing=identity.column_name
+        )
+        return readings.to_series()
 
 
 def _decomposed() -> list[pl.Expr]:

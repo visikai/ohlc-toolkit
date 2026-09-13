@@ -213,6 +213,21 @@ def test_an_infinite_volume_is_refused_by_the_finiteness_guard() -> None:
         _reading([math.inf, 1.0, 2.0, 4.0])
 
 
+@pytest.mark.parametrize(
+    "volumes",
+    [
+        pytest.param([1e308, 1e-308, 1e-308, 1e-308], id="quotient-overflow"),
+        pytest.param([1e-308, 1e308, 1e308, 1e308], id="quotient-underflow"),
+    ],
+)
+def test_a_non_finite_log_from_finite_volumes_is_refused(
+    volumes: list[float],
+) -> None:
+    """The quotient can overflow or underflow to zero before its logarithm."""
+    with pytest.raises(DataValidationError, match="logvolratio"):
+        _reading(volumes)
+
+
 def test_the_primitive_runs_over_real_harness_output() -> None:
     """The median path meets a frame the harness really produced."""
     rows = [

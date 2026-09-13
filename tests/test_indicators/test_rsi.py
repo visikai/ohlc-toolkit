@@ -266,6 +266,17 @@ def test_a_non_finite_change_total_is_refused_rather_than_read_through(
         _RSI.values(phased_from_closes([closes], lookback=_LOOKBACK), period=_PERIOD)
 
 
+def test_overflowing_combined_movement_is_refused_before_division() -> None:
+    """Finite up/down totals sum to infinity and would falsely read zero."""
+    with pytest.raises(DataValidationError, match="rsi"):
+        _reading([1.0, 1.0, 2.0**1023, 1.0])
+
+
+def test_missing_closes_still_null_a_tick_with_large_finite_change_totals() -> None:
+    """A missing tick has no combined movement to validate or reading to emit."""
+    assert _reading([None, 1.0, 2.0**1023, 1.0]) is None
+
+
 def test_the_derived_name_survives_a_round_trip_through_parquet(
     tmp_path: Path,
 ) -> None:

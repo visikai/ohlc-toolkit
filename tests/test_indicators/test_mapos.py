@@ -153,6 +153,12 @@ def test_an_overflowing_mean_is_refused_rather_than_divided_into() -> None:
         _reading([enormous, enormous, enormous])
 
 
+def test_a_non_finite_log_from_a_quotient_underflow_is_refused() -> None:
+    """The mean stays finite but the close over it rounds to zero."""
+    with pytest.raises(DataValidationError, match="mapos"):
+        _reading([1e-308, 1e308, 1e-308])
+
+
 def test_the_writer_appends_this_primitive_too() -> None:
     """`L = P` keeps it out of the chaining test, so it gets its own.
 
