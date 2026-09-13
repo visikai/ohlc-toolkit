@@ -522,6 +522,15 @@ filenames and manifest fields spell it. What varies within a frame is in
 the name; what is constant across the artifact is in the manifest, so the
 two cannot disagree. The name parses back to the record it came from.
 
+`CutlersRSI`, `RelativeRange`, `LogVolumeRatio` and `PriceToMovingAverage`
+refuse non-finite arithmetic with `DataValidationError`, even when all
+present inputs are finite. RSI checks the combined upward and downward
+movement before division, so an overflowing denominator cannot masquerade
+as a legitimate zero. The ratio primitives also check their derived
+readings, including a quotient that underflows to zero before its logarithm.
+Missing inputs still propagate as null; arithmetic failures are not
+clamped, filled or converted to null.
+
 Every feature reports two counts. Effective history is `L × W`, the span
 one value is computed from. Effective-N counts *independent blocks* —
 whole non-overlapping windows in the range, divided by the lookback — and

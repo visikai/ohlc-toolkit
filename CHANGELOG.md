@@ -4,6 +4,19 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
+## Unreleased
+
+### Fixed
+
+- **Indicator primitives refuse non-finite derived arithmetic with
+  `DataValidationError`.** Cutler's RSI now checks the combined movement
+  before division, preventing finite upward and downward totals whose sum
+  overflows from producing a plausible zero. Relative range, log-volume
+  ratio and price-to-moving-average also validate their derived readings,
+  including quotient overflow and quotient underflow to zero before a log.
+  Ordinary formulas, boundary conventions, missing-input nulls, lookbacks
+  and feature identities are unchanged.
+
 ## 3.1.0 - 2026-09-08
 
 ### Added

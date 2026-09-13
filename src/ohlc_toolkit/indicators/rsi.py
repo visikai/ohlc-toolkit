@@ -79,6 +79,7 @@ _CLOSE: Final = "close"
 _HOLE: Final = "_incomplete"
 _UP: Final = "_up"
 _DOWN: Final = "_down"
+_MOVEMENT: Final = "_movement"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,18 +131,25 @@ class CutlersRSI:
         Raises:
             ConfigError: If the period is unusable, or if the frame was
                 not assembled for this lookback.
-            DataValidationError: If either change total is non-finite,
-                which finite closes whose differences do not overflow
-                cannot produce.
+            DataValidationError: If either change total or their combined
+                movement is non-finite, including overflow from finite
+                closes.
 
         """
         require_phased_inputs(self, phased, period=period, fields=(_CLOSE,))
         identity = indicator_identity(self, phased, period=period)
-        parts = phased.frame.select(_decomposed())
-        # On the TOTALS, not on the reading: a finite up total over an
-        # infinite down total is `0.0`, in range and indistinguishable
-        # from the only-falls convention.
-        require_finite_columns(parts, (_UP, _DOWN), computing=identity.column_name)
+        parts = phased.frame.select(_decomposed()).with_columns(
+            pl.when(pl.col(_HOLE))
+            .then(None)
+            .otherwise(pl.col(_UP) + pl.col(_DOWN))
+            .alias(_MOVEMENT)
+        )
+        # Check the combined movement BEFORE division too: finite up and
+        # down totals can sum to infinity and yield a plausible `0.0`.
+        # Missing inputs still have no reading or combined movement.
+        require_finite_columns(
+            parts, (_UP, _DOWN, _MOVEMENT), computing=identity.column_name
+        )
         return parts.select(_reading().alias(identity.column_name)).to_series()
 
 
@@ -194,10 +202,10 @@ def _reading() -> pl.Expr:
     rather than by luck.
 
     Returns:
-        The expression, over the columns :func:`_decomposed` produces.
+        The expression, over the checked totals and combined movement.
 
     """
-    movement = pl.col(_UP) + pl.col(_DOWN)
+    movement = pl.col(_MOVEMENT)
     return (
         pl.when(pl.col(_HOLE))
         .then(None)

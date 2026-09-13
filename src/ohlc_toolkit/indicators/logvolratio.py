@@ -94,7 +94,7 @@ class LogVolumeRatio:
             ConfigError: If the period is unusable, or if the frame was
                 not assembled for this lookback.
             DataValidationError: If a present volume is not positive, or
-                if an intermediate is non-finite.
+                if an intermediate or the derived reading is non-finite.
 
         """
         require_phased_inputs(self, phased, period=period, fields=(_VOLUME,))
@@ -104,7 +104,11 @@ class LogVolumeRatio:
         require_finite_columns(
             parts, (_CURRENT, _BASELINE), computing=identity.column_name
         )
-        return parts.select(_reading().alias(identity.column_name)).to_series()
+        readings = parts.select(_reading().alias(identity.column_name))
+        require_finite_columns(
+            readings, (identity.column_name,), computing=identity.column_name
+        )
+        return readings.to_series()
 
 
 def _decomposed() -> list[pl.Expr]:

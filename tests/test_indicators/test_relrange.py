@@ -231,6 +231,12 @@ def test_an_overflowing_true_range_is_refused_rather_than_averaged() -> None:
         _reading([enormous, enormous], [-enormous, -enormous], [1.0, 1.0], period=1)
 
 
+def test_an_overflowing_quotient_of_finite_range_and_close_is_refused() -> None:
+    """Finite components are insufficient when their quotient overflows."""
+    with pytest.raises(DataValidationError, match="relrange"):
+        _reading([1.0, 1e308], [1e-308, 1e308], [1e-308, 1e308], period=1)
+
+
 def test_the_true_range_is_exact_where_the_arithmetic_form_is_not() -> None:
     """The counter-example that rules out `clip(h - p, 0) + clip(p - l, 0)`.
 
