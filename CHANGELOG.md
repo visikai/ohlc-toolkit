@@ -6,6 +6,42 @@ against their tags, and are not restated here.
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING: constructing or rehydrating a generated `WindowSchedule` or
+  `LookbackSchedule` now REFUSES a recorded member that contradicts its
+  spec's bounds or grain, and REFUSES parameters the generator endpoint
+  rules already refused.** Direct construction and `from_dict` used to
+  check only emptiness, the cap, type, positivity and repeats. They never
+  compared a member with the recorded minimum, maximum or grain, and they
+  never re-applied `require_endpoints_on_the_grain` or
+  `require_seed_above_its_own_floor`. So
+  `WindowSchedule(LogSpacedSpec(count=2, minimum=60s, maximum=120s,
+  grain=60s), windows=(180s,))` constructed, hashed and rehydrated, and
+  `LookbackSchedule` accepted `maximum=28` beside `periods=(99,)`. The
+  generator functions themselves already enforced those rules, so nothing
+  they produced was affected.
+  **The rule, which is what you need to tell whether you are affected:**
+  a generated schedule you construct yourself or read back through
+  `from_dict` now raises `ConfigError` if a member is below the recorded
+  minimum, above the recorded maximum, or not a whole multiple of the
+  recorded grain, or if the parameters are a combination the generator
+  path already refused (a log-spaced endpoint that quantizes outside its
+  range; a metallic seed at or above its floor that quantizes below it).
+  The message names the offending member and the bound or grain it
+  violates. Explicit schedules are unchanged: they have no bounds, grain
+  or endpoint rules.
+  Recorded members stay authoritative within those constraints. Nothing
+  is regenerated, repaired, or replayed. Descriptive-only parameters are
+  not accepted.
+  **No resolved schedule that the generator path can produce changes its
+  members, so no schedule id moves.** A schedule written by
+  `metallic_recurrence`, `log_spaced`, `metallic_lookback`,
+  `log_spaced_lookback`, or `explicit` / `explicit_lookback` round-trips
+  with the same id as before. Only hand-built or edited payloads that
+  already contradicted their own spec now raise instead of hashing the
+  contradiction.
+
 ### Fixed
 
 - **Configuration boundaries refuse unrepresentable magnitudes with

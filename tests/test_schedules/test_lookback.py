@@ -10,6 +10,8 @@ the same schedule. And the two readers are proved to refuse each other's
 payloads rather than coerce them.
 """
 
+import hashlib
+import json
 import math
 
 import pytest
@@ -19,7 +21,13 @@ from ohlc_toolkit.schedules import (
     WindowSchedule,
     metallic_recurrence,
 )
-from ohlc_toolkit.schedules.generators import RoundingRule, recurrence_values
+from ohlc_toolkit.schedules.generators import (
+    RoundingRule,
+    recurrence_values,
+    require_explicit_schedule,
+    require_log_spaced_schedule,
+    require_metallic_schedule,
+)
 from ohlc_toolkit.schedules.lookback import (
     PERIOD_UNITS,
     ExplicitLookbackSpec,
@@ -448,6 +456,120 @@ def test_the_count_path_seed_refusal_speaks_in_periods_not_durations() -> None:
     message = str(caught.value)
     assert "The seed 10 is at or above the minimum 10" in message
     assert "10s" not in message
+
+
+def _lookback_payload(
+    spec: LogSpacedLookbackSpec | MetallicLookbackSpec | ExplicitLookbackSpec,
+    periods: tuple[int, ...],
+) -> dict[str, object]:
+    """Build a ``from_dict`` payload for a list the constructor would refuse."""
+    identity: dict[str, object] = {
+        "kind": spec.kind.value,
+        "parameters": spec.to_dict(),
+        "periods": list(periods),
+    }
+    text = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return {**identity, "schedule_id": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+
+
+class TestResolvedGeneratedLookbacksRefuseContradictions:
+    """Recorded counts must agree with the spec's bounds, grain and endpoints."""
+
+    def test_a_member_above_the_maximum_is_refused_at_construction(self) -> None:
+        """Seat 2: count ``maximum=28`` with ``periods=(99,)``."""
+        spec = LogSpacedLookbackSpec(count=3, minimum=7, maximum=28)
+        with pytest.raises(ConfigError, match=r"lookback 99.*maximum 28") as caught:
+            LookbackSchedule(spec=spec, periods=(99,))
+        assert "99" in str(caught.value)
+        assert "28" in str(caught.value)
+
+    def test_a_member_above_the_maximum_is_refused_at_from_dict(self) -> None:
+        """The same contradictory payload is refused on rehydration."""
+        spec = LogSpacedLookbackSpec(count=3, minimum=7, maximum=28)
+        with pytest.raises(ConfigError, match=r"lookback 99.*maximum 28"):
+            LookbackSchedule.from_dict(_lookback_payload(spec, (99,)))
+
+    def test_a_member_below_the_minimum_is_refused_on_both_paths(self) -> None:
+        """3 is on the grain and below a floor of 7."""
+        spec = LogSpacedLookbackSpec(count=3, minimum=7, maximum=28)
+        with pytest.raises(ConfigError, match=r"lookback 3.*minimum 7"):
+            LookbackSchedule(spec=spec, periods=(3,))
+        with pytest.raises(ConfigError, match=r"lookback 3.*minimum 7"):
+            LookbackSchedule.from_dict(_lookback_payload(spec, (3,)))
+
+    def test_a_member_off_the_grain_is_refused_on_both_paths(self) -> None:
+        """10 is inside 9..21 but is not a multiple of 3."""
+        spec = LogSpacedLookbackSpec(count=2, minimum=9, maximum=21, grain=3)
+        with pytest.raises(ConfigError, match=r"lookback 10.*grain 3"):
+            LookbackSchedule(spec=spec, periods=(10,))
+        with pytest.raises(ConfigError, match=r"lookback 10.*grain 3"):
+            LookbackSchedule.from_dict(_lookback_payload(spec, (10,)))
+
+    def test_endpoint_rules_are_refused_on_both_paths_for_log_spaced(self) -> None:
+        """A grain that drops an endpoint refuses construction and rehydration."""
+        spec = LogSpacedLookbackSpec(count=3, minimum=10, maximum=100, grain=3)
+        with pytest.raises(ConfigError, match="outside the range it defines"):
+            LookbackSchedule(spec=spec, periods=(33,))
+        with pytest.raises(ConfigError, match="outside the range it defines"):
+            LookbackSchedule.from_dict(_lookback_payload(spec, (33,)))
+
+    def test_endpoint_rules_are_refused_on_both_paths_for_metallic(self) -> None:
+        """A seed the floor would drop is refused the same way at both doors."""
+        spec = MetallicLookbackSpec(
+            coefficient=1.618, seed=10, grain=3, minimum=10, maximum=100
+        )
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            LookbackSchedule(spec=spec, periods=(27,))
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            LookbackSchedule.from_dict(_lookback_payload(spec, (27,)))
+
+    def test_an_explicit_lookback_is_unaffected_by_the_generated_predicates(
+        self,
+    ) -> None:
+        """An explicit list has no bounds or grain to contradict."""
+        schedule = LookbackSchedule(
+            spec=ExplicitLookbackSpec(periods=(99,)), periods=(99,)
+        )
+        assert schedule.periods == (99,)
+        assert LookbackSchedule.from_dict(schedule.to_dict()) == schedule
+        require_explicit_schedule((99,), units=PERIOD_UNITS)
+
+    def test_the_shared_log_spaced_predicate_and_generator_refuse_the_same_inputs(
+        self,
+    ) -> None:
+        """One implementation: the function and ``log_spaced_lookback`` raise alike."""
+        with pytest.raises(ConfigError) as predicate:
+            require_log_spaced_schedule(
+                minimum=10,
+                maximum=100,
+                grain=3,
+                rounding=RoundingRule.NEAREST_TIES_AWAY,
+                members=(),
+                units=PERIOD_UNITS,
+            )
+        with pytest.raises(ConfigError) as generated:
+            log_spaced_lookback(count=3, minimum=10, maximum=100, grain=3)
+        assert str(predicate.value) == str(generated.value)
+
+    def test_the_shared_metallic_predicate_and_generator_refuse_the_same_inputs(
+        self,
+    ) -> None:
+        """One implementation: the function and ``metallic_lookback`` raise alike."""
+        with pytest.raises(ConfigError) as predicate:
+            require_metallic_schedule(
+                seed=10,
+                minimum=10,
+                maximum=100,
+                grain=3,
+                rounding=RoundingRule.NEAREST_TIES_AWAY,
+                members=(),
+                units=PERIOD_UNITS,
+            )
+        with pytest.raises(ConfigError) as generated:
+            metallic_lookback(
+                coefficient=1.618, seed=10, grain=3, minimum=10, maximum=100
+            )
+        assert str(predicate.value) == str(generated.value)
 
 
 if __name__ == "__main__":

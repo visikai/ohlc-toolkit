@@ -6,6 +6,8 @@ literal list -- so an implementation that agreed with itself but not
 with the arithmetic would still be caught.
 """
 
+import hashlib
+import json
 import math
 import sys
 from fractions import Fraction
@@ -20,6 +22,7 @@ from ohlc_toolkit.schedules import (
     LogSpacedSpec,
     MetallicRecurrenceSpec,
     RoundingRule,
+    WindowSchedule,
     explicit,
     log_spaced,
     metallic_recurrence,
@@ -27,6 +30,9 @@ from ohlc_toolkit.schedules import (
 from ohlc_toolkit.schedules.generators import (
     DURATION_UNITS,
     recurrence_values,
+    require_explicit_schedule,
+    require_log_spaced_schedule,
+    require_metallic_schedule,
     require_resolved_windows,
 )
 from ohlc_toolkit.temporal import ConfigError, Duration
@@ -1203,6 +1209,164 @@ def test_the_window_refusals_are_unchanged_byte_for_byte() -> None:
     assert str(repeated.value) == (
         "A schedule must name each window once, got 1m twice."
     )
+
+
+def _hash_payload(payload: dict[str, object]) -> str:
+    """Hash a schedule identity payload the way a schedule id is defined."""
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _window_from_dict_payload(
+    spec: LogSpacedSpec | MetallicRecurrenceSpec | ExplicitSpec,
+    windows: tuple[Duration, ...],
+) -> dict[str, object]:
+    """Build a ``from_dict`` payload for a list the constructor would refuse."""
+    identity: dict[str, object] = {
+        "kind": spec.kind.value,
+        "parameters": spec.to_dict(),
+        "windows": [str(window) for window in windows],
+    }
+    return {**identity, "schedule_id": _hash_payload(identity)}
+
+
+class TestResolvedGeneratedWindowsRefuseContradictions:
+    """Recorded members must agree with the spec's bounds, grain and endpoints."""
+
+    def test_a_member_above_the_maximum_is_refused_at_construction(self) -> None:
+        """Seat 2: duration ``maximum=2m`` with member ``3m``."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("2m"),
+            grain=Duration.parse("1m"),
+        )
+        with pytest.raises(ConfigError, match=r"window 3m.*maximum 2m") as caught:
+            WindowSchedule(spec=spec, windows=(Duration.parse("3m"),))
+        assert "3m" in str(caught.value)
+        assert "2m" in str(caught.value)
+
+    def test_a_member_above_the_maximum_is_refused_at_from_dict(self) -> None:
+        """The same contradictory payload is refused on rehydration."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("2m"),
+            grain=Duration.parse("1m"),
+        )
+        payload = _window_from_dict_payload(spec, (Duration.parse("3m"),))
+        with pytest.raises(ConfigError, match=r"window 3m.*maximum 2m"):
+            WindowSchedule.from_dict(payload)
+
+    def test_a_member_below_the_minimum_is_refused_on_both_paths(self) -> None:
+        """1m is on the grain and below a 2m floor."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("2m"),
+            maximum=Duration.parse("5m"),
+            grain=Duration.parse("1m"),
+        )
+        windows = (Duration.parse("1m"),)
+        with pytest.raises(ConfigError, match=r"window 1m.*minimum 2m"):
+            WindowSchedule(spec=spec, windows=windows)
+        with pytest.raises(ConfigError, match=r"window 1m.*minimum 2m"):
+            WindowSchedule.from_dict(_window_from_dict_payload(spec, windows))
+
+    def test_a_member_off_the_grain_is_refused_on_both_paths(self) -> None:
+        """90s is inside 1m..3m but is not a 1m multiple."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("3m"),
+            grain=Duration.parse("1m"),
+        )
+        windows = (Duration(90),)
+        with pytest.raises(ConfigError, match=r"window 1m30s.*grain 1m"):
+            WindowSchedule(spec=spec, windows=windows)
+        with pytest.raises(ConfigError, match=r"window 1m30s.*grain 1m"):
+            WindowSchedule.from_dict(_window_from_dict_payload(spec, windows))
+
+    def test_endpoint_rules_are_refused_on_both_paths_for_log_spaced(self) -> None:
+        """A grain that drops an endpoint refuses construction and rehydration."""
+        spec = LogSpacedSpec(
+            count=3,
+            minimum=Duration.parse("10s"),
+            maximum=Duration.parse("100s"),
+            grain=Duration.parse("3s"),
+        )
+        windows = (Duration.parse("12s"),)
+        with pytest.raises(ConfigError, match="outside the range it defines"):
+            WindowSchedule(spec=spec, windows=windows)
+        with pytest.raises(ConfigError, match="outside the range it defines"):
+            WindowSchedule.from_dict(_window_from_dict_payload(spec, windows))
+
+    def test_endpoint_rules_are_refused_on_both_paths_for_metallic(self) -> None:
+        """A seed the floor would drop is refused the same way at both doors."""
+        spec = MetallicRecurrenceSpec(
+            coefficient=1.618,
+            seed=Duration.parse("10s"),
+            grain=Duration.parse("3s"),
+            minimum=Duration.parse("10s"),
+            maximum=Duration.parse("5m"),
+        )
+        windows = (Duration.parse("27s"),)
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            WindowSchedule(spec=spec, windows=windows)
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            WindowSchedule.from_dict(_window_from_dict_payload(spec, windows))
+
+    def test_an_explicit_schedule_is_unaffected_by_the_generated_predicates(
+        self,
+    ) -> None:
+        """An explicit list has no bounds or grain to contradict."""
+        schedule = WindowSchedule(
+            spec=ExplicitSpec(name="odd-three"),
+            windows=(Duration.parse("3m"),),
+        )
+        assert schedule.windows == (Duration.parse("3m"),)
+        assert WindowSchedule.from_dict(schedule.to_dict()) == schedule
+        require_explicit_schedule((180,), units=DURATION_UNITS)
+
+    def test_the_shared_log_spaced_predicate_and_generator_refuse_the_same_inputs(
+        self,
+    ) -> None:
+        """One implementation: the function and ``log_spaced`` raise alike."""
+        with pytest.raises(ConfigError) as predicate:
+            require_log_spaced_schedule(
+                minimum=10,
+                maximum=100,
+                grain=3,
+                rounding=RoundingRule.NEAREST_TIES_AWAY,
+                members=(),
+                units=DURATION_UNITS,
+            )
+        with pytest.raises(ConfigError) as generated:
+            log_spaced(count=3, minimum="10s", maximum="100s", grain="3s")
+        assert str(predicate.value) == str(generated.value)
+
+    def test_the_shared_metallic_predicate_and_generator_refuse_the_same_inputs(
+        self,
+    ) -> None:
+        """One implementation: the function and ``metallic_recurrence`` raise alike."""
+        with pytest.raises(ConfigError) as predicate:
+            require_metallic_schedule(
+                seed=10,
+                minimum=10,
+                maximum=300,
+                grain=3,
+                rounding=RoundingRule.NEAREST_TIES_AWAY,
+                members=(),
+                units=DURATION_UNITS,
+            )
+        with pytest.raises(ConfigError) as generated:
+            metallic_recurrence(
+                coefficient=1.618,
+                seed="10s",
+                grain="3s",
+                minimum="10s",
+                maximum="5m",
+            )
+        assert str(predicate.value) == str(generated.value)
 
 
 if __name__ == "__main__":
