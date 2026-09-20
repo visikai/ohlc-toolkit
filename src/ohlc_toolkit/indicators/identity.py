@@ -212,28 +212,13 @@ class FeatureIdentity:
 def _parsed_window(spelling: str) -> Duration:
     """Parse the window part of a column name, refusing what will not parse.
 
-    ``coerce_duration`` now raises :class:`ConfigError` for every shape it
-    refuses, including the numeric component of more than 4300 digits that
-    used to trip CPython's integer-parsing limit and escape as a bare
-    ``ValueError``. The translation below is therefore defence in depth
-    rather than a live leak, and is kept until a card removes the matching
-    defensive catches together.
-
     Raises:
         ConfigError: For any window spelling this cannot turn into a
-            duration.
+            duration. `coerce_duration` raises it directly for every shape
+            it refuses, so nothing is translated here.
 
     """
-    try:
-        return coerce_duration(spelling)
-    except ValueError as error:
-        # ConfigError does not derive from ValueError, so the taxonomy's
-        # own refusals pass through here untouched and only the leak is
-        # converted.
-        logger.warning("Rejecting an unparsable window: {}", bounded_echo(spelling))
-        raise ConfigError(
-            f"{bounded_echo(spelling)} is not a duration this can parse."
-        ) from error
+    return coerce_duration(spelling)
 
 
 def effective_history(period: int, window: Duration | str) -> Duration:

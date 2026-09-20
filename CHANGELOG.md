@@ -31,6 +31,15 @@ against their tags, and are not restated here.
   whether or not the grid is empty. An in-phase anchor with no tick inside
   the frame still returns the empty grid it always did.
 
+### Removed
+
+- **The feature-identity window parser no longer converts a `ValueError`
+  that can no longer be raised.** `coerce_duration` refuses every shape
+  with `ConfigError`, including the over-long magnitude that used to
+  escape CPython's integer-conversion limit, so the wrapper around it
+  translated nothing. Every input that reaches the parser still refuses
+  with `ConfigError`; no refusal a caller can observe has changed.
+
 ## 3.1.1 - 2026-09-14
 
 ### Fixed
