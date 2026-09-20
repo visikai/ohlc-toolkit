@@ -212,12 +212,12 @@ class FeatureIdentity:
 def _parsed_window(spelling: str) -> Duration:
     """Parse the window part of a column name, refusing what will not parse.
 
-    ``coerce_duration`` raises :class:`ConfigError` for the shapes it
-    knows about, and a bare ``ValueError`` for one it does not: a numeric
-    component of more than 4300 digits trips CPython's integer-parsing
-    limit inside it. This entry point takes a column name off a stored
-    artifact and documents ``ConfigError``, so the leak is closed here
-    rather than left for a caller to discover.
+    ``coerce_duration`` now raises :class:`ConfigError` for every shape it
+    refuses, including the numeric component of more than 4300 digits that
+    used to trip CPython's integer-parsing limit and escape as a bare
+    ``ValueError``. The translation below is therefore defence in depth
+    rather than a live leak, and is kept until a card removes the matching
+    defensive catches together.
 
     Raises:
         ConfigError: For any window spelling this cannot turn into a

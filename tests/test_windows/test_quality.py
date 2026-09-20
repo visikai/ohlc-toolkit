@@ -198,10 +198,28 @@ class TestWindowQualityPolicyIdentity:
         with pytest.raises(ConfigError, match="min_coverage"):
             WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=True)
 
-    @pytest.mark.parametrize("min_coverage", [0.0, 1.0])
-    def test_boundary_thresholds_are_accepted(self, min_coverage: float) -> None:
-        """0 and 1 are valid endpoints of the closed [0, 1] range."""
-        WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=min_coverage)
+    def test_unrepresentable_integer_threshold_is_rejected(self) -> None:
+        """An int too large for a float is refused, not leaked as OverflowError.
+
+        ``math.isnan`` raises ``OverflowError`` on such an int, outside the
+        ``ConfigError`` taxonomy ADR 004 §13 promises, so the ``[0, 1]`` range
+        has to be tested before any float conversion.
+        """
+        with pytest.raises(ConfigError, match="min_coverage") as refused:
+            WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=10**1000)
+        # Echoed through the bounded helper, never the raw thousand digits.
+        assert "chars total" in str(refused.value)
+
+    @pytest.mark.parametrize("min_coverage", [0.0, 1.0, 0, 1])
+    def test_boundary_thresholds_are_accepted(self, min_coverage: float | int) -> None:
+        """0 and 1 are valid endpoints of the closed [0, 1] range.
+
+        Both spellings are exercised: an int endpoint now takes the branch
+        that ranges before converting, and a float endpoint the one that
+        tests for NaN first.
+        """
+        policy = WindowQualityPolicy(mode=QualityMode.FILTER, min_coverage=min_coverage)
+        assert policy.min_coverage == float(min_coverage)
 
     def test_non_quality_mode_is_rejected(self) -> None:
         """A plain string is not accepted in place of a QualityMode member."""

@@ -1,6 +1,7 @@
 """A first-class, exact-second Duration value type and its compact grammar."""
 
 import re
+import sys
 from dataclasses import dataclass
 from typing import Self
 
@@ -144,6 +145,32 @@ class Duration:
                     f"(w>d>h>m>s), got: {quoted}"
                 )
             previous_rank = rank
+            # `int()` refuses a decimal string longer than the interpreter's
+            # own conversion limit, raising ValueError -- a foreign exception
+            # escaping the ConfigError taxonomy. The bound is read from the
+            # interpreter rather than fixed here so that no magnitude which
+            # parses today stops parsing: this translates the existing
+            # failure, it does not narrow the accepted domain.
+            #
+            # Zero means the limit is DISABLED, not that every amount is too
+            # long. `int()` converts anything in that configuration, so there
+            # is no failure to translate and the check must not fire: reading
+            # zero as a bound refuses every duration ever parsed, including
+            # the ones this package builds at import.
+            digit_limit = sys.get_int_max_str_digits()
+            if digit_limit and len(amount) > digit_limit:
+                quoted = bounded_echo(amount)
+                logger.warning(
+                    "Rejecting duration amount of {} digits, above the {}-digit "
+                    "limit: {}",
+                    len(amount),
+                    digit_limit,
+                    quoted,
+                )
+                raise ConfigError(
+                    f"Duration amount has {len(amount)} digits, above the "
+                    f"{digit_limit}-digit conversion limit: {quoted}"
+                )
             total_seconds += int(amount) * _UNIT_SECONDS[unit]
 
         return cls(total_seconds)
