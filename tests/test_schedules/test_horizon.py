@@ -30,8 +30,6 @@ from ohlc_toolkit.schedules import (
 )
 from ohlc_toolkit.schedules.generators import (
     require_explicit_schedule,
-    require_log_spaced_schedule,
-    require_metallic_schedule,
 )
 from ohlc_toolkit.schedules.horizon import HORIZON_UNITS
 from ohlc_toolkit.schedules.identity import content_hash
@@ -560,46 +558,31 @@ class TestResolvedGeneratedHorizonsRefuseContradictions:
         assert "window" not in str(from_horizons.value)
         assert "horizon" not in str(from_windows.value)
 
-    def test_the_shared_log_spaced_predicate_and_generator_refuse_the_same_inputs(
-        self,
-    ) -> None:
-        """One implementation: the function and ``log_spaced_horizons`` raise alike."""
-        with pytest.raises(ConfigError) as predicate:
-            require_log_spaced_schedule(
-                minimum=10,
-                maximum=100,
-                grain=3,
-                rounding=RoundingRule.NEAREST_TIES_AWAY,
-                members=(),
-                units=HORIZON_UNITS,
-            )
-        with pytest.raises(ConfigError) as generated:
-            log_spaced_horizons(count=3, minimum="10s", maximum="100s", grain="3s")
-        assert str(predicate.value) == str(generated.value)
+    def test_a_metallic_member_outside_its_bounds_or_grain_is_refused(self) -> None:
+        """The metallic kind's members are checked against its own spec.
 
-    def test_the_shared_metallic_predicate_and_generator_refuse_the_same_inputs(
-        self,
-    ) -> None:
-        """One implementation: the function and ``metallic_horizons`` raise alike."""
-        with pytest.raises(ConfigError) as predicate:
-            require_metallic_schedule(
-                seed=10,
-                minimum=10,
-                maximum=300,
-                grain=3,
-                rounding=RoundingRule.NEAREST_TIES_AWAY,
-                members=(),
-                units=HORIZON_UNITS,
-            )
-        with pytest.raises(ConfigError) as generated:
-            metallic_horizons(
-                coefficient=1.618,
-                seed="10s",
-                grain="3s",
-                minimum="10s",
-                maximum="5m",
-            )
-        assert str(predicate.value) == str(generated.value)
+        The seed-floor endpoint rule these parameters satisfy is a check on
+        the PARAMETERS. A recorded member contradicting the bounds or the
+        grain is a different failure, caught only by the member check, so
+        dropping that check leaves this test as the one that fails.
+        """
+        spec = MetallicRecurrenceSpec(
+            coefficient=1.618,
+            seed=Duration.parse("1m"),
+            grain=Duration.parse("1m"),
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("30m"),
+        )
+        above = (Duration.parse("45m"),)
+        with pytest.raises(ConfigError, match=r"horizon 45m.*maximum 30m"):
+            HorizonSchedule(spec=spec, horizons=above)
+        with pytest.raises(ConfigError, match=r"horizon 45m.*maximum 30m"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, above))
+        off_grain = (Duration.parse("1m30s"),)
+        with pytest.raises(ConfigError, match=r"horizon 1m30s.*grain 1m"):
+            HorizonSchedule(spec=spec, horizons=off_grain)
+        with pytest.raises(ConfigError, match=r"horizon 1m30s.*grain 1m"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, off_grain))
 
 
 def test_the_public_names_are_exported() -> None:

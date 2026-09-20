@@ -62,8 +62,10 @@ against their tags, and are not restated here.
   of the recorded grain, or if the parameters are a combination the
   generator path already refused (a log-spaced endpoint that quantizes
   outside its range; a metallic seed at or above its floor that
-  quantizes below it). The message names the offending member and the
-  bound or grain it violates as horizons, not windows. Explicit
+  quantizes below it). A bounds or grain refusal names the offending
+  member, and the bound or grain it violates, as a horizon rather than a
+  window. The two endpoint refusals name no member at all: their messages
+  are byte-identical to the window path's. Explicit
   schedules are unchanged: they have no bounds, grain or endpoint
   rules.
   Recorded members stay authoritative within those constraints. Nothing
