@@ -751,13 +751,21 @@ class WindowSchedule:
     def __post_init__(self) -> None:
         """Check the resolved list against the invariants every kind shares.
 
+        Generated kinds also run the same bound, grain and endpoint
+        predicates the generator path uses. Explicit schedules have none
+        of those extra rules.
+
         Raises:
             ConfigError: If ``windows`` is empty, holds anything but a
                 strictly positive Duration, holds a repeat, or names
-                more windows than :data:`MAX_RESOLVED_WINDOWS`.
+                more windows than :data:`MAX_RESOLVED_WINDOWS`. For a
+                generated kind, also if a member contradicts the
+                recorded bounds or grain, or the parameters violate
+                that kind's generator endpoint rules.
 
         """
         require_resolved_windows(self.windows)
+        require_resolved_generated_windows(self.spec, self.windows)
 
     @property
     def schedule_id(self) -> str:
@@ -814,8 +822,10 @@ class WindowSchedule:
         Raises:
             ConfigError: If a key is missing, the kind names no
                 generator, any parameter or window is malformed, the
-                window list breaks a schedule invariant, or the recorded
-                id does not match the payload it names.
+                window list breaks a schedule invariant, a generated
+                kind's member contradicts the recorded bounds or grain,
+                the parameters violate that kind's endpoint rules, or
+                the recorded id does not match the payload it names.
 
         """
         require_keys(data, _SCHEDULE_KEYS, label="schedule")
@@ -1111,6 +1121,174 @@ def require_seed_above_its_own_floor(
     )
 
 
+def require_members_within_spec(
+    members: Sequence[int],
+    *,
+    minimum: int | None,
+    maximum: int,
+    grain: int,
+    units: ScheduleUnits,
+) -> None:
+    """Refuse a recorded member that contradicts its spec's bounds or grain.
+
+    Generated lists never reach this: :func:`resolve_values` only keeps
+    values on the grain and inside the bounds. Direct construction and
+    rehydration can name a member the recorded spec would have dropped,
+    and that is refused here rather than repaired.
+
+    Args:
+        members: The recorded values, in whole units.
+        minimum: The optional lower bound.
+        maximum: The upper bound.
+        grain: The quantization grain, in whole units.
+        units: How to describe a member when refusing.
+
+    Raises:
+        ConfigError: If a member is below the minimum, above the maximum,
+            or not a whole multiple of the grain. The message names the
+            offending member and the bound or grain it violates.
+
+    """
+    lower = 0 if minimum is None else minimum
+    for member in members:
+        if member < lower:
+            logger.warning(
+                "Rejecting {} {} below the minimum {}.",
+                units.noun,
+                units.render(member),
+                units.render(lower),
+            )
+            raise ConfigError(
+                f"The {units.noun} {units.render(member)} is below the minimum "
+                f"{units.render(lower)}."
+            )
+        if member > maximum:
+            logger.warning(
+                "Rejecting {} {} above the maximum {}.",
+                units.noun,
+                units.render(member),
+                units.render(maximum),
+            )
+            raise ConfigError(
+                f"The {units.noun} {units.render(member)} is above the maximum "
+                f"{units.render(maximum)}."
+            )
+        if member % grain != 0:
+            logger.warning(
+                "Rejecting {} {} off the {} grain.",
+                units.noun,
+                units.render(member),
+                units.render_grain(grain),
+            )
+            raise ConfigError(
+                f"The {units.noun} {units.render(member)} is not a multiple of "
+                f"the grain {units.render_grain(grain)}."
+            )
+
+
+def require_log_spaced_schedule(  # noqa: PLR0913 - one keyword per recorded parameter
+    *,
+    minimum: int,
+    maximum: int,
+    grain: int,
+    rounding: RoundingRule,
+    members: Sequence[int],
+    units: ScheduleUnits,
+) -> None:
+    """Refuse a log-spaced spec or list the generator path would refuse.
+
+    The generator functions and the resolved-schedule constructors call
+    this same function: endpoint quantization first, then each recorded
+    member against the bounds and grain. Passing an empty ``members``
+    sequence checks only the endpoints, which is what the generator path
+    does before it resolves a list.
+    """
+    require_endpoints_on_the_grain(
+        minimum=minimum,
+        maximum=maximum,
+        grain=grain,
+        rounding=rounding,
+        units=units,
+    )
+    require_members_within_spec(
+        members, minimum=minimum, maximum=maximum, grain=grain, units=units
+    )
+
+
+def require_metallic_schedule(  # noqa: PLR0913 - one keyword per recorded parameter
+    *,
+    seed: int,
+    minimum: int | None,
+    maximum: int,
+    grain: int,
+    rounding: RoundingRule,
+    members: Sequence[int],
+    units: ScheduleUnits,
+) -> None:
+    """Refuse a metallic spec or list the generator path would refuse.
+
+    The generator functions and the resolved-schedule constructors call
+    this same function: the seed-versus-floor rule first, then each
+    recorded member against the bounds and grain. Passing an empty
+    ``members`` sequence checks only the seed, which is what the
+    generator path does before it resolves a list.
+    """
+    require_seed_above_its_own_floor(
+        seed=seed,
+        minimum=minimum,
+        grain=grain,
+        rounding=rounding,
+        units=units,
+    )
+    require_members_within_spec(
+        members, minimum=minimum, maximum=maximum, grain=grain, units=units
+    )
+
+
+def require_explicit_schedule(
+    members: Sequence[int],
+    *,
+    units: ScheduleUnits,
+) -> None:
+    """Explicit schedules have no bounds, grain, or endpoint rules.
+
+    The recorded list is the spec. Empty, repeating, or non-positive
+    members are still refused by :func:`require_resolved_windows` or its
+    lookback twin, which both constructors already run. ``members`` and
+    ``units`` are accepted so this is the same shape as the generated
+    kinds.
+    """
+    _ = (members, units)
+
+
+def require_resolved_generated_windows(
+    spec: GeneratorSpec, windows: tuple[Duration, ...]
+) -> None:
+    """Apply the generator-kind predicate to a resolved window list."""
+    members = tuple(window.total_seconds for window in windows)
+    if isinstance(spec, LogSpacedSpec):
+        require_log_spaced_schedule(
+            minimum=spec.minimum.total_seconds,
+            maximum=spec.maximum.total_seconds,
+            grain=spec.grain.total_seconds,
+            rounding=spec.rounding,
+            members=members,
+            units=DURATION_UNITS,
+        )
+    elif isinstance(spec, MetallicRecurrenceSpec):
+        require_metallic_schedule(
+            seed=spec.seed.total_seconds,
+            minimum=None if spec.minimum is None else spec.minimum.total_seconds,
+            maximum=spec.maximum.total_seconds,
+            grain=spec.grain.total_seconds,
+            rounding=spec.rounding,
+            members=members,
+            units=DURATION_UNITS,
+        )
+    elif isinstance(spec, ExplicitSpec):
+        require_explicit_schedule(members, units=DURATION_UNITS)
+
+
 def resolve_values(  # noqa: PLR0913 - one keyword per resolution rule
     values: list[Fraction],
     *,
@@ -1365,11 +1543,13 @@ def metallic_recurrence(  # noqa: PLR0913 - one keyword per recorded parameter
         minimum=None if minimum is None else validate_window_duration(minimum),
         rounding=rounding,
     )
-    require_seed_above_its_own_floor(
+    require_metallic_schedule(
         seed=spec.seed.total_seconds,
         minimum=None if spec.minimum is None else spec.minimum.total_seconds,
+        maximum=spec.maximum.total_seconds,
         grain=spec.grain.total_seconds,
         rounding=spec.rounding,
+        members=(),
         units=DURATION_UNITS,
     )
     windows = _resolve_windows(
@@ -1477,11 +1657,12 @@ def log_spaced(
         grain=validate_cadence(grain),
         rounding=rounding,
     )
-    require_endpoints_on_the_grain(
+    require_log_spaced_schedule(
         minimum=spec.minimum.total_seconds,
         maximum=spec.maximum.total_seconds,
         grain=spec.grain.total_seconds,
         rounding=spec.rounding,
+        members=(),
         units=DURATION_UNITS,
     )
     windows = _resolve_windows(

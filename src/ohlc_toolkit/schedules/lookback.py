@@ -39,8 +39,9 @@ from ohlc_toolkit.schedules.generators import (
     _validated_count,
     log_spaced_values,
     recurrence_values,
-    require_endpoints_on_the_grain,
-    require_seed_above_its_own_floor,
+    require_explicit_schedule,
+    require_log_spaced_schedule,
+    require_metallic_schedule,
     resolve_values,
 )
 from ohlc_toolkit.schedules.identity import (
@@ -441,13 +442,21 @@ class LookbackSchedule:
     def __post_init__(self) -> None:
         """Check the resolved list against the invariants every kind shares.
 
+        Generated kinds also run the same bound, grain and endpoint
+        predicates the generator path uses. Explicit schedules have none
+        of those extra rules.
+
         Raises:
             ConfigError: If ``periods`` is empty, holds anything but a
                 strictly positive int, holds a repeat, or is longer than
                 :data:`~ohlc_toolkit.schedules.generators.MAX_RESOLVED_WINDOWS`.
+                For a generated kind, also if a member contradicts the
+                recorded bounds or grain, or the parameters violate
+                that kind's generator endpoint rules.
 
         """
         require_resolved_periods(self.periods)
+        require_resolved_generated_periods(self.spec, self.periods)
 
     @property
     def schedule_id(self) -> str:
@@ -500,8 +509,10 @@ class LookbackSchedule:
                 schedule's payload looks like here, since it records
                 ``"windows"`` and not ``"periods"`` -- the kind names no
                 generator, any parameter or count is malformed, the list
-                breaks an invariant, or the recorded id does not match
-                the payload it names.
+                breaks an invariant, a generated kind's member
+                contradicts the recorded bounds or grain, the parameters
+                violate that kind's endpoint rules, or the recorded id
+                does not match the payload it names.
 
         """
         require_keys(data, _LOOKBACK_KEYS, label="lookback schedule")
@@ -517,6 +528,33 @@ class LookbackSchedule:
             data["schedule_id"], schedule.schedule_id, label="schedule_id"
         )
         return schedule
+
+
+def require_resolved_generated_periods(
+    spec: LookbackSpec, periods: tuple[int, ...]
+) -> None:
+    """Apply the generator-kind predicate to a resolved lookback list."""
+    if isinstance(spec, LogSpacedLookbackSpec):
+        require_log_spaced_schedule(
+            minimum=spec.minimum,
+            maximum=spec.maximum,
+            grain=spec.grain,
+            rounding=spec.rounding,
+            members=periods,
+            units=PERIOD_UNITS,
+        )
+    elif isinstance(spec, MetallicLookbackSpec):
+        require_metallic_schedule(
+            seed=spec.seed,
+            minimum=spec.minimum,
+            maximum=spec.maximum,
+            grain=spec.grain,
+            rounding=spec.rounding,
+            members=periods,
+            units=PERIOD_UNITS,
+        )
+    elif isinstance(spec, ExplicitLookbackSpec):
+        require_explicit_schedule(periods, units=PERIOD_UNITS)
 
 
 def metallic_lookback(  # noqa: PLR0913 - one keyword per recorded parameter
@@ -559,11 +597,13 @@ def metallic_lookback(  # noqa: PLR0913 - one keyword per recorded parameter
         rounding=rounding,
         dedup=dedup,
     )
-    require_seed_above_its_own_floor(
+    require_metallic_schedule(
         seed=spec.seed,
         minimum=spec.minimum,
+        maximum=spec.maximum,
         grain=spec.grain,
         rounding=spec.rounding,
+        members=(),
         units=PERIOD_UNITS,
     )
     values = recurrence_values(
@@ -621,11 +661,12 @@ def log_spaced_lookback(  # noqa: PLR0913 - one keyword per recorded parameter
         rounding=rounding,
         dedup=dedup,
     )
-    require_endpoints_on_the_grain(
+    require_log_spaced_schedule(
         minimum=spec.minimum,
         maximum=spec.maximum,
         grain=spec.grain,
         rounding=spec.rounding,
+        members=(),
         units=PERIOD_UNITS,
     )
     values = log_spaced_values(
