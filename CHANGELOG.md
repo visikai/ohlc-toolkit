@@ -6,111 +6,62 @@ against their tags, and are not restated here.
 
 ## 3.1.2 - 2026-09-20
 
-### Changed
+## Breaking
 
-- **BREAKING: constructing or rehydrating a generated `WindowSchedule` or
-  `LookbackSchedule` now REFUSES a recorded member that contradicts its
-  spec's bounds or grain, and REFUSES parameters the generator endpoint
-  rules already refused.** Direct construction and `from_dict` used to
-  check only emptiness, the cap, type, positivity and repeats. They never
-  compared a member with the recorded minimum, maximum or grain, and they
-  never re-applied `require_endpoints_on_the_grain` or
-  `require_seed_above_its_own_floor`. So
-  `WindowSchedule(LogSpacedSpec(count=2, minimum=60s, maximum=120s,
-  grain=60s), windows=(180s,))` constructed, hashed and rehydrated, and
-  `LookbackSchedule` accepted `maximum=28` beside `periods=(99,)`. The
-  generator functions themselves already enforced those rules, so nothing
-  they produced was affected.
-  **The rule, which is what you need to tell whether you are affected:**
-  a generated schedule you construct yourself or read back through
-  `from_dict` now raises `ConfigError` if a member is below the recorded
-  minimum, above the recorded maximum, or not a whole multiple of the
-  recorded grain, or if the parameters are a combination the generator
-  path already refused (a log-spaced endpoint that quantizes outside its
-  range; a metallic seed at or above its floor that quantizes below it).
-  The message names the offending member and the bound or grain it
-  violates. Explicit schedules are unchanged: they have no bounds, grain
-  or endpoint rules.
-  Recorded members stay authoritative within those constraints. Nothing
-  is regenerated, repaired, or replayed. Descriptive-only parameters are
-  not accepted.
-  **No resolved schedule that the generator path can produce changes its
-  members, so no schedule id moves.** A schedule written by
-  `metallic_recurrence`, `log_spaced`, `metallic_lookback`,
-  `log_spaced_lookback`, or `explicit` / `explicit_lookback` round-trips
-  with the same id as before. Only hand-built or edited payloads that
-  already contradicted their own spec now raise instead of hashing the
-  contradiction.
+**Generated schedules now refuse members that contradict their own
+spec.**
 
-- **BREAKING: constructing or rehydrating a generated `HorizonSchedule`
-  now REFUSES a recorded member that contradicts its spec's bounds or
-  grain, and REFUSES parameters the generator endpoint rules already
-  refused.** Direct construction and `from_dict` used to check only
-  emptiness, the cap, type, positivity and repeats. They never compared
-  a member with the recorded minimum, maximum or grain, and they never
-  re-applied `require_endpoints_on_the_grain` or
-  `require_seed_above_its_own_floor`. So
-  `HorizonSchedule(LogSpacedSpec(count=2, minimum=1m, maximum=2m,
-  grain=1m), horizons=(3m,))` constructed, hashed and rehydrated, while
-  the same inputs already raised on `WindowSchedule` and
-  `LookbackSchedule`. The generator functions themselves already
-  enforced those rules, so nothing they produced was affected.
-  **The rule, which is what you need to tell whether you are affected:**
-  a generated horizon schedule you construct yourself or read back
-  through `from_dict` now raises `ConfigError` if a member is below the
-  recorded minimum, above the recorded maximum, or not a whole multiple
-  of the recorded grain, or if the parameters are a combination the
-  generator path already refused (a log-spaced endpoint that quantizes
-  outside its range; a metallic seed at or above its floor that
-  quantizes below it). A bounds or grain refusal names the offending
-  member, and the bound or grain it violates, as a horizon rather than a
-  window. The two endpoint refusals name no member at all: their messages
-  are byte-identical to the window path's. Explicit
-  schedules are unchanged: they have no bounds, grain or endpoint
-  rules.
-  Recorded members stay authoritative within those constraints. Nothing
-  is regenerated, repaired, or replayed. Descriptive-only parameters are
-  not accepted.
-  **No resolved schedule that the generator path can produce changes its
-  members, so no schedule id moves.** A schedule written by
-  `metallic_horizons`, `log_spaced_horizons`, or `explicit_horizons`
-  round-trips with the same id as before. Only hand-built or edited
-  payloads that already contradicted their own spec now raise instead
-  of hashing the contradiction.
+Constructing a `WindowSchedule`, `LookbackSchedule` or `HorizonSchedule`
+directly, or rehydrating one through `from_dict`, now raises
+`ConfigError` when:
 
-### Fixed
+- a member is below the recorded minimum, above the recorded maximum, or
+  not a whole multiple of the recorded grain; or
+- the parameters are a combination the generator functions already
+  refuse (a log-spaced endpoint that quantizes outside its range; a
+  metallic seed at or above its floor that quantizes below it).
 
-- **Configuration boundaries refuse unrepresentable magnitudes with
-  `ConfigError` instead of leaking a foreign exception.** An integer too
-  large to convert to a float reached `math.isfinite` in the recurrence
-  coefficient validator and `math.isnan` in the window-quality coverage
-  validator, raising `OverflowError` from outside the documented error
-  type; both now range the value before any float conversion. A duration
-  amount longer than the interpreter's integer-conversion limit raised
-  `ValueError` from `int()`; `Duration.parse` now refuses it with a
-  `ConfigError` naming the limit and the offending length. Each of these
-  refusals echoes the value through the bounded-echo helper, so a
-  pathological input cannot put thousands of digits into a message.
-  Accepted coefficients, coverage thresholds and duration magnitudes are
-  unchanged: the duration bound is read from the interpreter, so no
-  magnitude that parsed before stops parsing.
+Before this release these paths checked only emptiness, the cap, type,
+positivity and repeats. For example,
+`WindowSchedule(LogSpacedSpec(count=2, minimum=60s, maximum=120s, grain=60s), windows=(180s,))`
+constructed, hashed and round-tripped, and `LookbackSchedule` accepted
+`maximum=28` beside `periods=(99,)`.
+
+Who is affected: only code that builds or edits schedule payloads by
+hand. Every schedule produced by `log_spaced`, `metallic_recurrence`,
+`explicit`, their `_lookback` and `_horizons` variants round-trips
+unchanged, so no schedule id moves. Explicit schedules have no bounds,
+grain or endpoint rules and are untouched.
+
+The refusal message names the offending member and the bound or grain it
+violates; horizon schedules say "horizon" where window schedules say
+"window". Members are never regenerated, repaired or replayed.
+
+## Fixed
+
+- **Unrepresentable magnitudes raise `ConfigError`, not `OverflowError`
+  or `ValueError`.** An integer too large for a float reached
+  `math.isfinite` in the recurrence coefficient validator and
+  `math.isnan` in the window-quality coverage validator; both now
+  range-check before converting. A duration amount longer than the
+  interpreter's integer-conversion limit is refused by `Duration.parse`
+  with a message naming the limit. Refusal messages echo the value
+  through the bounded-echo helper, so a pathological input cannot put
+  thousands of digits into a message. Accepted coefficients, thresholds
+  and durations are unchanged.
 - **The phased harness checks the anchor's phase even when no emit tick
-  lands inside the frame.** The comparison took its residue from the first
-  emit tick and returned early when there was none, so an anchor off the
-  frame's phase was accepted exactly when the emit step stepped clean over
-  the frame, and the caller received an empty result instead of a refusal.
-  The phase now comes from the anchor and the cadence, which is defined
-  whether or not the grid is empty. An in-phase anchor with no tick inside
-  the frame still returns the empty grid it always did.
+  lands inside the frame.** The check took its residue from the first
+  emit tick and returned early when there was none, so an off-phase
+  anchor was accepted exactly when the emit step cleared the frame, and
+  the caller got an empty result instead of a refusal. The phase now
+  comes from the anchor and the cadence. An in-phase anchor with no tick
+  in the frame still returns the empty grid.
 
-### Removed
+## Removed
 
-- **The feature-identity window parser no longer converts a `ValueError`
-  that can no longer be raised.** `coerce_duration` refuses every shape
-  with `ConfigError`, including the over-long magnitude that used to
-  escape CPython's integer-conversion limit, so the wrapper around it
-  translated nothing. Every input that reaches the parser still refuses
-  with `ConfigError`; no refusal a caller can observe has changed.
+- The feature-identity window parser no longer wraps a `ValueError` that
+  `coerce_duration` can no longer raise. Every input still refuses with
+  `ConfigError`; no observable refusal changed.
 
 ## 3.1.1 - 2026-09-14
 
