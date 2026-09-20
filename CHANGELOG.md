@@ -4,6 +4,25 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
+## Unreleased
+
+### Fixed
+
+- **Configuration boundaries refuse unrepresentable magnitudes with
+  `ConfigError` instead of leaking a foreign exception.** An integer too
+  large to convert to a float reached `math.isfinite` in the recurrence
+  coefficient validator and `math.isnan` in the window-quality coverage
+  validator, raising `OverflowError` from outside the documented error
+  type; both now range the value before any float conversion. A duration
+  amount longer than the interpreter's integer-conversion limit raised
+  `ValueError` from `int()`; `Duration.parse` now refuses it with a
+  `ConfigError` naming the limit and the offending length. Each of these
+  refusals echoes the value through the bounded-echo helper, so a
+  pathological input cannot put thousands of digits into a message.
+  Accepted coefficients, coverage thresholds and duration magnitudes are
+  unchanged: the duration bound is read from the interpreter, so no
+  magnitude that parsed before stops parsing.
+
 ## 3.1.1 - 2026-09-14
 
 ### Fixed

@@ -417,6 +417,19 @@ def _validated_min_coverage(value: object) -> float:
         raise ConfigError(
             f"min_coverage must be an int or float, got {type(value).__name__}"
         )
+    # An int is never NaN, and one too large to represent as a float raises
+    # OverflowError inside `math.isnan` -- a foreign exception escaping the
+    # ConfigError taxonomy. Ints are therefore ranged directly, before any
+    # float conversion; only floats reach `math.isnan`, where NaN lives.
+    if isinstance(value, int):
+        if value < 0 or value > 1:
+            logger.warning(
+                "Rejecting out-of-range min_coverage: {}", bounded_echo(value)
+            )
+            raise ConfigError(
+                f"min_coverage must be in [0, 1], got {bounded_echo(value)}."
+            )
+        return float(value)
     if math.isnan(value):
         logger.warning("Rejecting NaN min_coverage.")
         raise ConfigError("min_coverage must not be NaN.")

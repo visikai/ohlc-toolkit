@@ -1,6 +1,7 @@
 """Tests for the Duration value type and the compact duration grammar."""
 
 import re
+import sys
 import unittest
 
 from ohlc_toolkit.temporal.duration import (
@@ -310,6 +311,31 @@ class TestRejectedInputQuotingIsBounded(unittest.TestCase):
         with self.assertRaises(ConfigError) as ctx:
             Duration.parse(garbage)
         self.assertLess(len(str(ctx.exception)), 200)
+
+    def test_amount_above_the_digit_limit_is_refused_as_configerror(self):
+        """A magnitude past the interpreter's limit is refused, not leaked.
+
+        ``int()`` raises ``ValueError`` on a decimal string longer than
+        ``sys.get_int_max_str_digits()``, which is outside the ``ConfigError``
+        taxonomy. The refusal names the bound so a caller can act on it.
+        """
+        limit = sys.get_int_max_str_digits()
+        with self.assertRaises(ConfigError) as ctx:
+            Duration.parse("1" * (limit + 1) + "s")
+        message = str(ctx.exception)
+        self.assertIn(str(limit), message)
+        self.assertIn(str(limit + 1), message)
+        self.assertLess(len(message), 300)
+
+    def test_an_amount_at_the_digit_limit_still_parses(self):
+        """The bound translates the existing failure; it narrows nothing.
+
+        A magnitude the interpreter can still convert must parse exactly as
+        before, so this refusal cannot quietly shrink the accepted domain.
+        """
+        limit = sys.get_int_max_str_digits()
+        amount = "1" * limit
+        self.assertEqual(Duration.parse(amount + "s").total_seconds, int(amount))
 
 
 if __name__ == "__main__":

@@ -107,7 +107,7 @@ from ohlc_toolkit.temporal import (
     validate_cadence,
     validate_window_duration,
 )
-from ohlc_toolkit.temporal.echo import enum_from_payload
+from ohlc_toolkit.temporal.echo import bounded_echo, enum_from_payload
 
 logger = get_logger(__name__)
 
@@ -231,6 +231,30 @@ def _validated_coefficient(value: object) -> float:
         raise ConfigError(
             f"coefficient must be an int or float, got {type(value).__name__}"
         )
+    # An int is finite by construction, and one too large to represent as a
+    # float raises OverflowError inside `math.isfinite` -- a foreign exception
+    # escaping the ConfigError taxonomy. Ints are therefore ranged against the
+    # bound directly, before any float conversion; only floats reach
+    # `math.isfinite`, where NaN and the infinities actually live.
+    if isinstance(value, int):
+        if value <= 0:
+            logger.warning(
+                "Rejecting non-positive recurrence coefficient: {}",
+                bounded_echo(value),
+            )
+            raise ConfigError(
+                f"coefficient must be strictly positive, got {bounded_echo(value)}."
+            )
+        if value > _MAX_COEFFICIENT:
+            logger.warning(
+                "Rejecting unsquarable recurrence coefficient: {}", bounded_echo(value)
+            )
+            raise ConfigError(
+                f"coefficient must be at most {_MAX_COEFFICIENT} (the square root "
+                f"of the largest float), got {bounded_echo(value)}: the limiting "
+                "ratio computes the coefficient's square, which would overflow."
+            )
+        return float(value)
     if not math.isfinite(value):
         logger.warning("Rejecting non-finite recurrence coefficient: {}", value)
         raise ConfigError(f"coefficient must be finite, got {value}.")

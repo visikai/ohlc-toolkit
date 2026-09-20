@@ -409,10 +409,18 @@ class TestMetallicRefusals:
 
     @pytest.mark.parametrize(
         "coefficient",
-        [0.0, -1.0, -0.5],
-        ids=["zero", "negative_one", "negative_fraction"],
+        [0.0, -1.0, -0.5, 0, -1],
+        ids=[
+            "zero",
+            "negative_one",
+            "negative_fraction",
+            "int_zero",
+            "int_negative_one",
+        ],
     )
-    def test_a_non_positive_coefficient_is_refused(self, coefficient: float) -> None:
+    def test_a_non_positive_coefficient_is_refused(
+        self, coefficient: float | int
+    ) -> None:
         """A coefficient of zero never grows: the recurrence would not terminate."""
         with pytest.raises(ConfigError, match="coefficient"):
             metallic_recurrence(
@@ -430,6 +438,21 @@ class TestMetallicRefusals:
             metallic_recurrence(
                 coefficient=coefficient, seed="1m", grain="1m", maximum="2w"
             )
+
+    def test_an_unrepresentable_integer_coefficient_is_refused(self) -> None:
+        """An int too large for a float is refused, not leaked as OverflowError.
+
+        ``math.isfinite`` raises ``OverflowError`` on such an int, which is
+        outside the ``ConfigError`` taxonomy ADR 004 §13 promises. The bound
+        has to be tested before any float conversion, not after it.
+        """
+        with pytest.raises(ConfigError, match="coefficient") as refused:
+            metallic_recurrence(
+                coefficient=10**1000, seed="1m", grain="1m", maximum="2w"
+            )
+        # Echoed through the bounded helper, so a pathological input cannot
+        # put a thousand digits into a log line or an error message.
+        assert "chars total" in str(refused.value)
 
     def test_a_boolean_coefficient_is_refused(self) -> None:
         """``bool`` is an ``int`` subtype in Python, and is refused anyway."""
