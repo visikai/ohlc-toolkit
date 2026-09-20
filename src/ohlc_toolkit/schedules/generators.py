@@ -1262,9 +1262,23 @@ def require_explicit_schedule(
 
 
 def require_resolved_generated_windows(
-    spec: GeneratorSpec, windows: tuple[Duration, ...]
+    spec: GeneratorSpec,
+    windows: tuple[Duration, ...],
+    *,
+    units: ScheduleUnits = DURATION_UNITS,
 ) -> None:
-    """Apply the generator-kind predicate to a resolved window list."""
+    """Apply the generator-kind predicate to a resolved duration list.
+
+    ``units`` supplies only the noun a refusal names. It defaults to
+    :data:`DURATION_UNITS`, so every existing window caller and every
+    existing message is unchanged.
+
+    Args:
+        spec: The recorded generator parameters.
+        windows: The recorded members, as durations.
+        units: How to name one member when refusing.
+
+    """
     members = tuple(window.total_seconds for window in windows)
     if isinstance(spec, LogSpacedSpec):
         require_log_spaced_schedule(
@@ -1273,7 +1287,7 @@ def require_resolved_generated_windows(
             grain=spec.grain.total_seconds,
             rounding=spec.rounding,
             members=members,
-            units=DURATION_UNITS,
+            units=units,
         )
     elif isinstance(spec, MetallicRecurrenceSpec):
         require_metallic_schedule(
@@ -1283,10 +1297,10 @@ def require_resolved_generated_windows(
             grain=spec.grain.total_seconds,
             rounding=spec.rounding,
             members=members,
-            units=DURATION_UNITS,
+            units=units,
         )
     elif isinstance(spec, ExplicitSpec):
-        require_explicit_schedule(members, units=DURATION_UNITS)
+        require_explicit_schedule(members, units=units)
 
 
 def resolve_values(  # noqa: PLR0913 - one keyword per resolution rule

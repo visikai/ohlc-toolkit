@@ -54,6 +54,7 @@ from ohlc_toolkit.schedules.generators import (
     _recurrence_terms,
     _resolve_windows,
     require_endpoints_on_the_grain,
+    require_resolved_generated_windows,
     require_resolved_windows,
     require_seed_above_its_own_floor,
 )
@@ -149,15 +150,22 @@ class HorizonSchedule:
 
         The invariants are the window schedule's, because the values are
         the same kind of thing; the refusals therefore name "horizon"
-        rather than "window".
+        rather than "window". Generated kinds also run the same bound,
+        grain and endpoint predicates the generator path uses, through
+        the shared window wrapper with :data:`HORIZON_UNITS`.
 
         Raises:
             ConfigError: If ``horizons`` is empty, holds anything but a
                 strictly positive Duration, holds a repeat, or is longer
-                than the cap.
+                than the cap. For a generated kind, also if a member
+                contradicts the recorded bounds or grain, or the
+                parameters violate that kind's generator endpoint rules.
 
         """
         require_resolved_windows(self.horizons, units=HORIZON_UNITS)
+        require_resolved_generated_windows(
+            self.spec, self.horizons, units=HORIZON_UNITS
+        )
 
     @property
     def schedule_id(self) -> str:
@@ -210,8 +218,10 @@ class HorizonSchedule:
                 lookback schedule's payload looks like here, since neither
                 records ``"horizons"`` -- the kind names no generator, any
                 parameter or horizon is malformed, the list breaks an
-                invariant, or the recorded id does not match the payload
-                it names.
+                invariant, a generated kind's member contradicts the
+                recorded bounds or grain, the parameters violate that
+                kind's endpoint rules, or the recorded id does not match
+                the payload it names.
 
         """
         require_keys(data, _HORIZON_KEYS, label="horizon schedule")

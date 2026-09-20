@@ -1,6 +1,8 @@
 """Horizon schedules: the same durations as windows, never the same identity."""
 
+import hashlib
 import inspect
+import json
 import math
 import re
 from collections.abc import Callable
@@ -26,6 +28,10 @@ from ohlc_toolkit.schedules import (
     metallic_horizons,
     metallic_recurrence,
 )
+from ohlc_toolkit.schedules.generators import (
+    require_explicit_schedule,
+)
+from ohlc_toolkit.schedules.horizon import HORIZON_UNITS
 from ohlc_toolkit.schedules.identity import content_hash
 from ohlc_toolkit.temporal import ConfigError, Duration
 
@@ -408,6 +414,175 @@ def test_a_horizon_schedule_has_the_window_generator_s_refusals(
     )
     assert "window" not in str(from_horizons.value)
     assert "horizon" not in str(from_windows.value)
+
+
+def _hash_payload(payload: dict[str, object]) -> str:
+    """Hash a schedule identity payload the way a schedule id is defined."""
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _horizon_from_dict_payload(
+    spec: LogSpacedSpec | MetallicRecurrenceSpec | ExplicitSpec,
+    horizons: tuple[Duration, ...],
+) -> dict[str, object]:
+    """Build a ``from_dict`` payload for a list the constructor would refuse."""
+    identity: dict[str, object] = {
+        "kind": spec.kind.value,
+        "parameters": spec.to_dict(),
+        "horizons": [str(horizon) for horizon in horizons],
+    }
+    return {**identity, "schedule_id": _hash_payload(identity)}
+
+
+class TestResolvedGeneratedHorizonsRefuseContradictions:
+    """Recorded members must agree with the spec's bounds, grain and endpoints."""
+
+    def test_a_member_above_the_maximum_is_refused_at_construction(self) -> None:
+        """``maximum=2m`` with member ``3m``, named as a horizon."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("2m"),
+            grain=Duration.parse("1m"),
+        )
+        with pytest.raises(ConfigError, match=r"horizon 3m.*maximum 2m") as caught:
+            HorizonSchedule(spec=spec, horizons=(Duration.parse("3m"),))
+        assert str(caught.value) == "The horizon 3m is above the maximum 2m."
+
+    def test_a_member_above_the_maximum_is_refused_at_from_dict(self) -> None:
+        """The same contradictory payload is refused on rehydration.
+
+        ``from_dict`` constructs through ``cls(...)``, so ``__post_init__``
+        is the check both doors share.
+        """
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("2m"),
+            grain=Duration.parse("1m"),
+        )
+        payload = _horizon_from_dict_payload(spec, (Duration.parse("3m"),))
+        with pytest.raises(ConfigError, match=r"horizon 3m.*maximum 2m"):
+            HorizonSchedule.from_dict(payload)
+
+    def test_a_member_below_the_minimum_is_refused_on_both_paths(self) -> None:
+        """1m is on the grain and below a 2m floor."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("2m"),
+            maximum=Duration.parse("5m"),
+            grain=Duration.parse("1m"),
+        )
+        horizons = (Duration.parse("1m"),)
+        with pytest.raises(ConfigError, match=r"horizon 1m.*minimum 2m"):
+            HorizonSchedule(spec=spec, horizons=horizons)
+        with pytest.raises(ConfigError, match=r"horizon 1m.*minimum 2m"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, horizons))
+
+    def test_a_member_off_the_grain_is_refused_on_both_paths(self) -> None:
+        """90s is inside 1m..3m but is not a 1m multiple."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("3m"),
+            grain=Duration.parse("1m"),
+        )
+        horizons = (Duration(90),)
+        with pytest.raises(ConfigError, match=r"horizon 1m30s.*grain 1m"):
+            HorizonSchedule(spec=spec, horizons=horizons)
+        with pytest.raises(ConfigError, match=r"horizon 1m30s.*grain 1m"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, horizons))
+
+    def test_endpoint_rules_are_refused_on_both_paths_for_log_spaced(self) -> None:
+        """A grain that drops an endpoint refuses construction and rehydration."""
+        spec = LogSpacedSpec(
+            count=3,
+            minimum=Duration.parse("10s"),
+            maximum=Duration.parse("100s"),
+            grain=Duration.parse("3s"),
+        )
+        horizons = (Duration.parse("12s"),)
+        with pytest.raises(ConfigError, match="outside the range it defines"):
+            HorizonSchedule(spec=spec, horizons=horizons)
+        with pytest.raises(ConfigError, match="outside the range it defines"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, horizons))
+
+    def test_endpoint_rules_are_refused_on_both_paths_for_metallic(self) -> None:
+        """A seed the floor would drop is refused the same way at both doors."""
+        spec = MetallicRecurrenceSpec(
+            coefficient=1.618,
+            seed=Duration.parse("10s"),
+            grain=Duration.parse("3s"),
+            minimum=Duration.parse("10s"),
+            maximum=Duration.parse("5m"),
+        )
+        horizons = (Duration.parse("27s"),)
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            HorizonSchedule(spec=spec, horizons=horizons)
+        with pytest.raises(ConfigError, match="dropped by your own lower bound"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, horizons))
+
+    def test_an_explicit_schedule_is_unaffected_by_the_generated_predicates(
+        self,
+    ) -> None:
+        """An explicit list has no bounds or grain to contradict."""
+        schedule = HorizonSchedule(
+            spec=ExplicitSpec(name="odd-three"),
+            horizons=(Duration.parse("3m"),),
+        )
+        assert schedule.horizons == (Duration.parse("3m"),)
+        assert HorizonSchedule.from_dict(schedule.to_dict()) == schedule
+        require_explicit_schedule((180,), units=HORIZON_UNITS)
+
+    def test_horizon_and_window_refuse_the_same_inputs_differing_only_in_the_noun(
+        self,
+    ) -> None:
+        """One wrapper: the messages differ only in window versus horizon."""
+        spec = LogSpacedSpec(
+            count=2,
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("2m"),
+            grain=Duration.parse("1m"),
+        )
+        members = (Duration.parse("3m"),)
+        with pytest.raises(ConfigError) as from_windows:
+            WindowSchedule(spec=spec, windows=members)
+        with pytest.raises(ConfigError) as from_horizons:
+            HorizonSchedule(spec=spec, horizons=members)
+        assert _without_the_noun(str(from_horizons.value)) == _without_the_noun(
+            str(from_windows.value)
+        )
+        assert str(from_horizons.value) == "The horizon 3m is above the maximum 2m."
+        assert str(from_windows.value) == "The window 3m is above the maximum 2m."
+        assert "window" not in str(from_horizons.value)
+        assert "horizon" not in str(from_windows.value)
+
+    def test_a_metallic_member_outside_its_bounds_or_grain_is_refused(self) -> None:
+        """The metallic kind's members are checked against its own spec.
+
+        The seed-floor endpoint rule these parameters satisfy is a check on
+        the PARAMETERS. A recorded member contradicting the bounds or the
+        grain is a different failure, caught only by the member check, so
+        dropping that check leaves this test as the one that fails.
+        """
+        spec = MetallicRecurrenceSpec(
+            coefficient=1.618,
+            seed=Duration.parse("1m"),
+            grain=Duration.parse("1m"),
+            minimum=Duration.parse("1m"),
+            maximum=Duration.parse("30m"),
+        )
+        above = (Duration.parse("45m"),)
+        with pytest.raises(ConfigError, match=r"horizon 45m.*maximum 30m"):
+            HorizonSchedule(spec=spec, horizons=above)
+        with pytest.raises(ConfigError, match=r"horizon 45m.*maximum 30m"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, above))
+        off_grain = (Duration.parse("1m30s"),)
+        with pytest.raises(ConfigError, match=r"horizon 1m30s.*grain 1m"):
+            HorizonSchedule(spec=spec, horizons=off_grain)
+        with pytest.raises(ConfigError, match=r"horizon 1m30s.*grain 1m"):
+            HorizonSchedule.from_dict(_horizon_from_dict_payload(spec, off_grain))
 
 
 def test_the_public_names_are_exported() -> None:
