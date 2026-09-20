@@ -5,6 +5,7 @@ its expectation from the same formula the code uses would agree with the
 code whatever the formula was.
 """
 
+import sys
 from collections.abc import Callable
 
 import pytest
@@ -154,6 +155,30 @@ def test_a_name_that_could_not_have_been_derived_is_refused(
     """Parsing refuses rather than guessing at a shape it does not know."""
     with pytest.raises(ConfigError, match=match):
         FeatureIdentity.parse(column, normalization=_CLASS)
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        "1" * (sys.get_int_max_str_digits() + 1) + "s",
+        "notaduration",
+        "",
+        "٣s",
+    ],
+    ids=["over_the_digit_limit", "malformed", "empty", "non_ascii_digits"],
+)
+def test_every_unparsable_window_refuses_as_configerror(window: str) -> None:
+    """The window parser translates nothing, so nothing may escape it.
+
+    `coerce_duration` used to let a magnitude past CPython's
+    integer-conversion limit out as a bare `ValueError`, and the parser
+    wrapped it to convert that one case. The leak is closed at its source
+    and the wrapper is gone, so these are the inputs that would notice: an
+    escape of anything but `ConfigError` here is the evidence that the
+    wrapper was still doing work.
+    """
+    with pytest.raises(ConfigError):
+        FeatureIdentity.parse(f"rsi_p14_w{window}", normalization=_CLASS)
 
 
 @pytest.mark.parametrize(
