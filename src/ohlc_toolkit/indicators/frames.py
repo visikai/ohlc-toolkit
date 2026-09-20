@@ -158,8 +158,10 @@ def resolve_phased_grid(  # noqa: PLR0913 - one keyword per resolution input
             f"cadence, got {emit_seconds}s; a tick off the grid can never be looked up."
         )
 
+    # Phase first, and independent of the tick list: an anchor off the
+    # frame's phase is refused whether or not any emit tick lands inside.
+    _require_anchor_on_the_grid(frame, anchor_seconds, cadence_seconds)
     ticks = _emit_ticks(frame, emit_seconds, anchor_seconds)
-    _require_ticks_on_the_grid(frame, ticks, cadence_seconds)
 
     return PhasedGrid(
         window_seconds=window_seconds,
@@ -343,7 +345,7 @@ def _require_cadence_divides_window(cadence_seconds: int, window_seconds: int) -
     address falls between two rows for every ``k >= 1``, so every phase
     but the zeroth misses, the all-or-nothing mask nulls the tick, and
     the caller is handed a column that is null end to end -- the same
-    silent answer :func:`_require_ticks_on_the_grid` refuses an
+    silent answer :func:`_require_anchor_on_the_grid` refuses an
     out-of-phase anchor for, arrived at from the other side.
 
     Refused whatever the lookback, though a lookback of 1 reads only
@@ -382,8 +384,8 @@ def _require_cadence_divides_window(cadence_seconds: int, window_seconds: int) -
     )
 
 
-def _require_ticks_on_the_grid(
-    frame: pl.DataFrame, ticks: tuple[int, ...], cadence_seconds: int
+def _require_anchor_on_the_grid(
+    frame: pl.DataFrame, anchor_seconds: int, cadence_seconds: int
 ) -> None:
     """Refuse an anchor whose grid never lands on a row of this frame.
 
@@ -391,25 +393,31 @@ def _require_ticks_on_the_grid(
     the frame's own phase matches nothing and the whole result comes back
     null -- a silent answer of "no data" to a question that was really
     "this anchor does not belong to this frame". ``E`` is already a whole
-    multiple of the cadence, so every tick shares one residue and one
-    comparison settles it.
+    multiple of the cadence, so every tick shares the ANCHOR's residue and
+    one comparison settles it.
+
+    The phase comes from the anchor rather than from the first emit tick,
+    and nothing here returns early on an empty grid. Reading it off
+    ``ticks[0]`` made the check unanswerable exactly when no tick fell
+    inside the frame, so an illegal anchor was accepted and the caller got
+    an empty result instead of the refusal -- the same fail-open the phase
+    rule exists to prevent. An empty grid is a legitimate answer for an
+    IN-phase anchor, and only for one.
 
     Raises:
         ConfigError: If the emit grid is out of phase with the frame.
 
     """
-    if not ticks:
-        return
     frame_phase = int(frame.get_column("close_time")[0]) % cadence_seconds
-    tick_phase = ticks[0] % cadence_seconds
-    if tick_phase != frame_phase:
+    anchor_phase = anchor_seconds % cadence_seconds
+    if anchor_phase != frame_phase:
         logger.warning(
             "Rejecting an emit grid at phase {}s against a frame at phase {}s.",
-            tick_phase,
+            anchor_phase,
             frame_phase,
         )
         raise ConfigError(
-            f"The emit grid sits at {tick_phase}s past each {cadence_seconds}s step "
+            f"The emit grid sits at {anchor_phase}s past each {cadence_seconds}s step "
             f"and the frame at {frame_phase}s, so no emit tick is ever a row of it; "
             "every lookup would miss and every output would be null."
         )

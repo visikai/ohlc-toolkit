@@ -315,6 +315,69 @@ class TestRefusals:
         with pytest.raises(ConfigError, match="no emit tick"):
             phased_lookback(frame, window="3m", emit_every="3m", lookback=_LOOKBACK)
 
+    @staticmethod
+    def _two_row_frame() -> pl.DataFrame:
+        """Close times `(60, 120)` on a 60s cadence: the audit's own case.
+
+        Hand-built rather than materialized, because the point is a frame
+        so short that a 600s emit step steps clean over it.
+        """
+        return pl.DataFrame(
+            {
+                "open_time": [0, 60],
+                "close_time": [60, 120],
+                "open": [1.0, 1.0],
+                "high": [1.0, 1.0],
+                "low": [1.0, 1.0],
+                "close": [1.0, 1.0],
+                "volume": [1.0, 1.0],
+                "src_count": [1, 1],
+                "coverage_seconds": [60, 60],
+                "traded_seconds": [60, 60],
+            }
+        )
+
+    def test_an_off_phase_anchor_is_refused_even_when_no_tick_lands(self) -> None:
+        """The finding: no emit tick inside the frame used to mean no check.
+
+        The phase comparison read its residue off ``ticks[0]`` and returned
+        early when the tick list was empty, so exactly when the grid stepped
+        clean over the frame the illegal anchor was accepted and the caller
+        got an empty result. Silence is the wrong answer to "this anchor does
+        not belong to this frame" whether or not a tick happens to land.
+        """
+        with pytest.raises(ConfigError, match="no emit tick") as refused:
+            phased_frames.resolve_phased_grid(
+                self._two_row_frame(),
+                window="1m",
+                emit_every="10m",
+                anchor="30s",
+                lookback=1,
+                min_traded_seconds=0,
+            )
+        # Both phases are named, so the caller is told what to change.
+        assert "30s past each 60s step" in str(refused.value)
+        assert "frame at 0s" in str(refused.value)
+
+    def test_an_in_phase_anchor_with_no_tick_still_returns_the_empty_grid(
+        self,
+    ) -> None:
+        """An empty grid stays a legitimate answer, for an in-phase anchor.
+
+        The refusal above must not be bought by refusing every frame the
+        emit step steps over: that would turn a legal question with no
+        answer into an error.
+        """
+        grid = phased_frames.resolve_phased_grid(
+            self._two_row_frame(),
+            window="1m",
+            emit_every="10m",
+            anchor="0s",
+            lookback=1,
+            min_traded_seconds=0,
+        )
+        assert grid.ticks == ()
+
     def test_a_ragged_grid_is_refused_but_a_hole_is_not(self) -> None:
         """A hole is absent data; a ragged step is the wrong frame.
 
