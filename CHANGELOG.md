@@ -6,7 +6,7 @@ against their tags, and are not restated here.
 
 ## 3.1.2 - 2026-09-20
 
-## Breaking
+### Breaking
 
 **Generated schedules now refuse members that contradict their own
 spec.**
@@ -37,7 +37,7 @@ The refusal message names the offending member and the bound or grain it
 violates; horizon schedules say "horizon" where window schedules say
 "window". Members are never regenerated, repaired or replayed.
 
-## Fixed
+### Fixed
 
 - **Unrepresentable magnitudes raise `ConfigError`, not `OverflowError`
   or `ValueError`.** An integer too large for a float reached
@@ -57,7 +57,7 @@ violates; horizon schedules say "horizon" where window schedules say
   comes from the anchor and the cadence. An in-phase anchor with no tick
   in the frame still returns the empty grid.
 
-## Removed
+### Removed
 
 - The feature-identity window parser no longer wraps a `ValueError` that
   `coerce_duration` can no longer raise. Every input still refuses with
