@@ -22,6 +22,14 @@ against their tags, and are not restated here.
   Accepted coefficients, coverage thresholds and duration magnitudes are
   unchanged: the duration bound is read from the interpreter, so no
   magnitude that parsed before stops parsing.
+- **The phased harness checks the anchor's phase even when no emit tick
+  lands inside the frame.** The comparison took its residue from the first
+  emit tick and returned early when there was none, so an anchor off the
+  frame's phase was accepted exactly when the emit step stepped clean over
+  the frame, and the caller received an empty result instead of a refusal.
+  The phase now comes from the anchor and the cadence, which is defined
+  whether or not the grid is empty. An in-phase anchor with no tick inside
+  the frame still returns the empty grid it always did.
 
 ## 3.1.1 - 2026-09-14
 
