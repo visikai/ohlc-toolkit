@@ -8,8 +8,9 @@ against their tags, and are not restated here.
 
 ### Changed
 
-The supported Polars range is now `>=2.0,<3.0.0`. Polars deprecation warnings
-fail the test suite so deprecated calls cannot pass unnoticed.
+The supported Polars range is now `>=2.0,<3.0.0`. The test suite treats
+Python `DeprecationWarning` as an error, including caller-attributed Polars
+warnings. A regression test covers that warning path.
 
 ## 3.1.2 - 2026-09-20
 

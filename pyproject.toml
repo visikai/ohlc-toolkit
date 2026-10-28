@@ -70,7 +70,7 @@ testpaths = "tests"
 # `-m` given on the command line comes after these and wins, so
 # `pytest -m network` runs exactly those.
 addopts = "--cov --cov-report term --ruff --ruff-format -m 'not network'"
-filterwarnings = ["error::DeprecationWarning:polars"]
+filterwarnings = ["error::DeprecationWarning"]
 markers = [
     "network: fetches from the real published dataset release; deselected by default, run with `pytest -m network`",
 ]
