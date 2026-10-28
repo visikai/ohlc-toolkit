@@ -4,6 +4,14 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
+## Unreleased
+
+### Changed
+
+The supported Polars range is now `>=2.0,<3.0.0`. The test suite treats
+Python `DeprecationWarning` as an error, including caller-attributed Polars
+warnings. A regression test covers that warning path.
+
 ## 3.1.2 - 2026-09-20
 
 ### Breaking

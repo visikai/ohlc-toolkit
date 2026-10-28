@@ -18,7 +18,7 @@ keywords = [
 dependencies = [
     "loguru>=0.7.3,<0.8.0",
     "orjson>=3.11.6,<4.0.0",
-    "polars>=1.38.1,<2.0.0",
+    "polars>=2.0,<3.0.0",
     "requests>=2.33.0,<3.0.0",
     "urllib3>=2.8.0,<3.0.0",
     "idna>=3.15,<4.0.0",
@@ -70,6 +70,7 @@ testpaths = "tests"
 # `-m` given on the command line comes after these and wins, so
 # `pytest -m network` runs exactly those.
 addopts = "--cov --cov-report term --ruff --ruff-format -m 'not network'"
+filterwarnings = ["error::DeprecationWarning"]
 markers = [
     "network: fetches from the real published dataset release; deselected by default, run with `pytest -m network`",
 ]
