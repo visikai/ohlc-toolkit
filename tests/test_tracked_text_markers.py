@@ -8,7 +8,10 @@ skips. In this file, only the line that states the regex literal is skipped.
 
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve().relative_to(REPO).as_posix()
@@ -46,7 +49,7 @@ def is_binary(path: Path) -> bool:
 
 def is_pattern_definition(rel: str, line: str) -> bool:
     """Identify the sole line that defines the marker regex."""
-    return rel == THIS_FILE and PATTERN.pattern in line
+    return rel == THIS_FILE and line.strip().startswith("PATTERN = re.compile(")
 
 
 def marker_hits() -> list[str]:
@@ -58,11 +61,10 @@ def marker_hits() -> list[str]:
         path = REPO / rel
         if not path.is_file() or is_binary(path):
             continue
-        try:
-            with path.open(encoding="utf-8", newline="") as handle:
-                lines = handle.readlines()
-        except UnicodeDecodeError:
-            continue
+        with path.open(
+            encoding="utf-8", errors="surrogateescape", newline=""
+        ) as handle:
+            lines = handle.readlines()
         for number, line in enumerate(lines, start=1):
             if is_pattern_definition(rel, line):
                 continue
@@ -77,3 +79,16 @@ def test_tracked_text_has_no_workspace_markers() -> None:
         assert "\n" not in reason and reason.strip(), name
     hits = marker_hits()
     assert not hits, "\n".join(hits)
+
+
+def test_non_utf8_tracked_text_is_scanned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch ASCII markers inside non-UTF-8 tracked files."""
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    path = tmp_path / "tracked.txt"
+    marker = b"root" + bytes((58,)) + b"123"
+    path.write_bytes(b"\xff " + marker + b"\n")
+    subprocess.run(["git", "add", path.name], cwd=tmp_path, check=True)
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    assert marker_hits() == ["tracked.txt:1"]
