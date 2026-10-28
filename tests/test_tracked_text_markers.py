@@ -15,7 +15,7 @@ THIS_FILE = Path(__file__).resolve().relative_to(REPO).as_posix()
 SNIFF_BYTES = 8192
 
 # fmt: off
-PATTERN = re.compile(r"\b(?:root|strategy|models|live-data|execution|datasets|inputs|evaluation|targets):\d+\b|mdboard|foresight-lab", re.IGNORECASE)
+PATTERN = re.compile(r"\b(?:root|strategy|models|live-data|execution|datasets|inputs|evaluation|targets):\d+\b|mdboard|foresight-lab", re.IGNORECASE)  # noqa: E501
 # fmt: on
 
 # One-line justification per filename. This is not an extension list.
@@ -27,6 +27,7 @@ EXCLUSIONS = {
 
 
 def tracked_paths() -> list[str]:
+    """List paths tracked by Git."""
     completed = subprocess.run(
         ["git", "ls-files", "-z"],
         cwd=REPO,
@@ -37,16 +38,19 @@ def tracked_paths() -> list[str]:
 
 
 def is_binary(path: Path) -> bool:
+    """Return whether the file contains a NUL in its first 8 KiB."""
     with path.open("rb") as handle:
         sample = handle.read(SNIFF_BYTES)
     return b"\0" in sample
 
 
 def is_pattern_definition(rel: str, line: str) -> bool:
+    """Identify the sole line that defines the marker regex."""
     return rel == THIS_FILE and PATTERN.pattern in line
 
 
 def marker_hits() -> list[str]:
+    """Return marker locations in tracked text files."""
     hits: list[str] = []
     for rel in tracked_paths():
         if Path(rel).name in EXCLUSIONS:
@@ -68,6 +72,7 @@ def marker_hits() -> list[str]:
 
 
 def test_tracked_text_has_no_workspace_markers() -> None:
+    """Reject markers in tracked text outside the exclusions."""
     for name, reason in EXCLUSIONS.items():
         assert "\n" not in reason and reason.strip(), name
     hits = marker_hits()
