@@ -688,7 +688,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "certifi", specifier = ">=2024.7.4" },
+    { name = "certifi", specifier = ">=2026.10.19" },
     { name = "idna", specifier = ">=3.15,<4.0.0" },
     { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
