@@ -4,13 +4,16 @@ This file starts at 1.0.0. Earlier versions (0.1.0 through 0.4.0) are
 recorded as [GitHub releases](https://github.com/visikai/ohlc-toolkit/releases)
 against their tags, and are not restated here.
 
-## Unreleased
+## 3.1.3 - 2026-10-28
 
-### Changed
+Dependency update release. No ohlc-toolkit API changed.
 
-The supported Polars range is now `>=2.0,<3.0.0`. The test suite treats
-Python `DeprecationWarning` as an error, including caller-attributed Polars
-warnings. A regression test covers that warning path.
+### Breaking
+
+**Polars 2 is now required.** Any environment that pins polars 1.x has to
+upgrade before taking this release.
+
+The `certifi` floor also rises to `2026.10.19` (PYSEC-2026-4320).
 
 ## 3.1.2 - 2026-09-20
 
